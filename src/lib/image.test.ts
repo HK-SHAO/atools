@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { recognizeExact, sniff } from "./image";
+import { readCompact16, recognizeExact, sniff } from "./image";
 import type { Pixels } from "./arrays";
 
 const ftyp = (major: string) => {
@@ -118,5 +118,43 @@ describe("recognizeExact（可逆图像素签名）", () => {
 
   test("太小的不认", () => {
     expect(recognizeExact(exactPixels(2, 8) as Pixels, 2, 8)).toBe(false);
+  });
+});
+
+describe("readCompact16（16 位紧凑图读端，回归：曾把 16 位压成 8 位导致 ~93 dB 损失）", () => {
+  test("存 PNG 再读回，幅度刻度几乎无损，整段音频能正常还原", async () => {
+    const { encode, levelToDb } = await import("./spectrum");
+    const { spectrumToPng } = await import("./image");
+    const { synthesise } = await import("./spectrum");
+    const { compare } = await import("./metric");
+
+    const sr = 8000;
+    const pcm = new Float32Array(sr); // 1 秒 440 Hz 正弦
+    for (let i = 0; i < sr; i++) pcm[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / sr);
+
+    const enc = { mode: "compact" as const, sr, bits: 16, fineness: 1 as const, fmax: 0, start: 0, end: 0 };
+    const spec = await encode(pcm, sr, enc);
+    expect(spec.levels).toBeInstanceOf(Uint16Array);
+
+    const png = await spectrumToPng(spec);
+    const back = await readCompact16(new Uint8Array(await png.arrayBuffer()), spec.meta);
+    expect(back.levels).toBeInstanceOf(Uint16Array);
+
+    // 响亮 bin 的 dB 刻度误差必须小于半级量化步长
+    let checked = 0;
+    for (let i = 0; i < spec.levels.length; i++) {
+      const v = spec.levels[i]!;
+      if (v < 8000) continue; // 只查足够响的 bin
+      const dbA = spec.meta.ref - 192 + (v / 65535) * 192;
+      const dbB = levelToDb(back.levels[i]!, spec.meta);
+      expect(Math.abs(dbA - dbB)).toBeLessThan(0.5);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(10);
+
+    // 端到端：读回的谱合成音频，与原信号对比（相关 > 0.95 才算正常还原）
+    const got = await synthesise(back);
+    const m = compare(pcm, got);
+    expect(m.corr).toBeGreaterThan(0.95);
   });
 });

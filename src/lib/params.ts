@@ -33,8 +33,10 @@ export const FINENESS = [
 ] as const;
 
 export const SR_OPTIONS = [8000, 16000, 32000, 0] as const;
-/** 位深：2/4/8 走索引色 PNG，16 走 16 位灰度 PNG。一位换 12 dB。 */
-export const BITS_OPTIONS = [2, 4, 8, 16] as const;
+/** 位深：2/4/8 走索引色 PNG。一位换 12 dB，8 bit 已覆盖 16 位音频源的全部
+ *  动态（96 dB），更高的位深只有更大的图、没有更好的声音 —— 读端仍兼容旧
+ *  16 位图（16 位灰度 PNG），但不再提供该档。 */
+export const BITS_OPTIONS = [2, 4, 8] as const;
 export const FMAX_OPTIONS = [0, 2000, 4000, 6000, 8000] as const;
 
 /** 紧凑默认：8 kHz 采样率、8 位色深、全频段 —— 语音清晰、图小、任何素材都能载入。 */

@@ -306,10 +306,11 @@ function rescaled(meta: Meta, width: number, maxHop: number): Meta {
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 
-/** 紧凑图 16 位：直接用 16 位灰度 PNG 的原始字节读出幅度，绕过 8 位 canvas。 */
-async function readCompact16(bytes: Uint8Array, meta: Meta): Promise<Spectrum> {
+/** 紧凑图 16 位：直接用 16 位灰度 PNG 的原始字节读出幅度，绕过 8 位 canvas。
+ *  行序与索引色一致：第 0 行是最高频，读时要翻回来。 */
+export async function readCompact16(bytes: Uint8Array, meta: Meta): Promise<Spectrum> {
   const g = await readGray16(bytes);
-  const levels = new Uint8Array(meta.frames * meta.bins);
+  const levels = new Uint16Array(meta.frames * meta.bins);
   if (g) {
     const sx = g.width / meta.frames;
     const sy = g.height / meta.bins;
@@ -317,7 +318,8 @@ async function readCompact16(bytes: Uint8Array, meta: Meta): Promise<Spectrum> {
       const col = Math.min(g.width - 1, Math.floor((f + 0.5) * sx));
       for (let b = 0; b < meta.bins; b++) {
         const row = Math.min(g.height - 1, Math.floor((b + 0.5) * sy));
-        levels[f * meta.bins + b] = Math.min(255, (g.data[row * g.width + col]! * 255) / 65535) | 0;
+        const imgRow = g.height - 1 - row;
+        levels[f * meta.bins + b] = g.data[imgRow * g.width + col]!;
       }
     }
   }
@@ -588,13 +590,20 @@ async function exactPng(spec: Spectrum): Promise<Blob> {
 async function compactPng(spec: Spectrum): Promise<Blob> {
   const { meta, levels } = spec;
   if (meta.bits >= 16) {
-    const g16 = new Uint16Array(levels.length);
-    for (let i = 0; i < levels.length; i++) {
-      const v = levels[i]!;
-      // 16 位紧凑图本来就是 Uint16Array（0..65535）；8 位兜底时升到 16 位。
-      g16[i] = v > 255 ? v : ((v * 65535) / 255) | 0;
+    const { frames, bins } = meta;
+    // 与索引色同款布局：第 0 行是最高频（谱图惯例）。此前把帧主序矩阵直接
+    // 灌给按行主序的 gray16Png，整幅图被转置错乱 —— 正是「图看起来坏了、
+    // 还原不出声音」的根因。
+    const g16 = new Uint16Array(frames * bins);
+    for (let row = 0; row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0; f < frames; f++) {
+        const v = levels[f * bins + b]!;
+        // 16 位紧凑图本来就是 0..65535；8 位兜底时升到 16 位。
+        g16[row * frames + f] = v > 255 ? v : ((v * 65535) / 255) | 0;
+      }
     }
-    const bytes = await gray16Png(g16, meta.frames, meta.bins, metaToText(meta));
+    const bytes = await gray16Png(g16, frames, bins, metaToText(meta));
     return new Blob([bytes], { type: "image/png" });
   }
 

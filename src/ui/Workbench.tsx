@@ -235,7 +235,7 @@ export function Workbench({
             value={enc.bits}
             options={BITS_OPTIONS.map(b => ({
               value: b,
-              label: b === 2 ? "最低" : b === 4 ? "低" : b === 8 ? "高" : "最高",
+              label: b === 2 ? "最低" : b === 4 ? "低" : "高",
             }))}
             onPick={v => set("bits", v)}
           />
