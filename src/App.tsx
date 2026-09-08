@@ -125,10 +125,13 @@ export function App() {
       if (looksImage) {
         setStage({ label: "读图", value: 0 });
         await nextFrame();
-        const { spec, mode: readMode } = await imageToSpectrum(new Blob([bytes]), file.name);
+        const { spec, mode: readMode, guessed, phaseReliability } = await imageToSpectrum(
+          new Blob([bytes]),
+          file.name,
+        );
         if (!alive()) return;
 
-        const label = spec.meta.exact ? "还原" : "重建相位";
+        const label = spec.meta.exact && spec.phaseCos ? "还原" : "重建相位";
         setStage({ label, value: 0 });
         await nextFrame();
         const pcm = await synthesise(spec, alive, v => {
@@ -139,6 +142,12 @@ export function App() {
         setMode(readMode);
         setEnc(e => adoptMeta(spec.meta, reopen(e)));
         setSource({ pcm, sr: spec.meta.sr, name: file.name });
+        if (guessed)
+          setHint(
+            "这张图没带元数据（可能被压缩软件剥掉或改过名），已靠图的签名认出 —— 采样率按默认 8k 解读，时长或音高若不对可在参数里调整",
+          );
+        else if (phaseReliability !== null && phaseReliability < 0.8)
+          setHint("相位信息已被缩放/压缩破坏，已自动改用幅度重建相位");
         return;
       }
 

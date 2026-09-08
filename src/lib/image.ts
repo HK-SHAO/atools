@@ -1,6 +1,6 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
-import { gray16Png, indexedPng, readGray16, readMeta, withMeta } from "./png";
+import { gray16Png, indexedPng, readGray16, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
 
@@ -47,7 +47,9 @@ export function textToMeta(text: string): Meta | null {
     if (typeof ver !== "number" || !Number.isInteger(ver) || ver < MIN_VERSION) return null;
     if (v.length < 10) return null;
     const n = (v as unknown[]).slice(1, 10).map(Number);
-    if (n.some(x => !Number.isFinite(x))) return null;
+    // 除 ref（允许一位小数）外全字段必须是整数 —— meta 被人为改坏（小数/乱码）
+    // 宁可拒认、走几何认图兜底，也不能让小数帧数/频点数混进逆变换产出全 NaN 音频。
+    if (n.some((x, i) => (i === 7 ? !Number.isFinite(x) : !Number.isInteger(x)))) return null;
     const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n as number[];
     if (sr! <= 0 || win! <= 0 || hop! <= 0 || frames! <= 0 || bins! <= 0 || samples! < 0) return null;
     if ((win! & (win! - 1)) !== 0 || win! < 256 || win! > 4096) return null;
@@ -129,6 +131,58 @@ export function sniff(bytes: Uint8Array): Container {
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
 
+/** 猜窗宽：bins = win/2 + 1 是本格式的固定关系，往上取不到就退到 2 的幂。 */
+function winFromBins(bins: number): number {
+  const raw = Math.max(2, (bins - 1) * 2);
+  let win = 256;
+  while (win * 2 <= Math.min(raw, 4096)) win *= 2;
+  return win;
+}
+
+/**
+ * 没有 tEXt、文件名也被改掉时的最后兜底：靠图本身的几何与签名反推参数。
+ * sr 无从得知，按工具默认 8k 解读（界面会提示这是猜的）。
+ */
+export function metaFromGeometry(frames: number, bins: number, exact: boolean, bits: number): Meta {
+  const win = winFromBins(bins);
+  return {
+    sr: 8000,
+    win,
+    hop: win / 2,
+    frames: Math.max(2, Math.min(frames, MAX_FRAMES)),
+    bins: Math.min(bins, win / 2 + 1),
+    samples: Math.max(2, Math.min(frames, MAX_FRAMES)) * (win / 2),
+    bits,
+    ref: 0,
+    exact,
+  };
+}
+
+/**
+ * 像素签名认可逆图：下半段必须是相位段 —— B≈0 且 (R,G) 落在以 (127.5,127.5)
+ * 为圆心的单位圆上。随机照片/纯色图几乎不可能撞上这个签名。
+ */
+export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
+  if (w < 4 || h < 8 || h % 2 !== 0) return false;
+  const rows = h / 2;
+  const stepX = Math.max(1, Math.floor(w / 48));
+  const stepY = Math.max(1, Math.floor(rows / 24));
+  let checked = 0;
+  for (let y = 0; y < rows; y += stepY) {
+    for (let x = 0; x < w; x += stepX) {
+      const p = ((rows + y) * w + x) * 4;
+      if (pixels[p + 2]! > 8) return false;
+      const cr = pixels[p]! - 127.5;
+      const cs = pixels[p + 1]! - 127.5;
+      const rad2 = cr * cr + cs * cs;
+      // 量化 ±0.7、有损压缩漂移、缩放平均都放得下；纯黑/纯灰图会被半径卡掉。
+      if (rad2 < 2600 || rad2 > 29000) return false;
+      checked++;
+    }
+  }
+  return checked >= 12;
+}
+
 function surface(width: number, height: number) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -139,41 +193,94 @@ function surface(width: number, height: number) {
 }
 
 /**
- * 拾取一个频段，按目标 bins / frames 重采样。
+ * 面积平均读幅度段。图被缩放后一个输出格覆盖多个像素，取格内亮度均值再反查
+ * 层级 —— 比最邻近采样稳得多（不会跳采丢能量）；1:1 时就是精确单像素读数。
  *
  * 图里第 0 行永远是最高频（频谱图的惯例），写图时翻过一次，这里翻回来，
  * 所以 out 的第 0 行是最低频 —— 和 STFT 的 bin 序一致。
  */
-export function sampleBand(
+export function sampleLevels(
   data: Pixels,
   width: number,
   rowTop: number,
   rowCount: number,
   frames: number,
   bins: number,
-  pick: (r: number, g: number, b: number) => number,
 ): Uint8Array {
   const out = new Uint8Array(frames * bins);
   const sx = width / frames;
   const sy = rowCount / bins;
-
-  // 图里第 0 行是最高频 —— 先把每个 bin 对应的行号算好（要翻过来）。
-  const rows = new Int32Array(bins);
-  for (let b = 0; b < bins; b++) {
-    const up = Math.min(rowCount - 1, Math.floor((b + 0.5) * sy));
-    rows[b] = rowTop + rowCount - 1 - up;
-  }
-
-  // 输出必须是 frame-major（levels[f * bins + b]），别写成 bin-major。
   for (let f = 0; f < frames; f++) {
-    const col = Math.min(width - 1, Math.floor((f + 0.5) * sx)) * 4;
-    const base = f * bins;
+    const x0 = Math.min(width - 1, Math.floor(f * sx));
+    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
     for (let b = 0; b < bins; b++) {
-      const p = rows[b]! * width * 4 + col;
-      out[base + b] = pick(data[p]!, data[p + 1]!, data[p + 2]!);
+      // bin 0 = 最低频 = 图里最下面的行；格在「翻转前」的行坐标里取。
+      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
+      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        const imgRow = rowTop + rowCount - 1 - y;
+        for (let x = x0; x < x1; x++) {
+          const p = (imgRow * width + x) * 4;
+          sum += luma(data[p]!, data[p + 1]!, data[p + 2]!);
+          n++;
+        }
+      }
+      out[f * bins + b] = FROM_LUMA[Math.round(sum / Math.max(1, n)) & 255]!;
     }
   }
   return out;
+}
+
+/**
+ * 面积平均读相位段：格内对 (cos, sin) 做矢量均值再归一化 —— 相位是角度，
+ * 直接平均数值是错的，矢量平均才是正确的「平均相位」。
+ * 同时返回平均矢量长度比（0..1）：相互抵消越厉害比值越低，是相位可靠性的直接度量。
+ */
+export function samplePhase(
+  data: Pixels,
+  width: number,
+  rowTop: number,
+  rowCount: number,
+  frames: number,
+  bins: number,
+): { cos: Uint8Array; sin: Uint8Array; reliability: number } {
+  const cos = new Uint8Array(frames * bins);
+  const sin = new Uint8Array(frames * bins);
+  const sx = width / frames;
+  const sy = rowCount / bins;
+  let sumLen = 0;
+  let cells = 0;
+  for (let f = 0; f < frames; f++) {
+    const x0 = Math.min(width - 1, Math.floor(f * sx));
+    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+    for (let b = 0; b < bins; b++) {
+      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
+      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      let sc = 0;
+      let ss = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        const imgRow = rowTop + rowCount - 1 - y;
+        for (let x = x0; x < x1; x++) {
+          const p = (imgRow * width + x) * 4;
+          sc += data[p]! - 127.5;
+          ss += data[p + 1]! - 127.5;
+          n++;
+        }
+      }
+      const cr = sc / n;
+      const cs = ss / n;
+      const h = Math.sqrt(cr * cr + cs * cs);
+      sumLen += h;
+      cells++;
+      const k = h > 1e-6 ? 127.5 / h : 0;
+      cos[f * bins + b] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
+      sin[f * bins + b] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
+    }
+  }
+  return { cos, sin, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
 }
 
 /**
@@ -212,12 +319,78 @@ export interface Decoded {
   container: Container;
   width: number;
   height: number;
+  /** 相位段平均矢量长度比（0..1）；无相位段为 null。低于阈值时相位已被弃用。 */
+  phaseReliability: number | null;
+  /** meta 全丢（tEXt 被剥、文件名被改）靠几何签名认出来时为 true。 */
+  guessed: boolean;
 }
+
+/** 相位可靠阈值：矢量长度比低于它说明相位已被缩放/压缩平均到不可信，
+ * 保留只会更糟 —— 弃用相位、退回幅度重建（实测缩放 0.5× 时比值 0.41）。 */
+const PHASE_RELIABLE = 0.8;
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
-  const meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
+  let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
+
+  // ---- meta 全丢的兜底（不走 canvas，直接认原始字节）----
+  if (meta === null) {
+    // 16 位灰度 PNG：几乎只可能是我们的紧凑 16 位导出。
+    const g16 = await readGray16(bytes);
+    if (g16 && g16.width * g16.height <= MAX_SOURCE_PIXELS) {
+      const gmeta = metaFromGeometry(g16.width, g16.height, false, 16);
+      const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+      const sx = g16.width / gmeta.frames;
+      const sy = g16.height / gmeta.bins;
+      for (let f = 0; f < gmeta.frames; f++) {
+        const col = Math.min(g16.width - 1, Math.floor((f + 0.5) * sx));
+        for (let b = 0; b < gmeta.bins; b++) {
+          const row = Math.min(g16.height - 1, Math.floor((b + 0.5) * sy));
+          levels[f * gmeta.bins + b] =
+            Math.min(255, (g16.data[row * g16.width + col]! * 255) / 65535) | 0;
+        }
+      }
+      return {
+        spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+        mode: "compact",
+        container,
+        width: g16.width,
+        height: g16.height,
+        phaseReliability: null,
+        guessed: true,
+      };
+    }
+    // 索引色 PNG 且调色板与暖色 ramp 逐项一致：我们的紧凑图。
+    const idx = await readIndexedRamp(bytes);
+    if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
+      const gmeta = metaFromGeometry(
+        idx.width,
+        idx.height,
+        false,
+        8, // 层级已还原成 0..255，按 8 位刻度解读
+      );
+      const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+      const sx = idx.width / gmeta.frames;
+      const sy = idx.height / gmeta.bins;
+      for (let f = 0; f < gmeta.frames; f++) {
+        const col = Math.min(idx.width - 1, Math.floor((f + 0.5) * sx));
+        for (let b = 0; b < gmeta.bins; b++) {
+          const row = Math.min(idx.height - 1, Math.floor((b + 0.5) * sy));
+          levels[f * gmeta.bins + b] = idx.levels[row * idx.width + col]!;
+        }
+      }
+      return {
+        spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+        mode: "compact",
+        container,
+        width: idx.width,
+        height: idx.height,
+        phaseReliability: null,
+        guessed: true,
+      };
+    }
+  }
 
   let bitmap = await createImageBitmap(file, { colorSpaceConversion: "none" });
   const width = bitmap.width;
@@ -240,58 +413,69 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     canvas.width = 0;
     canvas.height = 0;
 
-    const known = meta !== null;
-    const exact = known && meta.exact;
-    const bandRows = exact ? Math.max(1, Math.floor(h / BANDS)) : h;
-    const intact = known && w === meta.frames && bandRows === meta.bins;
+    // ---- 像素签名兜底：连调色板/灰度签名都没认出来，试试可逆图的相位段签名 ----
+    let m0 = meta;
+    if (m0 === null && recognizeExact(pixels, w, h)) {
+      m0 = metaFromGeometry(w, Math.floor(h / 2), true, 0);
+    }
 
-    // 16 位紧凑图：幅度藏在 16 位灰度里，canvas 读不到，走原始字节。
-    if (known && !meta.exact && meta.bits >= 16 && w === meta.frames && h === meta.bins) {
+    const known = m0 !== null;
+    const exact = m0 !== null && m0.exact;
+    const bandRows = exact ? Math.max(1, Math.floor(h / BANDS)) : h;
+    const intact = m0 !== null && w === m0.frames && bandRows === m0.bins;
+
+    // 16 位紧凑图（带 meta）：幅度藏在 16 位灰度里，canvas 读不到，走原始字节。
+    if (m0 !== null && !m0.exact && m0.bits >= 16 && w === m0.frames && h === m0.bins) {
       return {
-        spec: await readCompact16(bytes, meta),
+        spec: await readCompact16(bytes, m0),
         mode: "compact",
         container,
         width: w,
         height: h,
+        phaseReliability: null,
+        guessed: false,
       };
     }
 
-    // 可逆图：上段幅度谱、下段相位。无论有损重编码还是被缩放，都直接逆变换——
-    // cos/sin 平滑漂移、不爆尖刺；缩放只是重采样，相位照用。
-    if (exact) {
-      const next = intact ? { ...meta } : { ...rescaled(meta, w), exact: true };
-      const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) =>
-        FROM_LUMA[luma(r, g, b)]!,
-      );
-      const cosRaw = sampleBand(pixels, w, bandRows, bandRows, next.frames, next.bins, r => r);
-      const sinRaw = sampleBand(pixels, w, bandRows, bandRows, next.frames, next.bins, (_r, g) => g);
+    // 可逆图：上段幅度谱、下段相位。相位可靠性不够（被缩放平均/严重压损）
+    // 就弃用，退回幅度重建 —— 存着垃圾相位只会更糟。
+    if (exact && m0) {
+      const next = intact ? { ...m0 } : { ...rescaled(m0, w), exact: true };
+      const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
+      const ph = samplePhase(pixels, w, bandRows, bandRows, next.frames, next.bins);
+      const keep = ph.reliability >= PHASE_RELIABLE;
       const mode: ReadMode = intact ? "exact" : "degraded";
       return {
-        spec: { meta: { ...next, exact: true }, levels, phaseCos: cosRaw, phaseSin: sinRaw },
+        spec: {
+          meta: { ...next, exact: true },
+          levels,
+          phaseCos: keep ? ph.cos : null,
+          phaseSin: keep ? ph.sin : null,
+        },
         mode,
         container,
         width: w,
         height: h,
+        phaseReliability: ph.reliability,
+        guessed: !known,
       };
     }
 
-    const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
-    const rows = Math.max(2, Math.min(intact ? meta.bins : bandRows, 1025));
+    const frames = m0 !== null ? Math.min(w, m0.frames) : Math.min(w, FOREIGN_FRAMES);
+    const rows = Math.max(2, Math.min(intact && m0 ? m0.bins : bandRows, 1025));
     // 三段互斥：intact 是我们原图且尺寸对得上；否则认得出是自己的图（转过格式 /
     // 改过尺寸）就沿用原窗与频段、只把帧数换成列数；再否则就是完全陌生的图，
     // 整张当幅度谱，按通用默认参数起手。
     let next: Meta;
-    if (intact) {
-      next = { ...meta, bins: meta.bins };
-    } else if (meta !== null) {
-      next = rescaled(meta, w);
+    if (m0 !== null && intact) {
+      next = { ...m0, bins: m0.bins };
+    } else if (m0 !== null) {
+      next = rescaled(m0, w);
     } else {
       next = paramsForImage(frames, rows, 44100, 8, 0, false);
     }
 
-    const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) =>
-      FROM_LUMA[luma(r, g, b)]!,
-    );
+    const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
 
     const mode: ReadMode = !known ? "foreign" : intact ? "compact" : "degraded";
     return {
@@ -300,6 +484,9 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       container,
       width: w,
       height: h,
+      phaseReliability: null,
+      // 走到这里说明像素签名没命中：带 meta 就是确定的，不带就是真陌生图。
+      guessed: false,
     };
   } finally {
     bitmap.close();

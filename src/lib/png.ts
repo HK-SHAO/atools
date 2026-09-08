@@ -1,4 +1,5 @@
 import type { Bytes } from "./arrays";
+import { RAMP } from "./palette";
 
 const SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const KEYWORD = "spectrum";
@@ -261,36 +262,51 @@ export interface Gray16 {
   data: Uint16Array;
 }
 
-/** 读 16 位灰度 PNG，只认 filter 0。非 16 位灰度返回 null。 */
-export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
+interface PngInfo {
+  width: number;
+  height: number;
+  bitDepth: number;
+  colorType: number;
+  interlace: number;
+  plte: Uint8Array | null;
+  idat: Uint8Array[];
+}
+
+function parsePng(bytes: Uint8Array): PngInfo | null {
   if (!isPng(bytes)) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let at = 8;
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  const idat: Uint8Array[] = [];
+  let info: PngInfo | null = null;
   while (at + 12 <= bytes.length) {
     const len = view.getUint32(at);
     if (at + 12 + len > bytes.length) return null;
     const type = ascii(bytes.subarray(at + 4, at + 8));
     if (type === "IHDR") {
-      width = view.getUint32(at + 8);
-      height = view.getUint32(at + 12);
-      bitDepth = bytes[at + 16]!;
-      colorType = bytes[at + 17]!;
-    } else if (type === "IDAT") {
-      idat.push(bytes.subarray(at + 8, at + 8 + len));
+      info = {
+        width: view.getUint32(at + 8),
+        height: view.getUint32(at + 12),
+        bitDepth: bytes[at + 16]!,
+        colorType: bytes[at + 17]!,
+        interlace: bytes[at + 20]!,
+        plte: null,
+        idat: [],
+      };
+    } else if (type === "PLTE" && info) {
+      info.plte = bytes.subarray(at + 8, at + 8 + len);
+    } else if (type === "IDAT" && info) {
+      info.idat.push(bytes.subarray(at + 8, at + 8 + len));
     } else if (type === "IEND") {
       break;
     }
     at += 12 + len;
   }
-  if (colorType !== 0 || bitDepth !== 16) return null;
+  return info;
+}
 
+async function inflate(idat: Uint8Array[]): Promise<Uint8Array | null> {
   let total = 0;
   for (const c of idat) total += c.length;
+  if (total === 0) return null;
   const concat = new Uint8Array(total);
   let o = 0;
   for (const c of idat) {
@@ -300,17 +316,107 @@ export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
   const stream = new Blob([concat as BlobPart]).stream().pipeThrough(
     new DecompressionStream("deflate"),
   );
-  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
 
-  const data = new Uint16Array(width * height);
+/** PNG 滤波还原（bpp = 每像素字节数）。返回去掉滤波字节的连续像素，失败返回 null。 */
+function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): Uint8Array | null {
+  const stride = width * bpp;
+  if (raw.length < height * (stride + 1)) return null;
+  const out = new Uint8Array(height * stride);
   for (let y = 0; y < height; y++) {
-    const row = y * (width * 2 + 1);
-    if (raw[row]! !== 0) return null; // 只支持 filter None
-    for (let x = 0; x < width; x++) {
-      const hi = raw[row + 1 + x * 2]!;
-      const lo = raw[row + 2 + x * 2]!;
-      data[y * width + x] = ((hi << 8) | lo) >>> 0;
+    const ft = raw[y * (stride + 1)]!;
+    const src = y * (stride + 1) + 1;
+    const dst = y * stride;
+    for (let i = 0; i < stride; i++) {
+      const x = raw[src + i]!;
+      const a = i >= bpp ? out[dst + i - bpp]! : 0;
+      const b = y > 0 ? out[dst + i - stride]! : 0;
+      const c = y > 0 && i >= bpp ? out[dst + i - bpp - stride]! : 0;
+      let v: number;
+      if (ft === 0) v = x;
+      else if (ft === 1) v = x + a;
+      else if (ft === 2) v = x + b;
+      else if (ft === 3) v = x + ((a + b) >> 1);
+      else {
+        const p = (a + b - c) | 0;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+      }
+      out[dst + i] = v & 0xff;
     }
   }
+  return out;
+}
+
+/** 读 16 位灰度 PNG（我们的紧凑 16 位导出）。非 16 位灰度返回 null。 */
+export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
+  const info = parsePng(bytes);
+  if (!info || info.colorType !== 0 || info.bitDepth !== 16 || info.interlace !== 0) return null;
+  const raw = await inflate(info.idat);
+  if (!raw) return null;
+  const flat = unfilter(raw, info.width, info.height, 2);
+  if (!flat) return null;
+  const { width, height } = info;
+  const data = new Uint16Array(width * height);
+  for (let i = 0; i < width * height; i++)
+    data[i] = ((flat[i * 2]! << 8) | flat[i * 2 + 1]!) >>> 0;
   return { width, height, data };
+}
+
+export interface IndexedRamp {
+  width: number;
+  height: number;
+  /** 还原出的 8 位幅度层级（0..255）。 */
+  levels: Uint8Array;
+}
+
+/**
+ * 靠调色板签名认出我们的紧凑图（meta 被剥掉、文件名被改时的兜底）：
+ * 调色板必须与暖色 ramp 逐项一致 —— 随便一张索引色 PNG 不会撞上这个签名。
+ */
+export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | null> {
+  const info = parsePng(bytes);
+  if (!info || info.colorType !== 3 || info.interlace !== 0) return null;
+  if (![1, 2, 4, 8].includes(info.bitDepth)) return null;
+  const plte = info.plte;
+  if (!plte || plte.length % 3 !== 0) return null;
+  const count = plte.length / 3;
+  if (count > 1 << info.bitDepth) return null;
+  const steps = count - 1;
+  if (steps < 1) return null;
+  // 逐项核对调色板 = RAMP(round(q·255/steps))。
+  for (let q = 0; q < count; q++) {
+    const level = Math.round((Math.min(q, steps) * 255) / steps);
+    if (plte[q * 3] !== RAMP[level * 3]) return null;
+    if (plte[q * 3 + 1] !== level) return null;
+    if (plte[q * 3 + 2] !== RAMP[level * 3 + 2]) return null;
+  }
+  const raw = await inflate(info.idat);
+  if (!raw) return null;
+  const flat = unfilter(raw, info.width, info.height, 1);
+  if (!flat) return null;
+
+  const { width, height } = info;
+  const depth = info.bitDepth;
+  const levels = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const rowAt = y * Math.ceil((width * depth) / 8);
+    let acc = 0;
+    let bits = 0;
+    let k = 0;
+    for (let x = 0; x < width; x++) {
+      while (bits < depth) {
+        acc = (acc << 8) | flat[rowAt + k++]!;
+        bits += 8;
+      }
+      const idx = (acc >>> (bits - depth)) & ((1 << depth) - 1);
+      bits -= depth;
+      acc &= (1 << bits) - 1;
+      levels[y * width + x] = Math.min(255, Math.round((Math.min(idx, steps) * 255) / steps));
+    }
+  }
+  return { width, height, levels };
 }

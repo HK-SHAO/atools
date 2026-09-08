@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { Samples } from "./arrays";
 import { FFT } from "./fft";
-import { exactPixels, metaFromName, metaToText, sampleBand, textToMeta } from "./image";
-import { indexedPng, isPng, readMeta, withMeta } from "./png";
+import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
+import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
+import { RAMP } from "./palette";
 import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { resample, silenceBounds, slice } from "./resample";
@@ -77,7 +78,7 @@ describe("params", () => {
   test("defaults are the voice minimum", () => {
     expect(VOICE).toEqual({
       mode: "compact",
-      sr: 0,
+      sr: 8000,
       bits: 8,
       fineness: 1,
       fmax: 0,
@@ -311,14 +312,15 @@ describe("exact (2-band) mode", () => {
     expect(height).toBe(2 * spec.meta.bins);
 
     const bandRows = Math.floor(height / 2);
-    const levels = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
-    const cosRaw = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, r => r);
-    const sinRaw = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
+    const levels = sampleLevels(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins);
+    const ph = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
+    // 1:1 完整图，相位矢量长度比必须贴着 1（可靠性达标，相位才会被采用）。
+    expect(ph.reliability).toBeGreaterThan(0.98);
     const back = await synthesise({
       meta: { ...spec.meta, exact: true },
       levels,
-      phaseCos: cosRaw,
-      phaseSin: sinRaw,
+      phaseCos: ph.cos,
+      phaseSin: ph.sin,
     });
     // 无损下幅度 8 位 + cos/sin 相位：听感透明，且零爆音。
     expect(snr(pcm, back)).toBeGreaterThan(25);
@@ -346,11 +348,15 @@ describe("shape", () => {
   });
 
   test("fitEncode downsamples long audio instead of refusing it", () => {
-    // fade.m4a 场景：约 4.4 分钟 44.1kHz，默认参数会出 4.5 万帧。
+    // fade.m4a 场景：约 4.4 分钟 44.1kHz。默认 8k（样本数按比例折算）直接放得下。
     const samples = 44100 * 264;
-    expect(() => shapeFor(VOICE, 44100, samples)).toThrow();
+    expect(() => shapeFor(VOICE, 8000, Math.ceil((samples * 8000) / 44100))).not.toThrow();
 
-    const fit = fitEncode(VOICE, 44100, samples);
+    // 用户显式要原采样率时放不下，就自动降档而不是报错拒载。
+    const want = { ...VOICE, sr: 44100 };
+    expect(() => shapeFor(want, 44100, samples)).toThrow();
+
+    const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
     expect(fit.enc.sr).toBe(16000);
     // 适配后的参数必须真的放得下（样本数按比例折算）。
@@ -359,8 +365,8 @@ describe("shape", () => {
     expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
 
     // 短素材不动参数。
-    const short = fitEncode(VOICE, 44100, 44100 * 30);
-    expect(short.enc).toEqual(VOICE);
+    const short = fitEncode(want, 44100, 44100 * 30);
+    expect(short.enc).toEqual(want);
     expect(short.note).toBeNull();
 
     // 超长素材：降 8k 并裁掉多余区间。
@@ -552,6 +558,115 @@ describe("metadata", () => {
     const back = metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg");
     expect(back?.bits).toBe(0);
     expect(back?.exact).toBe(true);
+  });
+
+  test("rejects tampered metas with fractional fields", () => {
+    // 帧数/频点数带小数会让逆变换产出全 NaN —— 必须拒认，走几何认图兜底。
+    const bad = JSON.parse(metaToText(meta)) as number[];
+    bad[4] = 300.5;
+    expect(textToMeta(JSON.stringify(bad))).toBeNull();
+  });
+});
+
+describe("reads our images with no metadata at all", () => {
+  const sr = 8000;
+
+  function box2(px: Uint8ClampedArray, w: number, h: number): { px: Uint8ClampedArray; w: number; h: number } {
+    // 2×2 块平均（模拟浏览器缩图/色度子采样对相位的破坏）。
+    const nw = w >> 1;
+    const nh = h >> 1;
+    const out = new Uint8ClampedArray(nw * nh * 4);
+    for (let y = 0; y < nh; y++)
+      for (let x = 0; x < nw; x++) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++) {
+            const p = ((y * 2 + dy) * w + x * 2 + dx) * 4;
+            r += px[p]!;
+            g += px[p + 1]!;
+            b += px[p + 2]!;
+          }
+        const q = (y * nw + x) * 4;
+        out[q] = r / 4;
+        out[q + 1] = g / 4;
+        out[q + 2] = b / 4;
+        out[q + 3] = 255;
+      }
+    return { px: out, w: nw, h: nh };
+  }
+
+  test("pixel signature recognizes the exact layout and rejects photos", async () => {
+    const pcm = signal(sr * 3, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    const { pixels, width, height } = exactPixels(spec);
+    expect(recognizeExact(pixels, width, height)).toBe(true);
+
+    // 照片式噪声（RGB 各通道独立随机）不该撞上相位段签名。
+    const fake = new Uint8ClampedArray(width * height * 4) as unknown as import("./arrays").Pixels;
+    for (let i = 0; i < fake.length; i += 4) {
+      fake[i] = Math.random() * 255;
+      fake[i + 1] = Math.random() * 255;
+      fake[i + 2] = Math.random() * 255;
+      fake[i + 3] = 255;
+    }
+    expect(recognizeExact(fake, width, height)).toBe(false);
+  });
+
+  test("phase reliability drops when the image is downscaled, and synthesis falls back", async () => {
+    const pcm = signal(sr * 3, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    const { pixels, width, height } = exactPixels(spec);
+    const bandRows = height >> 1;
+
+    // 2×2 平均后相位矢量相互抵消：可靠性必须掉到阈值之下。
+    const half = box2(pixels, width, height);
+    const halfRows = half.h >> 1;
+    const ph = samplePhase(half.px as unknown as import("./arrays").Pixels, half.w, halfRows, halfRows, half.w, halfRows);
+    expect(ph.reliability).toBeLessThan(0.8);
+
+    // 完整图可靠性贴着 1。
+    const full = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
+    expect(full.reliability).toBeGreaterThan(0.95);
+  });
+
+  test("geometry meta keeps win/bins consistent", () => {
+    const m = metaFromGeometry(620, 257, true, 0);
+    expect(m.win).toBe(512); // 257 bins → (257-1)*2 = 512
+    expect(m.bins).toBeLessThanOrEqual(m.win / 2 + 1);
+    expect(m.hop).toBe(m.win / 2);
+    expect(m.sr).toBe(8000);
+    const big = metaFromGeometry(620, 3000, true, 0);
+    expect(big.win).toBe(4096);
+    expect(big.bins).toBeLessThanOrEqual(2049);
+  });
+
+  test("readIndexedRamp recognizes our compact palette and rejects others", async () => {
+    const w = 12;
+    const h = 5;
+    const indices = Uint8Array.from({ length: w * h }, (_, i) => (i * 37) & 255);
+    // 复刻 compactPng 的调色板构造（8 位）。
+    const steps = 255;
+    const palette = new Uint8Array(256 * 3);
+    for (let q = 0; q < 256; q++) {
+      const c = Math.min(255, Math.round((Math.min(q, steps) * 255) / steps)) * 3;
+      palette[q * 3] = RAMP[c]!;
+      palette[q * 3 + 1] = RAMP[c + 1]!;
+      palette[q * 3 + 2] = RAMP[c + 2]!;
+    }
+    const bytes = await indexedPng(indices, w, h, 8, palette, "ignored");
+    const hit = await readIndexedRamp(bytes);
+    expect(hit).not.toBeNull();
+    expect(hit!.width).toBe(w);
+    expect(hit!.height).toBe(h);
+    expect(hit!.levels[0]).toBe(Math.round((indices[0]! * 255) / steps));
+
+    // 调色板被换掉（随便的灰阶）→ 不认。
+    const gray = new Uint8Array(256 * 3);
+    for (let q = 0; q < 256; q++) gray[q * 3] = gray[q * 3 + 1] = gray[q * 3 + 2] = q;
+    const alien = await readIndexedRamp(await indexedPng(indices, w, h, 8, gray, "x"));
+    expect(alien).toBeNull();
   });
 });
 

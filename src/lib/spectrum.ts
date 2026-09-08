@@ -260,8 +260,8 @@ export async function encode(
         levels[base + b] = magToLevel(db);
         // 相位存成 cos/sin，抗压缩：有损重编码后仍能平滑解码出相位，不爆尖刺。
         const a = Math.atan2(im, re);
-        phaseCos[base + b] = clampByte(((Math.cos(a) * 0.5 + 0.5) * 255) | 0);
-        phaseSin[base + b] = clampByte(((Math.sin(a) * 0.5 + 0.5) * 255) | 0);
+        phaseCos[base + b] = clampByte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
+        phaseSin[base + b] = clampByte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
       }
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
@@ -368,15 +368,31 @@ async function synthesiseExact(
   const scale = win / 4;
 
   let next = 0;
+  // 每个频点记住上一个可信相位：图被极端压损后 cos/sin 可能塌向中心（长度≈0），
+  // 此时相位无定义 —— 沿用上一帧的相位，而不是注入随机 0 相位，避免噼啪。
+  const holdC = new Float64Array(bins).fill(1);
+  const holdS = new Float64Array(bins);
   for (let f = 0; f < frames; f++) {
     const base = f * bins;
     for (let b = 0; b < bins; b++) {
       const m = Math.pow(10, levelToMagDb(levels[base + b]!) / 20) * scale;
-      const c = (phaseCos[base + b]! - 127.5) / 127.5;
-      const s = (phaseSin[base + b]! - 127.5) / 127.5;
-      const a = Math.atan2(s, c);
-      core.re[b] = m * Math.cos(a);
-      core.im[b] = m * Math.sin(a);
+      const cr = (phaseCos[base + b]! - 127.5) / 127.5;
+      const cs = (phaseSin[base + b]! - 127.5) / 127.5;
+      const h = Math.sqrt(cr * cr + cs * cs);
+      let c: number;
+      let s: number;
+      if (h > 0.1) {
+        c = cr / h;
+        s = cs / h;
+        holdC[b] = c;
+        holdS[b] = s;
+      } else {
+        c = holdC[b]!;
+        s = holdS[b]!;
+      }
+      // 直接用归一化矢量（等价于 m·cos(atan2)），省掉每频点一次 atan2+sin+cos。
+      core.re[b] = m * c;
+      core.im[b] = m * s;
     }
     core.add(acc, f * hop);
     if (Date.now() >= next) {

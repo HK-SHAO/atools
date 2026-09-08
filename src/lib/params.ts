@@ -37,10 +37,10 @@ export const SR_OPTIONS = [8000, 16000, 32000, 0] as const;
 export const BITS_OPTIONS = [2, 4, 8, 16] as const;
 export const FMAX_OPTIONS = [0, 2000, 4000, 6000, 8000] as const;
 
-/** 紧凑默认：跟随原音频（sr:0）、8 位色深、全频段 —— 不高于原素材参数。 */
+/** 紧凑默认：8 kHz 采样率、8 位色深、全频段 —— 语音清晰、图小、任何素材都能载入。 */
 export const VOICE: Encode = {
   mode: "compact",
-  sr: 0,
+  sr: 8000,
   bits: 8,
   fineness: 1,
   fmax: 0,
