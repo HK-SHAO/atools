@@ -89,9 +89,18 @@ try {
       id?: number;
       method?: string;
       result?: unknown;
-      params?: { exceptionDetails?: { exception?: { description?: string }; text?: string } };
+    params?: {
+      exceptionDetails?: { exception?: { description?: string }; text?: string };
+      type?: string;
+      args?: { value?: unknown; description?: string }[];
     };
-    if (m.id !== undefined) pending.get(m.id)?.(m.result as never);
+  };
+  if (m.id !== undefined) pending.get(m.id)?.(m.result as never);
+  if (m.method === "Runtime.consoleAPICalled" && m.params?.type === "error")
+    console.error(
+      "[page]",
+      (m.params.args ?? []).map(a => a.description ?? JSON.stringify(a.value) ?? "").join(" "),
+    );
     if (m.method === "Runtime.exceptionThrown")
       errs.push(
         m.params?.exceptionDetails?.exception?.description ?? m.params?.exceptionDetails?.text ?? "",

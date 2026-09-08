@@ -438,6 +438,7 @@ export async function runCase(
   let back = spec;
   let bytes = 0;
   let rel: number | null = null;
+  let dims = "?";
   let readMode = "";
   if (c.via !== "none") {
     const png = await spectrumToPng(spec);
@@ -453,9 +454,11 @@ export async function runCase(
     const degraded = await degrade(png, viaKey, fileName);
     bytes = degraded.size;
     const read = await imageToSpectrum(degraded, fileName);
+    console.error(`[diag] ${fileName} ${read.width}x${read.height} mode=${read.mode} guessed=${read.guessed} frames=${read.spec.meta.frames} bins=${read.spec.meta.bins} sr=${read.spec.meta.sr} dur=${(read.spec.meta.samples/read.spec.meta.sr).toFixed(2)}s`);
     back = read.spec;
     rel = read.phaseReliability;
     readMode = read.mode;
+    dims = `${read.width}x${read.height}`;
   }
   const y = await synthesise(back);
 
@@ -467,7 +470,7 @@ export async function runCase(
 
   return {
     file: name,
-    case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness]!.label}/${c.via}`,
+    case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness]!.label}/${c.via}/${(back.meta.samples / back.meta.sr).toFixed(2)}s/${dims}`,
     ms: Math.round(performance.now() - t0),
     bytes,
     frames: spec.meta.frames,

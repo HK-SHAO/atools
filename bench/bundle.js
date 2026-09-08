@@ -1,11 +1,41 @@
 // src/lib/audio.ts
+function sniffAudio(b) {
+  const ascii = (at, len) => String.fromCharCode(...b.subarray(at, at + len));
+  if (b.length > 12) {
+    const brand = ascii(8, 4);
+    if (brand.startsWith("3gp"))
+      return "3GP（手机通话录音常用）";
+    if (ascii(4, 4) === "ftyp")
+      return "M4A/MP4";
+  }
+  if (ascii(0, 5) === "#!AMR")
+    return "AMR（微信等语音常用）";
+  if (ascii(1, 9) === "#!SILK_V3" || ascii(0, 9) === "#!SILK_V3")
+    return "SILK（微信语音专有）";
+  if (ascii(0, 4) === "OggS")
+    return "OGG";
+  if (ascii(0, 4) === "fLaC")
+    return "FLAC";
+  if (ascii(0, 4) === "RIFF")
+    return "WAV";
+  if (ascii(0, 3) === "ID3" || b[0] === 255 && (b[1] & 224) === 224)
+    return "MP3";
+  return "";
+}
+var DECODE_HELP = "支持 m4a、mp3、wav、ogg、flac。若来自微信或通话录音，请先用录音 App 另存为这些格式";
+function decodeRaw(ctx, data) {
+  return new Promise((ok, no) => {
+    ctx.decodeAudioData(data, ok, (err) => no(err instanceof Error ? err : new Error(String(err ?? "解码失败"))));
+  });
+}
 async function decodeAudioFile(data) {
   const Ctor = window.AudioContext ?? window.webkitAudioContext;
   if (!Ctor)
     throw new Error("这个浏览器不支持 Web Audio");
+  const head = sniffAudio(new Uint8Array(data));
   const ctx = new Ctor;
   try {
-    const buffer = await ctx.decodeAudioData(data.slice(0));
+    const buffer = await decodeRaw(ctx, data.slice(0));
     const tracks = buffer.numberOfChannels;
     const n = buffer.length;
     if (n === 0)
@@ -29,7 +59,9 @@ async function decodeAudioFile(data) {
   } catch (e) {
     if (e instanceof Error && /空/.test(e.message))
       throw e;
-    throw new Error(`解不出这段音频：${e instanceof Error ? e.message : String(e)}`);
+    if (head === "AMR（微信等语音常用）" || head === "SILK（微信语音专有）" || head.startsWith("3GP"))
+      throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
+    throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
   } finally {
     ctx.close();
   }
@@ -1280,6 +1312,185 @@ function paramsForImage(frames, rows, sr, bits, ref, exact) {
   return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact };
 }
 
+// src/lib/stub.ts
+var STUB_ROWS = 8;
+var bitPx = (w) => w >= 160 ? 4 : w >= 70 ? 2 : 1;
+var MAGIC = 11;
+var DARK = 20;
+var LIGHT = 230;
+var CRC_POLY = 7;
+var STUB_SR = [
+  8000,
+  11025,
+  12000,
+  16000,
+  22050,
+  24000,
+  32000,
+  44100,
+  48000,
+  64000,
+  88200,
+  96000,
+  176400,
+  192000
+];
+var WIN_TABLE = [256, 512, 1024, 2048];
+var srIndex = (sr) => STUB_SR.indexOf(sr);
+function crc8(bits) {
+  let crc = 255;
+  for (const b of bits) {
+    crc ^= b << 7;
+    for (let i = 0;i < 8; i++)
+      crc = crc & 128 ? (crc << 1 ^ CRC_POLY) & 255 : crc << 1 & 255;
+  }
+  return crc;
+}
+function stubBits(width, sr, win, exact) {
+  const si = srIndex(sr);
+  const wi = WIN_TABLE.indexOf(win);
+  if (si < 0 || wi < 0 || width < 2 || width > 65535)
+    return null;
+  const [pre, wbits] = width <= 255 ? [0, 8] : width <= 4095 ? [1, 12] : [2, 16];
+  const bits = [];
+  const put = (v, n) => {
+    for (let i = n - 1;i >= 0; i--)
+      bits.push(v >> i & 1);
+  };
+  put(10, 4);
+  put(MAGIC, 4);
+  put(pre, 2);
+  put(width, wbits);
+  put(si, 4);
+  put(wi, 2);
+  put(exact ? 1 : 0, 1);
+  put(crc8(bits.slice(4)), 8);
+  return bits;
+}
+var stubSpan = (w) => {
+  const bits = 25 + (w <= 255 ? 8 : w <= 4095 ? 12 : 16);
+  return 2 + bits * bitPx(w);
+};
+function stubLuma(w, sr, win, exact) {
+  const bits = stubBits(w, sr, win, exact);
+  if (!bits || w < stubSpan(w) + 2)
+    return null;
+  const row = new Uint8Array(w).fill(DARK);
+  const span = stubSpan(w);
+  const step = bitPx(w);
+  const starts = w >= 2 * span + 6 ? [2, w - span] : [2];
+  for (const x0 of starts) {
+    for (let x = x0;x < Math.min(w, x0 + span); x++) {
+      const at = x - x0;
+      const bit = at < 2 ? 0 : bits[Math.floor((at - 2) / step)];
+      row[x] = bit ? LIGHT : DARK;
+    }
+  }
+  return row;
+}
+function drawStub(px, w, h, sr, win, exact, toIndex) {
+  const row = stubLuma(w, sr, win, exact);
+  if (!row)
+    return;
+  for (let y = h - STUB_ROWS;y < h; y++) {
+    for (let x = 0;x < w; x++) {
+      const p = (y * w + x) * 4;
+      const lum = row[x];
+      if (toIndex)
+        px[p] = toIndex(lum);
+      else {
+        px[p] = lum;
+        px[p + 1] = lum;
+        px[p + 2] = lum;
+      }
+      px[p + 3] = 255;
+    }
+  }
+}
+function decodeStub(profile) {
+  const n = profile.length;
+  if (n < 46)
+    return null;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0;i < n; i++) {
+    const v = profile[i];
+    if (v < lo)
+      lo = v;
+    if (v > hi)
+      hi = v;
+  }
+  const th = (lo + hi) / 2;
+  if (hi - lo < 120)
+    return null;
+  const runs = [];
+  let cur = profile[0] >= th ? 1 : 0;
+  let len = 0;
+  for (let i = 0;i < n; i++) {
+    const v = profile[i] >= th ? 1 : 0;
+    if (v === cur)
+      len++;
+    else {
+      runs.push([cur, len]);
+      cur = v;
+      len = 1;
+    }
+  }
+  runs.push([cur, len]);
+  for (let r = 0;r + 4 < runs.length; r++) {
+    if (runs[r][0] !== 1 || runs[r + 1][0] !== 0 || runs[r + 2][0] !== 1 || runs[r + 3][0] !== 0)
+      continue;
+    const total = runs[r][1] + runs[r + 1][1] + runs[r + 2][1] + runs[r + 3][1];
+    const unit = total / 4;
+    if (unit < 0.3)
+      continue;
+    if (Math.round(runs[r][1] / unit) !== 1 || Math.round(runs[r + 1][1] / unit) !== 1 || Math.round(runs[r + 2][1] / unit) !== 1 || Math.round(runs[r + 3][1] / unit) !== 1)
+      continue;
+    const bits = [];
+    let totalBits = -1;
+    let wN = 0;
+    let bad = false;
+    for (let j = r + 4;j < runs.length; j++) {
+      const [v, l] = runs[j];
+      const count = Math.max(1, Math.round(l / unit));
+      for (let k = 0;k < count; k++) {
+        bits.push(v);
+        if (totalBits < 0 && bits.length >= 6) {
+          const magic = bits[0] << 3 | bits[1] << 2 | bits[2] << 1 | bits[3];
+          wN = [8, 12, 16, 0][bits[4] * 2 + bits[5]] ?? 0;
+          if (magic !== MAGIC || !wN) {
+            bad = true;
+            break;
+          }
+          totalBits = 6 + wN + 15;
+        }
+        if (totalBits > 0 && bits.length >= totalBits)
+          break;
+      }
+      if (bad || totalBits > 0 && bits.length >= totalBits)
+        break;
+    }
+    if (bad || totalBits < 0 || bits.length !== totalBits)
+      continue;
+    const get = (at, w2) => {
+      let v = 0;
+      for (let i = 0;i < w2; i++)
+        v = v << 1 | bits[at + i];
+      return v;
+    };
+    if (crc8(bits.slice(0, 13 + wN)) !== get(13 + wN, 8))
+      continue;
+    const width = get(6, wN);
+    const si = get(6 + wN, 4);
+    const wi = get(10 + wN, 2);
+    if (si >= STUB_SR.length || width < 2)
+      continue;
+    return { width, sr: STUB_SR[si], win: WIN_TABLE[wi], exact: get(12 + wN, 1) === 1 };
+  }
+  return null;
+}
+var stubFits = (w) => w >= stubSpan(w) + 4;
+
 // src/lib/image.ts
 var FORMAT_VERSION = 4;
 var MIN_VERSION = 3;
@@ -1508,7 +1719,7 @@ function rescaled(meta, width, maxHop) {
 }
 async function readCompact16(bytes, meta) {
   const g = await readGray16(bytes);
-  const levels = new Uint8Array(meta.frames * meta.bins);
+  const levels = new Uint16Array(meta.frames * meta.bins);
   if (g) {
     const sx = g.width / meta.frames;
     const sy = g.height / meta.bins;
@@ -1516,13 +1727,33 @@ async function readCompact16(bytes, meta) {
       const col = Math.min(g.width - 1, Math.floor((f + 0.5) * sx));
       for (let b = 0;b < meta.bins; b++) {
         const row = Math.min(g.height - 1, Math.floor((b + 0.5) * sy));
-        levels[f * meta.bins + b] = Math.min(255, g.data[row * g.width + col] * 255 / 65535) | 0;
+        const imgRow = g.height - 1 - row;
+        levels[f * meta.bins + b] = g.data[imgRow * g.width + col];
       }
     }
   }
   return { meta, levels, phaseCos: null, phaseSin: null };
 }
-var READ_TUNE = { phaseReliable: 0.5 };
+var READ_TUNE = { phaseReliable: 0.5, phaseReliableJpeg: 0.3 };
+function stubFromPixels(pixels, w, h) {
+  for (let rows = STUB_ROWS;rows >= 2; rows--) {
+    if (h <= rows)
+      break;
+    const prof = [];
+    for (let x = 0;x < w; x++) {
+      let s = 0;
+      for (let y = h - rows;y < h; y++) {
+        const p = (y * w + x) * 4;
+        s += 0.299 * pixels[p] + 0.587 * pixels[p + 1] + 0.114 * pixels[p + 2];
+      }
+      prof.push(s / rows);
+    }
+    const info = decodeStub(prof);
+    if (info)
+      return info;
+  }
+  return null;
+}
 async function imageToSpectrum(file, fileName) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
@@ -1553,6 +1784,62 @@ async function imageToSpectrum(file, fileName) {
     }
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
+      let stub = null;
+      for (let rows = STUB_ROWS;rows >= 2 && !stub; rows--) {
+        if (idx.height <= rows)
+          break;
+        const prof = [];
+        for (let x = 0;x < idx.width; x++) {
+          let s = 0;
+          for (let y = idx.height - rows;y < idx.height; y++)
+            s += idx.levels[y * idx.width + x];
+          prof.push(s / rows);
+        }
+        stub = decodeStub(prof);
+      }
+      if (stub) {
+        const hEff = idx.height - STUB_ROWS;
+        const bins0 = stub.win / 2 + 1;
+        const gmeta = {
+          sr: stub.sr,
+          win: stub.win,
+          hop: stub.win / 2,
+          frames: stub.width,
+          bins: bins0,
+          samples: stub.width * (stub.win / 2),
+          bits: 8,
+          ref: 0,
+          exact: false
+        };
+        const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+        const sx = idx.width / gmeta.frames;
+        const sy = hEff / gmeta.bins;
+        for (let f = 0;f < gmeta.frames; f++) {
+          const x0 = Math.min(idx.width - 1, Math.floor(f * sx));
+          const x1 = Math.min(idx.width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+          for (let b = 0;b < gmeta.bins; b++) {
+            const y0 = Math.min(hEff - 1, Math.floor(b * sy));
+            const y1 = Math.min(hEff, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+            let sum = 0;
+            let n = 0;
+            for (let x = x0;x < x1; x++)
+              for (let y = y0;y < y1; y++) {
+                sum += idx.levels[y * idx.width + x];
+                n++;
+              }
+            levels[f * gmeta.bins + b] = n > 0 ? Math.round(sum / n) : 0;
+          }
+        }
+        return {
+          spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+          mode: "degraded",
+          container,
+          width: idx.width,
+          height: idx.height,
+          phaseReliability: null,
+          guessed: false
+        };
+      }
       const gmeta = metaFromGeometry(idx.width, idx.height, false, 8);
       const levels = new Uint8Array(gmeta.frames * gmeta.bins);
       const sx = idx.width / gmeta.frames;
@@ -1591,10 +1878,64 @@ async function imageToSpectrum(file, fileName) {
     const { canvas, ctx } = surface(bitmap.width, bitmap.height);
     ctx.drawImage(bitmap, 0, 0);
     const w = bitmap.width;
-    const h = bitmap.height;
+    let h = bitmap.height;
     const pixels = ctx.getImageData(0, 0, w, h).data;
     canvas.width = 0;
     canvas.height = 0;
+    const stub = stubFromPixels(pixels, w, h);
+    if (stub)
+      h = Math.max(2, h - Math.max(1, Math.round(STUB_ROWS * w / stub.width)));
+    if (stub && (meta === null || w < stub.width * 0.95)) {
+      const bins0 = stub.win / 2 + 1;
+      const frames0 = stub.width;
+      const meta0 = {
+        sr: stub.sr,
+        win: stub.win,
+        hop: stub.win / 2,
+        frames: frames0,
+        bins: bins0,
+        samples: frames0 * (stub.win / 2),
+        bits: stub.exact ? 0 : 8,
+        ref: meta?.ref ?? 0,
+        exact: stub.exact
+      };
+      if (stub.exact) {
+        const bandRows = Math.max(1, Math.floor(h / BANDS));
+        const levels = sampleLevels(pixels, w, 0, bandRows, frames0, bins0);
+        const ph = samplePhase(pixels, w, bandRows, bandRows, frames0, bins0);
+        const scaled = w < stub.width * 0.95;
+        const th = scaled ? READ_TUNE.phaseReliable : READ_TUNE.phaseReliableJpeg;
+        const keep = ph.reliability >= th;
+        return {
+          spec: {
+            meta: meta0,
+            levels,
+            phaseCos: keep ? ph.cos : null,
+            phaseSin: keep ? ph.sin : null
+          },
+          mode: "degraded",
+          container,
+          width: w,
+          height: h,
+          phaseReliability: ph.reliability,
+          guessed: false
+        };
+      }
+      return {
+        spec: {
+          meta: meta0,
+          levels: sampleLevels(pixels, w, 0, h, frames0, bins0),
+          phaseCos: null,
+          phaseSin: null
+        },
+        mode: "degraded",
+        container,
+        width: w,
+        height: h,
+        phaseReliability: null,
+        guessed: false
+      };
+    }
     let m0 = meta;
     if (m0 === null && recognizeExact(pixels, w, h)) {
       m0 = metaFromGeometry(w, Math.floor(h / 2), true, 0);
@@ -1671,7 +2012,8 @@ function exactPixels(spec) {
   const { meta, levels, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
   const width = frames;
-  const height = BANDS * bins;
+  const stubRows = stubFits(frames) ? STUB_ROWS : 0;
+  const height = BANDS * bins + stubRows;
   const pixels = new Uint8ClampedArray(width * height * 4);
   let p = 0;
   for (let row = 0;row < bins; row++) {
@@ -1696,6 +2038,8 @@ function exactPixels(spec) {
       p += 4;
     }
   }
+  if (stubRows)
+    drawStub(pixels, width, height, meta.sr, meta.win, true);
   return { pixels, width, height };
 }
 async function exactPng(spec) {
@@ -1713,12 +2057,16 @@ async function exactPng(spec) {
 async function compactPng(spec) {
   const { meta, levels } = spec;
   if (meta.bits >= 16) {
-    const g16 = new Uint16Array(levels.length);
-    for (let i = 0;i < levels.length; i++) {
-      const v = levels[i];
-      g16[i] = v > 255 ? v : v * 65535 / 255 | 0;
+    const { frames, bins } = meta;
+    const g16 = new Uint16Array(frames * bins);
+    for (let row = 0;row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0;f < frames; f++) {
+        const v = levels[f * bins + b];
+        g16[row * frames + f] = v > 255 ? v : v * 65535 / 255 | 0;
+      }
     }
-    const bytes = await gray16Png(g16, meta.frames, meta.bins, metaToText(meta));
+    const bytes = await gray16Png(g16, frames, bins, metaToText(meta));
     return new Blob([bytes], { type: "image/png" });
   }
   const steps = stepsOf(meta.bits);
@@ -1735,13 +2083,21 @@ async function compactPng(spec) {
     palette[q * 3 + 2] = RAMP[c + 2];
   }
   const { frames, bins } = meta;
-  const packed = new Uint8Array(frames * bins);
+  const stub = stubFits(frames) ? stubLuma(frames, meta.sr, meta.win, false) : null;
+  const stubRows = stub ? STUB_ROWS : 0;
+  const packed = new Uint8Array(frames * (bins + stubRows));
   for (let row = 0;row < bins; row++) {
     const b = bins - 1 - row;
     for (let f = 0;f < frames; f++)
       packed[row * frames + f] = indices[f * bins + b];
   }
-  const bytes = await indexedPng(packed, frames, bins, depth, palette, metaToText(meta));
+  if (stub) {
+    const dark = 0;
+    const light = steps;
+    for (let i = 0;i < STUB_ROWS * frames; i++)
+      packed[bins * frames + i] = stub[i % frames] > 125 ? light : dark;
+  }
+  const bytes = await indexedPng(packed, frames, bins + stubRows, depth, palette, metaToText(meta));
   return new Blob([bytes], { type: "image/png" });
 }
 function spectrumToPng(spec) {
@@ -2116,6 +2472,7 @@ async function runCase(srcPcm, srcSr, name, c) {
   let back = spec;
   let bytes = 0;
   let rel = null;
+  let dims = "?";
   let readMode = "";
   if (c.via !== "none") {
     const png = await spectrumToPng(spec);
@@ -2126,9 +2483,11 @@ async function runCase(srcPcm, srcSr, name, c) {
     const degraded = await degrade(png, viaKey, fileName);
     bytes = degraded.size;
     const read = await imageToSpectrum(degraded, fileName);
+    console.error(`[diag] ${fileName} ${read.width}x${read.height} mode=${read.mode} guessed=${read.guessed} frames=${read.spec.meta.frames} bins=${read.spec.meta.bins} sr=${read.spec.meta.sr} dur=${(read.spec.meta.samples / read.spec.meta.sr).toFixed(2)}s`);
     back = read.spec;
     rel = read.phaseReliability;
     readMode = read.mode;
+    dims = `${read.width}x${read.height}`;
   }
   const y = await synthesise(back);
   const ref = tuned.subarray(0, Math.min(tuned.length, y.length));
@@ -2138,7 +2497,7 @@ async function runCase(srcPcm, srcSr, name, c) {
   const s = spectral(magnitudes(ref, win, hop), magnitudes(y, win, hop));
   return {
     file: name,
-    case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness].label}/${c.via}`,
+    case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness].label}/${c.via}/${(back.meta.samples / back.meta.sr).toFixed(2)}s/${dims}`,
     ms: Math.round(performance.now() - t0),
     bytes,
     frames: spec.meta.frames,

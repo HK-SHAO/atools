@@ -6,6 +6,7 @@ import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
 import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { STUB_ROWS, stubFits } from "./stub";
 import { resample, silenceBounds, slice } from "./resample";
 
 function signal(samples: number, sr: number): Samples {
@@ -307,11 +308,12 @@ describe("exact (2-band) mode", () => {
     expect(spec.meta.exact).toBe(true);
 
     // 上段幅度谱（G === 层级，就是那张能看的频谱图），下段相位（R=cos / G=sin）。
-    // 高度 = 2 × bins，相位单独一层，不污染上面的频谱。
+    // 高度 = 2 × bins + 底部票根行（恢复几何用，不属于谱内容）。
     const { pixels, width, height } = exactPixels(spec);
-    expect(height).toBe(2 * spec.meta.bins);
+    const stubRows = stubFits(width) ? STUB_ROWS : 0;
+    expect(height).toBe(2 * spec.meta.bins + stubRows);
 
-    const bandRows = Math.floor(height / 2);
+    const bandRows = Math.floor((height - stubRows) / 2);
     const levels = sampleLevels(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins);
     const ph = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
     // 1:1 完整图，相位矢量长度比必须贴着 1（可靠性达标，相位才会被采用）。

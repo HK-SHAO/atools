@@ -3,6 +3,7 @@ import { FROM_LUMA, RAMP, luma } from "./palette";
 import { gray16Png, indexedPng, readGray16, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
+import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
 /* 任何一张图都要能出声。读取链路分四档：
  *   可逆   —— 无损容器 + 两段齐全（上=幅度谱、下=相位）+ 尺寸对得上：直接逆变换
@@ -345,7 +346,26 @@ export interface Decoded {
  * 但 JPEG 的色度下采样只会把比值压到 0.6 左右，相位方向大体还在 ——
  * 实测保留它：相关 0.22 → 0.65。所以阈值取 0.5，正好分开这两种损伤。
  * 可调：评测台用它做分级信任实验。 */
-export const READ_TUNE = { phaseReliable: 0.5 };
+export const READ_TUNE = { phaseReliable: 0.5, phaseReliableJpeg: 0.3 };
+
+/** 从 canvas 像素底部递减行数尝试解码票根（缩放后票根行数 = 8×比例，先猜 8 再往下）。 */
+function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
+  for (let rows = STUB_ROWS; rows >= 2; rows--) {
+    if (h <= rows) break;
+    const prof: number[] = [];
+    for (let x = 0; x < w; x++) {
+      let s = 0;
+      for (let y = h - rows; y < h; y++) {
+        const p = (y * w + x) * 4;
+        s += 0.299 * pixels[p]! + 0.587 * pixels[p + 1]! + 0.114 * pixels[p + 2]!;
+      }
+      prof.push(s / rows);
+    }
+    const info = decodeStub(prof);
+    if (info) return info;
+  }
+  return null;
+}
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -382,6 +402,62 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     // 索引色 PNG 且调色板与暖色 ramp 逐项一致：我们的紧凑图。
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
+      // 票根（原始字节、未缩放，底部 8 行就是票根）：优先用它恢复精确几何。
+      let stub: StubInfo | null = null;
+      for (let rows = STUB_ROWS; rows >= 2 && !stub; rows--) {
+        if (idx.height <= rows) break;
+        const prof: number[] = [];
+        for (let x = 0; x < idx.width; x++) {
+          let s = 0;
+          for (let y = idx.height - rows; y < idx.height; y++)
+            s += idx.levels[y * idx.width + x]!;
+          prof.push(s / rows);
+        }
+        stub = decodeStub(prof);
+      }
+      if (stub) {
+        const hEff = idx.height - STUB_ROWS;
+        const bins0 = stub.win / 2 + 1;
+        const gmeta: Meta = {
+          sr: stub.sr,
+          win: stub.win,
+          hop: stub.win / 2,
+          frames: stub.width,
+          bins: bins0,
+          samples: stub.width * (stub.win / 2),
+          bits: 8,
+          ref: 0,
+          exact: false,
+        };
+        const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+        const sx = idx.width / gmeta.frames;
+        const sy = hEff / gmeta.bins;
+        for (let f = 0; f < gmeta.frames; f++) {
+          const x0 = Math.min(idx.width - 1, Math.floor(f * sx));
+          const x1 = Math.min(idx.width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+          for (let b = 0; b < gmeta.bins; b++) {
+            const y0 = Math.min(hEff - 1, Math.floor(b * sy));
+            const y1 = Math.min(hEff, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+            let sum = 0;
+            let n = 0;
+            for (let x = x0; x < x1; x++)
+              for (let y = y0; y < y1; y++) {
+                sum += idx.levels[y * idx.width + x]!;
+                n++;
+              }
+            levels[f * gmeta.bins + b] = n > 0 ? Math.round(sum / n) : 0;
+          }
+        }
+        return {
+          spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+          mode: "degraded",
+          container,
+          width: idx.width,
+          height: idx.height,
+          phaseReliability: null,
+          guessed: false,
+        };
+      }
       const gmeta = metaFromGeometry(
         idx.width,
         idx.height,
@@ -426,10 +502,74 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     const { canvas, ctx } = surface(bitmap.width, bitmap.height);
     ctx.drawImage(bitmap, 0, 0);
     const w = bitmap.width;
-    const h = bitmap.height;
+    let h = bitmap.height;
     const pixels = ctx.getImageData(0, 0, w, h).data as Pixels;
     canvas.width = 0;
     canvas.height = 0;
+
+    // ---- 条码票根：meta 被剥、文件名被改、图被缩放后，恢复原始几何与采样率的权威通道 ----
+    const stub = stubFromPixels(pixels, w, h);
+    if (stub) h = Math.max(2, h - Math.max(1, Math.round((STUB_ROWS * w) / stub.width)));
+
+    // meta 缺失时票根给出全部参数（比几何猜测强得多）；meta 在但图被缩放过时
+    // 也走这里 —— 此时 meta 的几何对不上实际像素，「时长不变」重推在等比缩放下
+    // 会把帧数推成宽度的 4 倍（rescaled 只考虑竖向缩放），比不用还糟；票根知道
+    // 原始宽度与窗长，幅度刻度 ref 仍从 meta 继承。meta 完好且未缩放时上面已
+    // 剔除票根行，走原有 1:1 路径保住全部信息。
+    if (stub && (meta === null || w < stub.width * 0.95)) {
+      const bins0 = stub.win / 2 + 1;
+      const frames0 = stub.width;
+      const meta0: Meta = {
+        sr: stub.sr,
+        win: stub.win,
+        hop: stub.win / 2,
+        frames: frames0,
+        bins: bins0,
+        samples: frames0 * (stub.win / 2),
+        bits: stub.exact ? 0 : 8,
+        ref: meta?.ref ?? 0,
+        exact: stub.exact,
+      };
+      if (stub.exact) {
+        const bandRows = Math.max(1, Math.floor(h / BANDS));
+        const levels = sampleLevels(pixels, w, 0, bandRows, frames0, bins0);
+        const ph = samplePhase(pixels, w, bandRows, bandRows, frames0, bins0);
+        // 阈值按缩放比分级：票根给出原始宽度 → 未缩放的图只受 JPEG 色度损伤
+        //（可靠 ~0.34，方向仍在，保留大幅优于弃用）；缩放过的图矢量被平均
+        //（~0.2-0.4），保留无益。票根没命中的老图维持统一阈值。
+        const scaled = w < stub.width * 0.95;
+        const th = scaled ? READ_TUNE.phaseReliable : READ_TUNE.phaseReliableJpeg;
+        const keep = ph.reliability >= th;
+        return {
+          spec: {
+            meta: meta0,
+            levels,
+            phaseCos: keep ? ph.cos : null,
+            phaseSin: keep ? ph.sin : null,
+          },
+          mode: "degraded",
+          container,
+          width: w,
+          height: h,
+          phaseReliability: ph.reliability,
+          guessed: false,
+        };
+      }
+      return {
+        spec: {
+          meta: meta0,
+          levels: sampleLevels(pixels, w, 0, h, frames0, bins0),
+          phaseCos: null,
+          phaseSin: null,
+        },
+        mode: "degraded",
+        container,
+        width: w,
+        height: h,
+        phaseReliability: null,
+        guessed: false,
+      };
+    }
 
     // ---- 像素签名兜底：连调色板/灰度签名都没认出来，试试可逆图的相位段签名 ----
     let m0 = meta;
@@ -531,7 +671,8 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
   const { meta, levels, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
   const width = frames;
-  const height = BANDS * bins;
+  const stubRows = stubFits(frames) ? STUB_ROWS : 0;
+  const height = BANDS * bins + stubRows;
   const pixels = new Uint8ClampedArray(width * height * 4) as Pixels;
   let p = 0;
 
@@ -562,6 +703,9 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
       p += 4;
     }
   }
+
+  // 票根：meta 被剥、文件名被改、图被缩放后，这是恢复采样率与几何的唯一通道。
+  if (stubRows) drawStub(pixels, width, height, meta.sr, meta.win, true);
 
   return { pixels, width, height };
 }
@@ -624,18 +768,28 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
     palette[q * 3 + 2] = RAMP[c + 2]!;
   }
 
-  // 第 0 行是最高频 —— 和读图时的行序对齐。
+  // 第 0 行是最高频 —— 和读图时的行序对齐。底部另加票根行（若放得下）：
+  // 票根亮度映射到 ramp 两端索引（暗=0、亮=steps），不新增调色板色，
+  // readIndexedRamp 的逐项一致签名不会被破坏。
   const { frames, bins } = meta;
-  const packed = new Uint8Array(frames * bins);
+  const stub = stubFits(frames) ? stubLuma(frames, meta.sr, meta.win, false) : null;
+  const stubRows = stub ? STUB_ROWS : 0;
+  const packed = new Uint8Array(frames * (bins + stubRows));
   for (let row = 0; row < bins; row++) {
     const b = bins - 1 - row;
     for (let f = 0; f < frames; f++) packed[row * frames + f] = indices[f * bins + b]!;
+  }
+  if (stub) {
+    const dark = 0;
+    const light = steps;
+    for (let i = 0; i < STUB_ROWS * frames; i++)
+      packed[bins * frames + i] = stub[i % frames]! > 125 ? light : dark;
   }
 
   const bytes = await indexedPng(
     packed,
     frames,
-    bins,
+    bins + stubRows,
     depth,
     palette,
     metaToText(meta),
