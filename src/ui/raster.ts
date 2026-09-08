@@ -35,7 +35,8 @@ export function buildSheet(spec: Spectrum, rows: number, maxWidth = MAX_SHEET_WI
         let m = 0;
         for (let f = from; f < to; f++) {
           const v = levels[f * bins + b]!;
-          if (v > m) m = v;
+          const lv = v > 255 ? v >> 8 : v; // 16 位幅度压到 0..255 显示
+          if (lv > m) m = lv;
         }
         if (m > best[x]!) best[x] = m;
       }

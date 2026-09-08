@@ -54,7 +54,7 @@ function save(blob: Blob, filename: string): void {
 }
 
 const MODE_NOTE: Record<ReadMode, string | null> = {
-  exact: "彩色相位谱：相位画进颜色（色相=相位角）。存 PNG 近无损、零爆音；JPEG/WebP 有损会损相位（但不爆音），保真请用 PNG",
+  exact: "可逆：上段是能看的幅度谱，下段是相位（R=cos/G=sin）。存 PNG 近乎无损、零爆音；JPEG/WebP 有损只平滑漂移相位、不爆音，保真请用 PNG",
   compact: null,
   degraded: "这张图被改过，按亮度反查幅度，相位靠迭代重建",
   foreign: "陌生图片，整幅当幅度读",
@@ -173,7 +173,7 @@ export function Workbench({
 
       <p className="facts">
         {srLabel(meta.sr)}Hz · {meta.frames} × {meta.bins} ·{" "}
-        {compact ? `${enc.bits} bit · ${dbSpanOf(enc.bits)} dB` : meta.color ? "彩色可逆" : "可逆"} · {kb(png.size)} ·{" "}
+        {compact ? `${enc.bits} bit · ${dbSpanOf(enc.bits)} dB` : "可逆"} · {kb(png.size)} ·{" "}
         {clock(duration)}
       </p>
       {note && <p className="facts dim">{note}</p>}
@@ -258,7 +258,7 @@ export function Workbench({
                 max={duration}
                 step={0.1}
                 value={enc.end === 0 ? "" : enc.end}
-                placeholder="到尾"
+                placeholder="-1"
                 onChange={e => set("end", Math.max(0, Number(e.target.value) || 0))}
               />
             </label>

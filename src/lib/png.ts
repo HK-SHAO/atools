@@ -194,3 +194,123 @@ export async function indexedPng(
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * 16 位灰度 PNG —— 紧凑模式「16 位色深」走这条：canvas 只有 8 位，
+ * 存 16 位幅度必须绕过它，直接写原始字节、读时也直接解原始字节。
+ * 只用 filter 0（None），读端据此简化。
+ * ------------------------------------------------------------------ */
+
+/** 写一张 16 位灰度 PNG。data 长度 = width × height，取值 0..65535。 */
+export async function gray16Png(
+  data: Uint16Array,
+  width: number,
+  height: number,
+  meta: string,
+): Promise<Bytes> {
+  const raw = new Uint8Array((width * 2 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 2 + 1);
+    raw[row] = 0; // filter None
+    for (let x = 0; x < width; x++) {
+      const v = data[y * width + x]!;
+      raw[row + 1 + x * 2] = (v >>> 8) & 0xff;
+      raw[row + 2 + x * 2] = v & 0xff;
+    }
+  }
+
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  ihdr[8] = 16; // 位深
+  ihdr[9] = 0; // 颜色类型 0 = 灰度
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const key = latin1(KEYWORD);
+  const body = latin1(meta);
+  const text = new Uint8Array(key.length + 1 + body.length);
+  text.set(key, 0);
+  text.set(body, key.length + 1);
+
+  const deflated = await zlib(raw);
+  const pieces = [
+    Uint8Array.from(SIGNATURE),
+    chunk("IHDR", ihdr),
+    chunk("tEXt", text),
+    chunk("IDAT", deflated),
+    chunk("IEND", new Uint8Array(0)),
+  ];
+
+  let size = 0;
+  for (const p of pieces) size += p.length;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of pieces) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+export interface Gray16 {
+  width: number;
+  height: number;
+  data: Uint16Array;
+}
+
+/** 读 16 位灰度 PNG，只认 filter 0。非 16 位灰度返回 null。 */
+export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
+  if (!isPng(bytes)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idat: Uint8Array[] = [];
+  while (at + 12 <= bytes.length) {
+    const len = view.getUint32(at);
+    if (at + 12 + len > bytes.length) return null;
+    const type = ascii(bytes.subarray(at + 4, at + 8));
+    if (type === "IHDR") {
+      width = view.getUint32(at + 8);
+      height = view.getUint32(at + 12);
+      bitDepth = bytes[at + 16]!;
+      colorType = bytes[at + 17]!;
+    } else if (type === "IDAT") {
+      idat.push(bytes.subarray(at + 8, at + 8 + len));
+    } else if (type === "IEND") {
+      break;
+    }
+    at += 12 + len;
+  }
+  if (colorType !== 0 || bitDepth !== 16) return null;
+
+  let total = 0;
+  for (const c of idat) total += c.length;
+  const concat = new Uint8Array(total);
+  let o = 0;
+  for (const c of idat) {
+    concat.set(c, o);
+    o += c.length;
+  }
+  const stream = new Blob([concat as BlobPart]).stream().pipeThrough(
+    new DecompressionStream("deflate"),
+  );
+  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+
+  const data = new Uint16Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const row = y * (width * 2 + 1);
+    if (raw[row]! !== 0) return null; // 只支持 filter None
+    for (let x = 0; x < width; x++) {
+      const hi = raw[row + 1 + x * 2]!;
+      const lo = raw[row + 2 + x * 2]!;
+      data[y * width + x] = ((hi << 8) | lo) >>> 0;
+    }
+  }
+  return { width, height, data };
+}

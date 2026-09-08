@@ -7,22 +7,18 @@ import { rtisiLa } from "./rtisi";
 /*
  * 音频 ↔ 图像，单声道。两种布局：
  *
- * 紧凑（默认）—— 图就是频谱图本身：
- *   一像素 = 一帧一频点，只有幅度，按位深量化后走暖色 ramp。
- *   不藏相位，还原时 Griffin-Lim 迭代补回来。
- *   位深越低，图里的颜色越少，PNG 压得越狠 —— 也就越小。
+ * 紧凑 —— 图就是频谱图本身：一像素 = 一帧一频点，只有幅度，按位深量化后走暖色 ramp。
+ *   不藏相位，还原时 PGHI + RTISI-LA 迭代补回来（可靠，音乐上听感有损但零爆音）。
  *
- * 可逆 —— 上 1/4 还是那张能看的频谱图，下面三段是精度与相位：
- *   ┌──────────────┐ 0..bins       幅度·粗 8 位，暖色 ramp（G 通道 == 层级）
- *   │              │ bins..2bins   幅度·细 8 位，灰阶
- *   │              │ 2bins..3bins  相位·高 8 位，灰阶
- *   └──────────────┘ 3bins..4bins  相位·低 8 位，灰阶
+ * 可逆 —— 两段干净分开，频谱一眼可读，相位单独一层不污染它：
+ *   ┌──────────────┐ 0..bins     幅度谱：暖色 ramp（G = 层级），就是那张能看的频谱图
+ *   └──────────────┘ bins..2bins  相位：R = cos(相位)、G = sin(相位)。cos/sin 在 2π 处连续，
+ *                           有损重编码只平滑漂移、不会在折叠处爆成尖刺；相位彻底丢了也有
+ *                           PGHI + RTISI-LA 兜底，绝不出爆音。
  */
 
-/** 老版灰度可逆图的段数（上 1/4 才看得见，下面三段是精度+相位）。 */
-export const BANDS = 4;
-/** 新版彩色可逆图的段数：上 1/2 彩色相位谱 + 下 1/2 灰度细幅度。 */
-export const COLOR_BANDS = 2;
+/** 可逆图固定两段：上=幅度谱，下=相位。 */
+export const BANDS = 2;
 
 export const MIN_WIN = 256;
 export const MAX_WIN = 4096;
@@ -30,7 +26,7 @@ export const MAX_FRAMES = 20000;
 export const MAX_PIXELS = 8_000_000;
 export const DEFAULT_SR = 44100;
 
-/** 可逆链路的固定量化窗口：压得比 16 bit 音频底噪还低。 */
+/** 可逆链路固定量化窗口：压得比 16 bit 音频底噪还低。 */
 const DB_MIN = -120;
 const DB_MAX = 0;
 const DB_SPAN = DB_MAX - DB_MIN;
@@ -63,14 +59,11 @@ export interface Meta {
   ref: number;
   /** 是否携带相位。 */
   exact: boolean;
-  /** 是否彩色相位谱（R=cos/G=sin/B=幅度，单张 RGB 图）。false = 老版四段灰阶。 */
-  color: boolean;
 }
 
 export interface Spectrum {
-  /** 幅度层级 0..255。紧凑模式下只有 2^bits 个取值。 */
-  levels: Uint8Array;
-  fine: Uint8Array | null;
+  /** 幅度层级：紧凑模式 ≤8 位为 Uint8Array（0..255），16 位为 Uint16Array（0..65535）。 */
+  levels: Uint8Array | Uint16Array;
   /** 相位以 cos/sin 两段存（0..255，各 = (·*0.5+0.5)*255）。
    *  比 MSB/LSB 抗压缩：相位在 2π 处折叠时，cos/sin 是连续的，有损重编码不会在折叠处爆成尖刺。 */
   phaseCos: Uint8Array | null;
@@ -109,7 +102,7 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const hop = hopOf(enc);
   const bins = rowsFor(win, sr, enc.mode === "compact" ? enc.fmax : 0);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
-  const bands = enc.mode === "exact" ? COLOR_BANDS : 1;
+  const bands = enc.mode === "exact" ? BANDS : 1;
 
   if (frames > MAX_FRAMES)
     throw new Error(`这段会出 ${frames} 帧，超过 ${MAX_FRAMES}：裁剪区间或调低采样率`);
@@ -164,20 +157,20 @@ class Frames {
   }
 }
 
-const dbToCode = (db: number): number => {
-  const t = ((db - DB_MIN) / DB_SPAN) * 65535;
-  return t <= 0 ? 0 : t >= 65535 ? 65535 : Math.round(t);
-};
+const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 
-const codeToDb = (code: number): number => DB_MIN + (code / 65535) * DB_SPAN;
+/** 幅度 dB → 层级 0..255（可逆链路固定刻度）。 */
+const magToLevel = (db: number): number => clampByte(Math.round(((db - DB_MIN) / DB_SPAN) * 255));
+const levelToMagDb = (level: number): number => DB_MIN + (level / 255) * DB_SPAN;
 
-/** 夹到 0..255 并取整，给 8 位相位字节用。 */
-export const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
-
-/** 层级（0..255）→ dB。紧凑与可逆两套刻度。 */
+/** 层级（0..255 或 0..65535）→ dB。紧凑与可逆两套刻度。 */
 export function levelToDb(level: number, meta: Meta): number {
-  if (meta.exact) return codeToDb(level << 8);
+  if (meta.exact) return levelToMagDb(level);
   const bits = Math.max(1, meta.bits);
+  if (bits >= 16) {
+    const span = dbSpanOf(bits);
+    return meta.ref - span + (level / 65535) * span;
+  }
   const steps = stepsOf(bits);
   const q = Math.round((level * steps) / 255);
   return meta.ref - dbSpanOf(bits) + (q / steps) * dbSpanOf(bits);
@@ -207,15 +200,13 @@ export async function encode(
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
 
-  const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false, color: false };
+  const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
   const scale = win / 4;
   let next = 0;
 
   if (enc.mode === "exact") {
     meta.exact = true;
-    meta.color = true;
     const levels = new Uint8Array(frames * bins);
-    const fine = new Uint8Array(frames * bins);
     const phaseCos = new Uint8Array(frames * bins);
     const phaseSin = new Uint8Array(frames * bins);
 
@@ -225,10 +216,9 @@ export async function encode(
       for (let b = 0; b < bins; b++) {
         const re = core.re[b]!;
         const im = core.im[b]!;
-        const code = dbToCode(20 * Math.log10(Math.sqrt(re * re + im * im) / scale));
-        levels[base + b] = code >>> 8;
-        fine[base + b] = code & 255;
-        // 相位存成 cos/sin，抗压缩：有损重编码后仍能平滑解码出相位。
+        const db = 20 * Math.log10(Math.sqrt(re * re + im * im) / scale);
+        levels[base + b] = magToLevel(db);
+        // 相位存成 cos/sin，抗压缩：有损重编码后仍能平滑解码出相位，不爆尖刺。
         const a = Math.atan2(im, re);
         phaseCos[base + b] = clampByte(((Math.cos(a) * 0.5 + 0.5) * 255) | 0);
         phaseSin[base + b] = clampByte(((Math.sin(a) * 0.5 + 0.5) * 255) | 0);
@@ -240,7 +230,7 @@ export async function encode(
         next = Date.now() + SLICE_MS;
       }
     }
-    return { meta, levels, fine, phaseCos, phaseSin };
+    return { meta, levels, phaseCos, phaseSin };
   }
 
   const bits = Math.max(1, enc.bits);
@@ -263,6 +253,28 @@ export async function encode(
   meta.ref = peak > 0 ? 20 * Math.log10(peak / scale) + 1 : 0;
   const floorDb = meta.ref - span;
 
+  // 16 位色深：幅度直接量化到 0..65535，走 16 位灰度 PNG（绕过 8 位 canvas）。
+  if (bits >= 16) {
+    const levels = new Uint16Array(frames * bins);
+    for (let f = 0; f < frames; f++) {
+      core.analyse(x, f * hop);
+      const base = f * bins;
+      for (let b = 0; b < bins; b++) {
+        const m = Math.sqrt(core.re[b]! * core.re[b]! + core.im[b]! * core.im[b]!);
+        const db = 20 * Math.log10(m / scale);
+        const v = ((db - floorDb) / span) * 65535;
+        levels[base + b] = v <= 0 ? 0 : v >= 65535 ? 65535 : Math.round(v);
+      }
+      if (Date.now() >= next) {
+        if (alive && !alive()) throw new Aborted();
+        onProgress?.((f + 1) / frames);
+        await yieldToUi();
+        next = Date.now() + SLICE_MS;
+      }
+    }
+    return { meta, levels, phaseCos: null, phaseSin: null };
+  }
+
   const levels = new Uint8Array(frames * bins);
   for (let f = 0; f < frames; f++) {
     core.analyse(x, f * hop);
@@ -280,7 +292,7 @@ export async function encode(
     }
   }
 
-  return { meta, levels, fine: null, phaseCos: null, phaseSin: null };
+  return { meta, levels, phaseCos: null, phaseSin: null };
 }
 
 /**
@@ -300,11 +312,10 @@ const coverage = (win: number, hop: number, frames: number, padded: number): Flo
   return cover;
 };
 
-/** 可逆链路：四段齐全，直接逆变换。相位走 cos/sin 两段。 */
+/** 可逆链路：幅度谱 + 相位都在，直接逆变换。 */
 async function synthesiseExact(
   meta: Meta,
-  levels: Uint8Array,
-  fine: Uint8Array,
+  levels: Uint8Array | Uint16Array,
   phaseCos: Uint8Array,
   phaseSin: Uint8Array,
   alive?: () => boolean,
@@ -320,8 +331,7 @@ async function synthesiseExact(
   for (let f = 0; f < frames; f++) {
     const base = f * bins;
     for (let b = 0; b < bins; b++) {
-      const code = (levels[base + b]! << 8) | fine[base + b]!;
-      const m = Math.pow(10, codeToDb(code) / 20) * scale;
+      const m = Math.pow(10, levelToMagDb(levels[base + b]!) / 20) * scale;
       const c = (phaseCos[base + b]! - 127.5) / 127.5;
       const s = (phaseSin[base + b]! - 127.5) / 127.5;
       const a = Math.atan2(s, c);
@@ -452,69 +462,11 @@ async function glRefine(
 }
 
 /**
- * PGHI 起手 + 带动量 GL 打磨（旧路径，RTISI 关掉时走这里）。
+ * RTISI-LA 逐帧反演（紧凑模式的默认路径，也是可逆图丢了相位时的兜底）。
  *
- * 起步不再是随机相位 —— PGHI 从幅度一次解出像样的相位，比随机起步少一到两个数量级的迭代。
- */
-async function griffinLim(
-  spec: Spectrum,
-  alive?: () => boolean,
-  onProgress?: (p: number) => void,
-): Promise<Samples> {
-  const { meta } = spec;
-  const { win, hop, bins, frames, samples } = meta;
-  const core = new Frames(win);
-  const full = core.bins;
-  const padded = samples + win;
-  const scale = win / 4;
-  const target = targetOf(spec, scale);
-
-  const acc = new Float64Array(padded);
-  const cover = coverage(win, hop, frames, padded);
-  let top = 0;
-  for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-  const floor = top * 0.05;
-  const x = new Float64Array(padded);
-
-  if (TUNE.pghi) {
-    const start = phaseFromMagnitude(target, frames, bins, win, hop);
-    acc.fill(0);
-    for (let f = 0; f < frames; f++) {
-      const base = f * bins;
-      for (let b = 0; b < full; b++) {
-        if (b < bins) {
-          const a = start[base + b]!;
-          core.re[b] = target[base + b]! * Math.cos(a);
-          core.im[b] = target[base + b]! * Math.sin(a);
-        } else {
-          core.re[b] = 0;
-          core.im[b] = 0;
-        }
-      }
-      core.add(acc, f * hop);
-    }
-    for (let i = 0; i < padded; i++) x[i] = cover[i]! > floor ? acc[i]! / cover[i]! : 0;
-  } else {
-    let seed = 0x9e3779b9;
-    const rand = () => {
-      seed ^= seed << 13;
-      seed ^= seed >>> 17;
-      seed ^= seed << 5;
-      return ((seed >>> 0) / 0xffffffff) * 2 * Math.PI - Math.PI;
-    };
-    for (let i = 0; i < padded; i++) x[i] = Math.cos(rand()) * 1e-3;
-  }
-
-  await glRefine(x, target, spec, TUNE.pghi ? TUNE.iters : 400, alive, onProgress);
-  return finish(x, win, samples);
-}
-
-/**
- * RTISI-LA 逐帧反演（紧凑模式的默认路径）。
- *
- * 先让 PGHI 给每一帧一个初始相位，RTISI-LA 再一帧一帧往前推：
- * 每帧都带着后面 K 帧一起迭代，跟过去和未来都自洽了才定稿。
- * 收尾可选几轮全局 GL 打磨。
+ * 先让 PGHI 给每一帧一个初始相位（从幅度一次解出，比随机起步少一到两个数量级迭代），
+ * RTISI-LA 再一帧一帧往前推：每帧都带着后面 K 帧一起迭代，跟过去和未来都自洽了才定稿。
+ * 收尾可选几轮全局 GL 打磨。PGHI 起的步 + RTISI-LA 的逐帧迭代，全程零爆音。
  */
 async function invert(
   spec: Spectrum,
@@ -549,17 +501,19 @@ async function invert(
   if (TUNE.rtisiGl > 0) await glRefine(x, target, spec, TUNE.rtisiGl, alive, onProgress);
   return finish(x, win, samples);
 }
+
 export async function synthesise(
   spec: Spectrum,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
 ): Promise<Samples> {
-  const { meta, fine, phaseCos, phaseSin } = spec;
+  const { meta, phaseCos, phaseSin } = spec;
   // 只要带着相位段（无论容器是否有损、图是否被缩放过），就直接逆变换——
-  // 比退回 Griffin-Lim / RTISI 噪声小得多、也不爆音。
-  if (meta.exact && fine && phaseCos && phaseSin)
-    return synthesiseExact(meta, spec.levels, fine, phaseCos, phaseSin, alive, onProgress);
-  return TUNE.rtisi ? invert(spec, alive, onProgress) : griffinLim(spec, alive, onProgress);
+  // cos/sin 在有损重编码下只平滑漂移，比退回迭代噪声小得多、也不爆音。
+  if (meta.exact && phaseCos && phaseSin)
+    return synthesiseExact(meta, spec.levels, phaseCos, phaseSin, alive, onProgress);
+  // 否则（紧凑图，或被压坏/缩放过的可逆图）：PGHI 起手 + RTISI-LA 反演，零爆音。
+  return invert(spec, alive, onProgress);
 }
 
 /** 陌生/被改过的图 → 参数。bits/exact 沿用调用方给的口径。 */
@@ -576,5 +530,5 @@ export function paramsForImage(
   const bins = Math.min(clamped, win / 2 + 1);
   const hop = Math.max(1, Math.round(win / 4));
   const count = Math.max(1, Math.min(frames, MAX_FRAMES));
-  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact, color: false };
+  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact };
 }

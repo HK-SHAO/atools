@@ -77,17 +77,17 @@ describe("params", () => {
   test("defaults are the voice minimum", () => {
     expect(VOICE).toEqual({
       mode: "compact",
-      sr: 8000,
-      bits: 4,
-      fineness: 0,
+      sr: 0,
+      bits: 8,
+      fineness: 1,
       fmax: 0,
       start: 0,
       end: 0,
     });
-    expect(winOf(VOICE)).toBe(256);
-    expect(hopOf(VOICE)).toBe(128);
-    expect(stepsOf(4)).toBe(15);
-    expect(dbSpanOf(4)).toBe(48);
+    expect(winOf(VOICE)).toBe(512);
+    expect(hopOf(VOICE)).toBe(256);
+    expect(stepsOf(8)).toBe(255);
+    expect(dbSpanOf(8)).toBe(96);
   });
 
   test("bit depth drives the dynamic range", () => {
@@ -162,7 +162,6 @@ describe("compact round trip", () => {
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, VOICE);
     expect(spec.meta.exact).toBe(false);
-    expect(spec.fine).toBeNull();
     expect(spec.phaseCos).toBeNull();
     expect(spec.phaseSin).toBeNull();
     expect(spec.meta.bins).toBe(winOf(VOICE) / 2 + 1);
@@ -171,7 +170,7 @@ describe("compact round trip", () => {
 
   test("four bits means sixteen distinct levels", async () => {
     const sr = 8000;
-    const spec = await encode(signal(sr * 2, sr), sr, VOICE);
+    const spec = await encode(signal(sr * 2, sr), sr, { ...VOICE, bits: 4 });
     const seen = new Set<number>();
     for (const v of spec.levels) seen.add(v);
     expect(seen.size).toBeLessThanOrEqual(16);
@@ -204,8 +203,8 @@ describe("compact round trip", () => {
  * 远大于此的偏移是无中生有的，会把测试变成一个不真实的压力测试。
  */
 function jpegish(spec: Spectrum, q: number, k = 0.04): void {
-  const bands = [spec.levels, spec.fine, spec.phaseCos, spec.phaseSin].filter(
-    (b): b is Uint8Array => b != null,
+  const bands = [spec.levels, spec.phaseCos, spec.phaseSin].filter(
+    (b): b is Uint8Array | Uint16Array => b != null,
   );
   const frames = spec.meta.frames;
   for (const band of bands) {
@@ -231,7 +230,7 @@ const clicks = (a: Samples): number => {
 };
 
 describe("reversible round trip", () => {
-  test("four bands reconstruct with low loss and no clicks", async () => {
+  test("stored-phase reversible reconstruction is lossless and click-free", async () => {
     const sr = 44100;
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
@@ -273,43 +272,38 @@ describe("reversible round trip", () => {
   });
 });
 
-describe("color (HSL) mode", () => {
-  test("emits a 2-band RGB image and round-trips losslessly through sampleBand", async () => {
+describe("exact (2-band) mode", () => {
+  test("emits a readable magnitude band + phase band and round-trips losslessly", async () => {
     const sr = 44100;
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
-    expect(spec.meta.color).toBe(true);
+    expect(spec.meta.exact).toBe(true);
 
-    // 把彩色相位谱画成像素（与浏览器导出一致），再按 imageToSpectrum 的彩色分支采样回来。
+    // 上段幅度谱（G === 层级，就是那张能看的频谱图），下段相位（R=cos / G=sin）。
+    // 高度 = 2 × bins，相位单独一层，不污染上面的频谱。
     const { pixels, width, height } = exactPixels(spec);
-    expect(height).toBe(2 * spec.meta.bins); // 上 1/2 彩色（R=cos/G=sin/B=幅度）+ 下 1/2 灰度细幅度
+    expect(height).toBe(2 * spec.meta.bins);
+
     const bandRows = Math.floor(height / 2);
-    const cosRaw = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (r) => r);
-    const sinRaw = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
-    const levels = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, _g, b) => b);
-    const fine = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
+    const levels = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
+    const cosRaw = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, r => r);
+    const sinRaw = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
     const back = await synthesise({
-      meta: { ...spec.meta, exact: true, color: true },
+      meta: { ...spec.meta, exact: true },
       levels,
-      fine,
       phaseCos: cosRaw,
       phaseSin: sinRaw,
     });
-    // 无损下约 35–40 dB：相位在颜色里，听感透明；且零爆音。
+    // 无损下幅度 8 位 + cos/sin 相位：听感透明，且零爆音。
     expect(snr(pcm, back)).toBeGreaterThan(25);
     expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
     expect(clicks(back)).toBe(0);
   });
 
-  test("legacy grayscale reversible names (no _C) are not mistaken for color", () => {
+  test("legacy filenames without _B are still read as reversible", () => {
     const back = metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg");
     expect(back?.exact).toBe(true);
-    expect(back?.color).toBe(false);
-  });
-
-  test("filename _C1 marks a color image", () => {
-    const back = metaFromName("x_SR44100_N1024_H256_F172_L44100_C1.png");
-    expect(back?.color).toBe(true);
+    expect(back?.bits).toBe(0);
   });
 });
 
@@ -321,7 +315,7 @@ describe("shape", () => {
   });
 
   test("refuses oversized requests", () => {
-    expect(() => shapeFor(VOICE, 8000, 8000 * 600)).toThrow();
+    expect(() => shapeFor(VOICE, 8000, 8000 * 700)).toThrow();
     expect(() => shapeFor({ ...VOICE, fineness: 2 }, 44100, 44100 * 600)).toThrow();
   });
 
@@ -466,7 +460,6 @@ describe("metadata", () => {
     bits: 4,
     ref: -6.5,
     exact: false,
-    color: false,
   };
 
   test("survives a text round trip", () => {
