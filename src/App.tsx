@@ -6,7 +6,7 @@ import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
 import { Aborted, encode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
 import { useContainerScale } from "./ui/useContainerScale";
-import { useMic } from "./ui/useMic";
+import { useMic, type CapturedSamples } from "./ui/useMic";
 import { clock } from "./ui/usePlayback";
 import { Workbench } from "./ui/Workbench";
 
@@ -25,7 +25,8 @@ interface Job {
 const DEMO_RATE = 44100;
 const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
-const nextFrame = () => new Promise<void>(done => requestAnimationFrame(() => setTimeout(done, 0)));
+// 让出主线程、允许 React 刷新进度；用 setTimeout 而非 rAF，避免后台标签页里 rAF 不触发而卡住流水线。
+const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
 
 type Stage = { label: string; value: number } | null;
 
@@ -146,7 +147,15 @@ export function App() {
     }
   }, []);
 
-  const mic = useMic(run);
+  // 麦克风直接给到 PCM，跳过文件解码链路。
+  const loadSamples = useCallback((s: CapturedSamples) => {
+    setError(null);
+    setMode("compact");
+    setEnc(e => reopen(e));
+    setSource({ pcm: s.pcm, sr: s.sr, name: s.name });
+  }, []);
+
+  const mic = useMic(loadSamples);
 
   const demo = useCallback(() => {
     setMode("compact");

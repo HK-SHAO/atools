@@ -26,6 +26,8 @@ export function usePlayback(pcm: Samples, sr: number) {
 
   const ctxRef = useRef<AudioContext | null>(null);
   const bufRef = useRef<AudioBuffer | null>(null);
+  /** 建缓冲时用的 pcm 引用：只比长度+采样率会在换同长素材时复用旧声音，必须比引用。 */
+  const bufPcmRef = useRef<Samples | null>(null);
   const nodeRef = useRef<AudioBufferSourceNode | null>(null);
   const rafRef = useRef(0);
   const posRef = useRef(0);
@@ -78,10 +80,11 @@ export function usePlayback(pcm: Samples, sr: number) {
       ctxRef.current = ctx;
     }
     const buf = bufRef.current;
-    if (!buf || buf.length !== pcm.length || buf.sampleRate !== sr) {
+    if (!buf || bufPcmRef.current !== pcm || buf.sampleRate !== sr) {
       const next = ctx.createBuffer(1, pcm.length, sr);
       next.copyToChannel(pcm, 0);
       bufRef.current = next;
+      bufPcmRef.current = pcm;
     }
     return ctx;
   }, [pcm, sr]);
@@ -170,14 +173,14 @@ export function usePlayback(pcm: Samples, sr: number) {
     if (Math.abs(posRef.current - startedRef.current) > 1e-4) start(posRef.current);
   }, [start]);
 
-  // 换素材：停掉、归零、画一遍。
+  // 换素材：停掉、归零、画一遍。依赖 pcm/sr，确保任何换素材（含同长度）都重跑。
   useEffect(() => {
     halt();
     posRef.current = 0;
     startedRef.current = -1;
     liveRef.current = false;
     paint(0);
-  }, [halt, paint]);
+  }, [pcm, sr, halt, paint]);
 
   useEffect(
     () => () => {
@@ -197,6 +200,7 @@ export function usePlayback(pcm: Samples, sr: number) {
       const ctx = ctxRef.current;
       ctxRef.current = null;
       bufRef.current = null;
+      bufPcmRef.current = null;
       void ctx?.close();
     },
     [],
