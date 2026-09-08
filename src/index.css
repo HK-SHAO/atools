@@ -65,7 +65,9 @@
     flex-direction: column;
     gap: calc(0.75 * var(--u));
     width: 100%;
-    /* 不设上限：宽屏就整幅铺开，参数区自己横向排开，别把空间浪费在两边留白上。 */
+    /* 内容封顶：超宽屏上不再无限横向拉伸（--c-max 由 useContainerScale 按
+       CONTENT_MAX 注入，单位系统也在此处定居），正常宽度内仍然整幅铺开。 */
+    max-width: var(--c-max, 1180px);
     margin: 0 auto;
     padding-top: max(calc(1.25 * var(--u)), env(safe-area-inset-top, 0px));
     padding-bottom: max(calc(1.5 * var(--u)), env(safe-area-inset-bottom, 0px));

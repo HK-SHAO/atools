@@ -9,6 +9,8 @@ const U_MIN = 14;
 const U_MAX = 20;
 /** 容器宽到这个份上，参数区就从"一行一组"改成"横向铺开"。 */
 const WIDE_AT = 860;
+/** 内容封顶宽度：超宽屏不再无限拉伸，单位系统也在此处"定居"，不再继续放大。 */
+const CONTENT_MAX = 1180;
 
 function unitFor(width: number, height: number): number {
   const eff = Math.min(width, height * 1.6);
@@ -23,17 +25,20 @@ export function useContainerScale(ref: RefObject<HTMLElement | null>): void {
 
     let last = "";
     const apply = (width: number, height: number) => {
-      const w = Math.max(1, width);
+      const wReal = Math.max(1, width);
       const h = Math.max(1, height);
-      const key = `${w}x${h}`;
+      // 单位系统封顶：超宽屏上内容不再无限放大，落定在 CONTENT_MAX 这一档。
+      const w = Math.min(wReal, CONTENT_MAX);
+      const key = `${wReal}x${h}`;
       if (key === last) return;
       last = key;
       el.style.setProperty("--u", `${unitFor(w, h).toFixed(3)}px`);
       el.style.setProperty("--c-vw", `${(w / 100).toFixed(3)}px`);
       el.style.setProperty("--c-vh", `${(h / 100).toFixed(3)}px`);
       el.style.setProperty("--c-vmin", `${(Math.min(w, h) / 100).toFixed(3)}px`);
+      el.style.setProperty("--c-max", `${CONTENT_MAX}px`);
       // 用 data 属性而不是 class：React 只管自己写的 className，不会把它抹掉。
-      if (w >= WIDE_AT) el.dataset.wide = "1";
+      if (wReal >= WIDE_AT) el.dataset.wide = "1";
       else delete el.dataset.wide;
     };
 

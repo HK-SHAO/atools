@@ -90,7 +90,15 @@ export function sniff(bytes: Uint8Array): Container {
     if (tag(12, "VP8L")) return "webp-lossless";
     return "webp";
   }
-  if (tag(4, "ftyp")) return "avif";
+  // MP4 家族（m4a / mp4 / mov）同样以 ftyp 盒起步，但 major brand 不是 avif；
+  // 只认真正的 AVIF（major brand 为 avif / avis / mif1），其余一律当"未知"，
+  // 让上层按音频去走解码，免得把 m4a 错当成图去 createImageBitmap 而报
+  // "The source image could not be decoded"。
+  if (tag(4, "ftyp")) {
+    const major = String.fromCharCode(bytes[8]!, bytes[9]!, bytes[10]!, bytes[11]!);
+    if (major === "avif" || major === "avis" || major === "mif1") return "avif";
+    return "?";
+  }
   return "?";
 }
 
