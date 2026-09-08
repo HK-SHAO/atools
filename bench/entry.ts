@@ -311,8 +311,8 @@ export async function synthProbe(
     meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false },
     levels,
     fine: null,
-    phaseHi: null,
-    phaseLo: null,
+    phaseCos: null,
+    phaseSin: null,
   };
 
   /** 给定相位直接 WOLA 合成（只用来算上限）。 */
@@ -463,8 +463,8 @@ export async function pngCheck(bits: number[]): Promise<string[]> {
       meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false },
       levels,
       fine: null,
-      phaseHi: null,
-      phaseLo: null,
+      phaseCos: null,
+      phaseSin: null,
     };
     try {
       const blob = await spectrumToPng(spec);

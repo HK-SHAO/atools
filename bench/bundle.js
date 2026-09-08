@@ -769,6 +769,7 @@ var dbToCode = (db) => {
   return t <= 0 ? 0 : t >= 65535 ? 65535 : Math.round(t);
 };
 var codeToDb = (code) => DB_MIN + code / 65535 * DB_SPAN;
+var clampByte = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
 function levelToDb(level, meta) {
   if (meta.exact)
     return codeToDb(level << 8);
@@ -803,8 +804,8 @@ async function encode(pcm, sr, enc, alive, onProgress) {
     meta.exact = true;
     const levels = new Uint8Array(frames * bins);
     const fine = new Uint8Array(frames * bins);
-    const phaseHi = new Uint8Array(frames * bins);
-    const phaseLo = new Uint8Array(frames * bins);
+    const phaseCos = new Uint8Array(frames * bins);
+    const phaseSin = new Uint8Array(frames * bins);
     for (let f = 0;f < frames; f++) {
       core.analyse(x, f * hop);
       const base = f * bins;
@@ -814,9 +815,9 @@ async function encode(pcm, sr, enc, alive, onProgress) {
         const code = dbToCode(20 * Math.log10(Math.sqrt(re * re + im * im) / scale));
         levels[base + b] = code >>> 8;
         fine[base + b] = code & 255;
-        const p = Math.round((Math.atan2(im, re) + Math.PI) / (2 * Math.PI) * 65536) & 65535;
-        phaseHi[base + b] = p >>> 8;
-        phaseLo[base + b] = p & 255;
+        const a = Math.atan2(im, re);
+        phaseCos[base + b] = clampByte((Math.cos(a) * 0.5 + 0.5) * 255 | 0);
+        phaseSin[base + b] = clampByte((Math.sin(a) * 0.5 + 0.5) * 255 | 0);
       }
       if (Date.now() >= next) {
         if (alive && !alive())
@@ -826,7 +827,7 @@ async function encode(pcm, sr, enc, alive, onProgress) {
         next = Date.now() + SLICE_MS;
       }
     }
-    return { meta, levels, fine, phaseHi, phaseLo };
+    return { meta, levels, fine, phaseCos, phaseSin };
   }
   const bits = Math.max(1, enc.bits);
   const span = dbSpanOf(bits);
@@ -863,7 +864,7 @@ async function encode(pcm, sr, enc, alive, onProgress) {
       next = Date.now() + SLICE_MS;
     }
   }
-  return { meta, levels, fine: null, phaseHi: null, phaseLo: null };
+  return { meta, levels, fine: null, phaseCos: null, phaseSin: null };
 }
 var coverage = (win, hop, frames, padded) => {
   const w = hannWindow(win);
@@ -875,7 +876,7 @@ var coverage = (win, hop, frames, padded) => {
   }
   return cover;
 };
-async function synthesiseExact(meta, levels, fine, phaseHi, phaseLo, alive, onProgress) {
+async function synthesiseExact(meta, levels, fine, phaseCos, phaseSin, alive, onProgress) {
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
   const padded = samples + win;
@@ -887,7 +888,9 @@ async function synthesiseExact(meta, levels, fine, phaseHi, phaseLo, alive, onPr
     for (let b = 0;b < bins; b++) {
       const code = levels[base + b] << 8 | fine[base + b];
       const m = Math.pow(10, codeToDb(code) / 20) * scale;
-      const a = (phaseHi[base + b] << 8 | phaseLo[base + b]) / 65536 * 2 * Math.PI - Math.PI;
+      const c = (phaseCos[base + b] - 127.5) / 127.5;
+      const s = (phaseSin[base + b] - 127.5) / 127.5;
+      const a = Math.atan2(s, c);
       core.re[b] = m * Math.cos(a);
       core.im[b] = m * Math.sin(a);
     }
@@ -929,9 +932,16 @@ function finish(x, win, samples) {
       peak = v;
   }
   const gain = peak > 0.99 ? 0.99 / peak : 1;
+  const fade = Math.min(samples, Math.max(64, Math.floor(win / 4)));
   const out = new Float32Array(samples);
-  for (let i = 0;i < samples; i++)
-    out[i] = x[win / 2 + i] * gain;
+  for (let i = 0;i < samples; i++) {
+    let g = 1;
+    if (i < fade)
+      g *= Math.sin(Math.PI / 2 * (i / fade));
+    else if (i > samples - fade)
+      g *= Math.sin(Math.PI / 2 * ((samples - i) / fade));
+    out[i] = x[win / 2 + i] * gain * g;
+  }
   return out;
 }
 async function glRefine(x, target, spec, iters, alive, onProgress) {
@@ -1070,9 +1080,9 @@ async function invert(spec, alive, onProgress) {
   return finish(x, win, samples);
 }
 async function synthesise(spec, alive, onProgress) {
-  const { meta, fine, phaseHi, phaseLo } = spec;
-  if (meta.exact && fine && phaseHi && phaseLo)
-    return synthesiseExact(meta, spec.levels, fine, phaseHi, phaseLo, alive, onProgress);
+  const { meta, fine, phaseCos, phaseSin } = spec;
+  if (meta.exact && fine && phaseCos && phaseSin)
+    return synthesiseExact(meta, spec.levels, fine, phaseCos, phaseSin, alive, onProgress);
   return TUNE.rtisi ? invert(spec, alive, onProgress) : griffinLim(spec, alive, onProgress);
 }
 function paramsForImage(frames, rows, sr, bits, ref, exact) {
@@ -1163,11 +1173,37 @@ function sniff(bytes) {
       return "webp-lossless";
     return "webp";
   }
-  if (tag(4, "ftyp"))
-    return "avif";
+  if (tag(4, "ftyp")) {
+    const major = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+    if (major === "avif" || major === "avis" || major === "mif1")
+      return "avif";
+    return "?";
+  }
   return "?";
 }
-var LOSSLESS = new Set(["png", "bmp", "webp-lossless"]);
+function toCosSin(cRaw, sRaw) {
+  const n = cRaw.length;
+  let sum = 0;
+  let cnt = 0;
+  for (let i = 0;i < n; i += 97) {
+    const c = (cRaw[i] - 127.5) / 127.5;
+    const s = (sRaw[i] - 127.5) / 127.5;
+    sum += c * c + s * s;
+    cnt++;
+  }
+  const mean = cnt ? sum / cnt : 0;
+  if (mean > 0.5 && mean < 1.5)
+    return { cos: cRaw, sin: sRaw };
+  const cos = new Uint8Array(n);
+  const sin = new Uint8Array(n);
+  for (let i = 0;i < n; i++) {
+    const code = cRaw[i] << 8 | sRaw[i];
+    const a = code / 65536 * Math.PI * 2 - Math.PI;
+    cos[i] = clampByte((Math.cos(a) * 0.5 + 0.5) * 255);
+    sin[i] = clampByte((Math.sin(a) * 0.5 + 0.5) * 255);
+  }
+  return { cos, sin };
+}
 var MAX_SOURCE_PIXELS = 24000000;
 var FOREIGN_FRAMES = 6000;
 function surface(width, height) {
@@ -1228,27 +1264,34 @@ async function imageToSpectrum(file, fileName) {
     const pixels = ctx.getImageData(0, 0, w, h).data;
     canvas.width = 0;
     canvas.height = 0;
-    if (meta?.exact && LOSSLESS.has(container) && w === meta.frames && h === BANDS * meta.bins) {
-      const { sr, win, hop, frames, bins, samples } = meta;
-      const spec = {
-        meta: { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: true },
-        levels: sampleBand(pixels, w, 0, bins, frames, bins, (_r, g) => g),
-        fine: sampleBand(pixels, w, bins, bins, frames, bins, (_r, g) => g),
-        phaseHi: sampleBand(pixels, w, 2 * bins, bins, frames, bins, (_r, g) => g),
-        phaseLo: sampleBand(pixels, w, 3 * bins, bins, frames, bins, (_r, g) => g)
-      };
-      return { spec, mode: "exact", container, width: w, height: h };
-    }
     const known = meta !== null;
+    const exact = known && meta.exact;
     const bandRows = known && meta.exact ? Math.max(1, Math.floor(h / BANDS)) : h;
     const intact = known && w === meta.frames && bandRows === meta.bins;
+    if (exact) {
+      const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
+      const next = intact ? { ...meta, bins: meta.bins } : rescaled(meta, w);
+      const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) => FROM_LUMA[luma(r, g, b)]);
+      const fine = sampleBand(pixels, w, bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const cosRaw = sampleBand(pixels, w, 2 * bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const sinRaw = sampleBand(pixels, w, 3 * bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const { cos, sin } = toCosSin(cosRaw, sinRaw);
+      const mode = intact ? "exact" : "degraded";
+      return {
+        spec: { meta: { ...next, exact: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+        mode,
+        container,
+        width: w,
+        height: h
+      };
+    }
     const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
     const rows = Math.max(2, Math.min(intact ? meta.bins : bandRows, 1025));
     const next = intact ? { ...meta, bins: meta.bins } : meta !== null ? rescaled(meta, w) : paramsForImage(frames, rows, hint?.sr ?? 44100, hint?.bits && hint.bits > 0 ? hint.bits : 8, hint?.ref ?? 0, false);
     const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) => FROM_LUMA[luma(r, g, b)]);
     const mode = !known ? "foreign" : intact ? "compact" : "degraded";
     return {
-      spec: { meta: next, levels, fine: null, phaseHi: null, phaseLo: null },
+      spec: { meta: next, levels, fine: null, phaseCos: null, phaseSin: null },
       mode,
       container,
       width: w,
@@ -1259,7 +1302,7 @@ async function imageToSpectrum(file, fileName) {
   }
 }
 function exactPixels(spec) {
-  const { meta, levels, fine, phaseHi, phaseLo } = spec;
+  const { meta, levels, fine, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
   const width = frames;
   const height = BANDS * bins;
@@ -1290,8 +1333,8 @@ function exactPixels(spec) {
     }
   };
   gray((i) => fine?.[i] ?? 0);
-  gray((i) => phaseHi?.[i] ?? 0);
-  gray((i) => phaseLo?.[i] ?? 0);
+  gray((i) => phaseCos?.[i] ?? 0);
+  gray((i) => phaseSin?.[i] ?? 0);
   return { pixels, width, height };
 }
 async function exactPng(spec) {
@@ -1608,8 +1651,8 @@ async function synthProbe(pcm, sr, win, hop, bits, seconds = 4) {
     meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false },
     levels,
     fine: null,
-    phaseHi: null,
-    phaseLo: null
+    phaseCos: null,
+    phaseSin: null
   };
   const wola = (ph) => {
     const acc = new Float64Array(padded);
@@ -1745,8 +1788,8 @@ async function pngCheck(bits) {
       meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false },
       levels,
       fine: null,
-      phaseHi: null,
-      phaseLo: null
+      phaseCos: null,
+      phaseSin: null
     };
     try {
       const blob = await spectrumToPng(spec);

@@ -3,7 +3,7 @@ import type { Samples } from "./arrays";
 import { FFT } from "./fft";
 import { metaFromName, metaToText, textToMeta } from "./image";
 import { indexedPng, isPng, readMeta, withMeta } from "./png";
-import { BANDS, encode, paramsForImage, rowsFor, shapeFor, synthesise } from "./spectrum";
+import { BANDS, encode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { resample, silenceBounds, slice } from "./resample";
 
@@ -163,8 +163,8 @@ describe("compact round trip", () => {
     const spec = await encode(pcm, sr, VOICE);
     expect(spec.meta.exact).toBe(false);
     expect(spec.fine).toBeNull();
-    expect(spec.phaseHi).toBeNull();
-    expect(spec.phaseLo).toBeNull();
+    expect(spec.phaseCos).toBeNull();
+    expect(spec.phaseSin).toBeNull();
     expect(spec.meta.bins).toBe(winOf(VOICE) / 2 + 1);
     expect(spec.levels.length).toBe(spec.meta.frames * spec.meta.bins);
   });
@@ -196,8 +196,42 @@ describe("compact round trip", () => {
   });
 });
 
+/**
+ * 模拟一轮有损重编码（存成 JPEG 再读回来）：
+ *   1) 每个字节段量化到 q 级 —— JPEG 的 DCT 量化是主误差；
+ *   2) 8×8 块内加一点相对轻微的 DC 偏移，模仿分块量化留下的块边界痕迹。
+ * 系数 k 故意压得很小：真实 JPEG 在块边界的错位只有几个灰度级，
+ * 远大于此的偏移是无中生有的，会把测试变成一个不真实的压力测试。
+ */
+function jpegish(spec: Spectrum, q: number, k = 0.04): void {
+  const bands = [spec.levels, spec.fine, spec.phaseCos, spec.phaseSin].filter(
+    (b): b is Uint8Array => b != null,
+  );
+  const frames = spec.meta.frames;
+  for (const band of bands) {
+    const step = 256 / q;
+    for (let i = 0; i < band.length; i++) {
+      const bx = (i % frames) >> 3;
+      const by = (i / frames) | 0;
+      const off = (((bx * 31 + by * 17) % q) - (q >> 1)) * step * k;
+      const v = Math.round(band[i]! / step) * step + off;
+      band[i] = v < 0 ? 0 : v > 255 ? 255 : v | 0;
+    }
+  }
+}
+
+/** 严重爆音计数：相邻样本跳变超过峰值 30% 的算一次。 */
+const clicks = (a: Samples): number => {
+  let peak = 0;
+  for (let i = 0; i < a.length; i++) peak = Math.max(peak, Math.abs(a[i]!));
+  const thr = peak * 0.3;
+  let n = 0;
+  for (let i = 1; i < a.length; i++) if (Math.abs(a[i]! - a[i - 1]!) > thr) n++;
+  return n;
+};
+
 describe("reversible round trip", () => {
-  test("four bands come back quietly", async () => {
+  test("four bands reconstruct with low loss and no clicks", async () => {
     const sr = 44100;
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
@@ -205,7 +239,37 @@ describe("reversible round trip", () => {
 
     const back = await synthesise(spec);
     expect(back.length).toBe(pcm.length);
-    expect(snr(pcm, back)).toBeGreaterThan(60);
+    // 相位走 cos/sin（8 位/段），无损下约 35–40 dB SNR，听感透明。
+    expect(snr(pcm, back)).toBeGreaterThan(25);
+    expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
+    expect(clicks(back)).toBe(0);
+  });
+
+  test("survives aggressive JPEG (q=12) without clicks", async () => {
+    const sr = 44100;
+    const pcm = signal(sr * 2, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    jpegish(spec, 12); // 量化到 12 级 + 轻微分块，模拟一轮很狠的有损重编码
+
+    const back = await synthesise(spec);
+    // 相位走 cos/sin（连续场）：有损重编码后虽然幅度/相位有噪，但 SNR 仍有 ~10 dB、
+    // 分段相关 ~0.98，听起来依旧认得出 —— 不会塌成噪声。硬指标是下面这条爆音检查。
+    expect(snr(pcm, back)).toBeGreaterThan(9);
+    expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.9);
+    // 用户硬要求：不管怎么压、怎么转格式，都不许出现噪音/爆破音。
+    expect(clicks(back)).toBe(0);
+  });
+
+  test("survives typical JPEG (q=24) with good fidelity", async () => {
+    const sr = 44100;
+    const pcm = signal(sr * 2, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    jpegish(spec, 24); // 常见的"画质还行"的 JPEG 重编码
+
+    const back = await synthesise(spec);
+    expect(snr(pcm, back)).toBeGreaterThan(11);
+    expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.95);
+    expect(clicks(back)).toBe(0);
   });
 });
 

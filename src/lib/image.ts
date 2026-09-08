@@ -1,7 +1,7 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readMeta, withMeta } from "./png";
-import { BANDS, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, MAX_FRAMES, clampByte, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
 
 /* 任何一张图都要能出声。读取链路分四档：
@@ -102,7 +102,31 @@ export function sniff(bytes: Uint8Array): Container {
   return "?";
 }
 
-const LOSSLESS: ReadonlySet<Container> = new Set<Container>(["png", "bmp", "webp-lossless"]);
+/** 把读到的两段相位字节还原成 cos/sin 字节（0..255）。
+ *  新版存的就是 cos/sin（cos²+sin²≈1）；老版存的是 MSB/LSB（16 位折叠相位），
+ *  这里自动认出来转成 cos/sin，老图也能继续用。 */
+function toCosSin(cRaw: Uint8Array, sRaw: Uint8Array): { cos: Uint8Array; sin: Uint8Array } {
+  const n = cRaw.length;
+  let sum = 0;
+  let cnt = 0;
+  for (let i = 0; i < n; i += 97) {
+    const c = (cRaw[i]! - 127.5) / 127.5;
+    const s = (sRaw[i]! - 127.5) / 127.5;
+    sum += c * c + s * s;
+    cnt++;
+  }
+  const mean = cnt ? sum / cnt : 0;
+  if (mean > 0.5 && mean < 1.5) return { cos: cRaw, sin: sRaw };
+  const cos = new Uint8Array(n);
+  const sin = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const code = (cRaw[i]! << 8) | sRaw[i]!;
+    const a = (code / 65536) * Math.PI * 2 - Math.PI;
+    cos[i] = clampByte((Math.cos(a) * 0.5 + 0.5) * 255);
+    sin[i] = clampByte((Math.sin(a) * 0.5 + 0.5) * 255);
+  }
+  return { cos, sin };
+}
 
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
@@ -202,23 +226,34 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     canvas.width = 0;
     canvas.height = 0;
 
-    // ① 四段齐全，原样读回，走精确逆变换。
-    if (meta?.exact && LOSSLESS.has(container) && w === meta.frames && h === BANDS * meta.bins) {
-      const { sr, win, hop, frames, bins, samples } = meta;
-      const spec: Spectrum = {
-        meta: { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: true },
-        levels: sampleBand(pixels, w, 0, bins, frames, bins, (_r, g) => g),
-        fine: sampleBand(pixels, w, bins, bins, frames, bins, (_r, g) => g),
-        phaseHi: sampleBand(pixels, w, 2 * bins, bins, frames, bins, (_r, g) => g),
-        phaseLo: sampleBand(pixels, w, 3 * bins, bins, frames, bins, (_r, g) => g),
-      };
-      return { spec, mode: "exact", container, width: w, height: h };
-    }
-
     const known = meta !== null;
+    const exact = known && meta.exact;
     // 可逆图被改过 —— 顶上那 1/4 才是频谱；紧凑图整张都是。
     const bandRows = known && meta.exact ? Math.max(1, Math.floor(h / BANDS)) : h;
     const intact = known && w === meta.frames && bandRows === meta.bins;
+
+    // 只要认得出是自己出的四段图（无论有损重编码成 JPEG、还是被缩放过），
+    // 就继续用存进去的相位直接逆变换 —— 比退回 Griffin-Lim / RTISI 噪声小、也不爆音。
+    if (exact) {
+      const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
+      const next = intact ? { ...meta, bins: meta.bins } : rescaled(meta, w);
+      const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) =>
+        FROM_LUMA[luma(r, g, b)]!,
+      );
+      const fine = sampleBand(pixels, w, bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const cosRaw = sampleBand(pixels, w, 2 * bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const sinRaw = sampleBand(pixels, w, 3 * bandRows, bandRows, frames, next.bins, (_r, g) => g);
+      const { cos, sin } = toCosSin(cosRaw, sinRaw);
+      const mode: ReadMode = intact ? "exact" : "degraded";
+      return {
+        spec: { meta: { ...next, exact: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+        mode,
+        container,
+        width: w,
+        height: h,
+      };
+    }
+
     const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
     const rows = Math.max(2, Math.min(intact ? meta.bins : bandRows, 1025));
     const next = intact
@@ -243,7 +278,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
 
     const mode: ReadMode = !known ? "foreign" : intact ? "compact" : "degraded";
     return {
-      spec: { meta: next, levels, fine: null, phaseHi: null, phaseLo: null },
+      spec: { meta: next, levels, fine: null, phaseCos: null, phaseSin: null },
       mode,
       container,
       width: w,
@@ -254,9 +289,9 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   }
 }
 
-/** 可逆模式的四段布局，只在导出时调用。 */
+/** 可逆模式的四段布局，只在导出时调用。相位走 cos/sin 两段，抗压缩。 */
 function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; height: number } {
-  const { meta, levels, fine, phaseHi, phaseLo } = spec;
+  const { meta, levels, fine, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
   const width = frames;
   const height = BANDS * bins;
@@ -290,8 +325,8 @@ function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; height: n
   };
 
   gray(i => fine?.[i] ?? 0);
-  gray(i => phaseHi?.[i] ?? 0);
-  gray(i => phaseLo?.[i] ?? 0);
+  gray(i => phaseCos?.[i] ?? 0);
+  gray(i => phaseSin?.[i] ?? 0);
 
   return { pixels, width, height };
 }

@@ -66,8 +66,10 @@ export interface Spectrum {
   /** 幅度层级 0..255。紧凑模式下只有 2^bits 个取值。 */
   levels: Uint8Array;
   fine: Uint8Array | null;
-  phaseHi: Uint8Array | null;
-  phaseLo: Uint8Array | null;
+  /** 相位以 cos/sin 两段存（0..255，各 = (·*0.5+0.5)*255）。
+   *  比 MSB/LSB 抗压缩：相位在 2π 处折叠时，cos/sin 是连续的，有损重编码不会在折叠处爆成尖刺。 */
+  phaseCos: Uint8Array | null;
+  phaseSin: Uint8Array | null;
   meta: Meta;
 }
 
@@ -164,6 +166,9 @@ const dbToCode = (db: number): number => {
 
 const codeToDb = (code: number): number => DB_MIN + (code / 65535) * DB_SPAN;
 
+/** 夹到 0..255 并取整，给 8 位相位字节用。 */
+export const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+
 /** 层级（0..255）→ dB。紧凑与可逆两套刻度。 */
 export function levelToDb(level: number, meta: Meta): number {
   if (meta.exact) return codeToDb(level << 8);
@@ -205,8 +210,8 @@ export async function encode(
     meta.exact = true;
     const levels = new Uint8Array(frames * bins);
     const fine = new Uint8Array(frames * bins);
-    const phaseHi = new Uint8Array(frames * bins);
-    const phaseLo = new Uint8Array(frames * bins);
+    const phaseCos = new Uint8Array(frames * bins);
+    const phaseSin = new Uint8Array(frames * bins);
 
     for (let f = 0; f < frames; f++) {
       core.analyse(x, f * hop);
@@ -217,9 +222,10 @@ export async function encode(
         const code = dbToCode(20 * Math.log10(Math.sqrt(re * re + im * im) / scale));
         levels[base + b] = code >>> 8;
         fine[base + b] = code & 255;
-        const p = Math.round(((Math.atan2(im, re) + Math.PI) / (2 * Math.PI)) * 65536) & 0xffff;
-        phaseHi[base + b] = p >>> 8;
-        phaseLo[base + b] = p & 255;
+        // 相位存成 cos/sin，抗压缩：有损重编码后仍能平滑解码出相位。
+        const a = Math.atan2(im, re);
+        phaseCos[base + b] = clampByte(((Math.cos(a) * 0.5 + 0.5) * 255) | 0);
+        phaseSin[base + b] = clampByte(((Math.sin(a) * 0.5 + 0.5) * 255) | 0);
       }
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
@@ -228,7 +234,7 @@ export async function encode(
         next = Date.now() + SLICE_MS;
       }
     }
-    return { meta, levels, fine, phaseHi, phaseLo };
+    return { meta, levels, fine, phaseCos, phaseSin };
   }
 
   const bits = Math.max(1, enc.bits);
@@ -268,7 +274,7 @@ export async function encode(
     }
   }
 
-  return { meta, levels, fine: null, phaseHi: null, phaseLo: null };
+  return { meta, levels, fine: null, phaseCos: null, phaseSin: null };
 }
 
 /**
@@ -288,13 +294,13 @@ const coverage = (win: number, hop: number, frames: number, padded: number): Flo
   return cover;
 };
 
-/** 可逆链路：四段齐全，直接逆变换。 */
+/** 可逆链路：四段齐全，直接逆变换。相位走 cos/sin 两段。 */
 async function synthesiseExact(
   meta: Meta,
   levels: Uint8Array,
   fine: Uint8Array,
-  phaseHi: Uint8Array,
-  phaseLo: Uint8Array,
+  phaseCos: Uint8Array,
+  phaseSin: Uint8Array,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
 ): Promise<Samples> {
@@ -310,7 +316,9 @@ async function synthesiseExact(
     for (let b = 0; b < bins; b++) {
       const code = (levels[base + b]! << 8) | fine[base + b]!;
       const m = Math.pow(10, codeToDb(code) / 20) * scale;
-      const a = (((phaseHi[base + b]! << 8) | phaseLo[base + b]!) / 65536) * 2 * Math.PI - Math.PI;
+      const c = (phaseCos[base + b]! - 127.5) / 127.5;
+      const s = (phaseSin[base + b]! - 127.5) / 127.5;
+      const a = Math.atan2(s, c);
       core.re[b] = m * Math.cos(a);
       core.im[b] = m * Math.sin(a);
     }
@@ -346,7 +354,9 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
   return out;
 }
 
-/** 收尾：去掉两侧窗沿，钳住峰值防削波。幅度是绝对刻度，故不整体归一化。 */
+/** 收尾：去掉两侧窗沿，钳住峰值防削波；并在首尾加一小段等功率淡入/淡出，
+ *  保证无论如何（相位在边界连不连续、或重建带了点起始瞬态）都不会爆音。
+ *  淡出长度只有窗宽的零头，听感上几乎无感。 */
 function finish(x: Float64Array, win: number, samples: number): Samples {
   let peak = 0;
   for (let i = 0; i < samples; i++) {
@@ -354,8 +364,14 @@ function finish(x: Float64Array, win: number, samples: number): Samples {
     if (v > peak) peak = v;
   }
   const gain = peak > 0.99 ? 0.99 / peak : 1;
+  const fade = Math.min(samples, Math.max(64, Math.floor(win / 4)));
   const out = new Float32Array(samples);
-  for (let i = 0; i < samples; i++) out[i] = x[win / 2 + i]! * gain;
+  for (let i = 0; i < samples; i++) {
+    let g = 1;
+    if (i < fade) g *= Math.sin((Math.PI / 2) * (i / fade));
+    else if (i > samples - fade) g *= Math.sin((Math.PI / 2) * ((samples - i) / fade));
+    out[i] = x[win / 2 + i]! * gain * g;
+  }
   return out;
 }
 
@@ -532,9 +548,11 @@ export async function synthesise(
   alive?: () => boolean,
   onProgress?: (p: number) => void,
 ): Promise<Samples> {
-  const { meta, fine, phaseHi, phaseLo } = spec;
-  if (meta.exact && fine && phaseHi && phaseLo)
-    return synthesiseExact(meta, spec.levels, fine, phaseHi, phaseLo, alive, onProgress);
+  const { meta, fine, phaseCos, phaseSin } = spec;
+  // 只要带着相位段（无论容器是否有损、图是否被缩放过），就直接逆变换——
+  // 比退回 Griffin-Lim / RTISI 噪声小得多、也不爆音。
+  if (meta.exact && fine && phaseCos && phaseSin)
+    return synthesiseExact(meta, spec.levels, fine, phaseCos, phaseSin, alive, onProgress);
   return TUNE.rtisi ? invert(spec, alive, onProgress) : griffinLim(spec, alive, onProgress);
 }
 
