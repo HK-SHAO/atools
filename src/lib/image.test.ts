@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { sniff } from "./image";
+import { recognizeExact, sniff } from "./image";
+import type { Pixels } from "./arrays";
 
 const ftyp = (major: string) => {
   const b = new Uint8Array(16);
@@ -38,5 +39,84 @@ describe("sniff", () => {
 
   test("完全认不出的二进制归为未知", () => {
     expect(sniff(new Uint8Array([0, 1, 2, 3, 4, 5]))).toBe("?");
+  });
+});
+
+describe("recognizeExact（可逆图像素签名）", () => {
+  /** 造一张可逆图：上段任意暖色幅度，下段相位 (cos,sin) 映射到 (R,G)，B=0。 */
+  function exactPixels(w: number, h: number): Pixels {
+    const px = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      const phase = y >= h / 2;
+      for (let x = 0; x < w; x++) {
+        const p = (y * w + x) * 4;
+        if (phase) {
+          const a = ((x / w) * 4 + y * 0.1) * Math.PI * 2;
+          px[p] = Math.round((Math.cos(a) * 0.5 + 0.5) * 255);
+          px[p + 1] = Math.round((Math.sin(a) * 0.5 + 0.5) * 255);
+          px[p + 2] = 0;
+        } else {
+          px[p] = 200;
+          px[p + 1] = 100 + ((x * 7) % 128);
+          px[p + 2] = 40;
+        }
+        px[p + 3] = 255;
+      }
+    }
+    return px;
+  }
+
+  test("完整可逆图（偶高度）命中", () => {
+    const w = 64;
+    const h = 128;
+    expect(recognizeExact(exactPixels(w, h) as Pixels, w, h)).toBe(true);
+  });
+
+  test("缩放后的奇数高度也命中（回归：旧版 h%2 直接否掉）", () => {
+    const w = 64;
+    const h = 97; // 缩放 0.5× 后的典型奇高
+    expect(recognizeExact(exactPixels(w, h) as Pixels, w, h)).toBe(true);
+  });
+
+  test("相位被缩放平均（矢量塌缩）后仍能认出是可逆图", () => {
+    // 模拟缩放：相位段每两行平均一次，矢量长度缩水但方向未全抵消
+    const w = 64;
+    const h = 96;
+    const src = exactPixels(w, h * 2) as Pixels;
+    const px = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        for (let c = 0; c < 4; c++)
+          px[(y * w + x) * 4 + c] = Math.round(
+            (src[((y * 2) * w + x) * 4 + c]! + src[((y * 2 + 1) * w + x) * 4 + c]!) / 2,
+          );
+    expect(recognizeExact(px as Pixels, w, h)).toBe(true);
+  });
+
+  test("普通照片（B 通道不趋零）不命中", () => {
+    const w = 64;
+    const h = 128;
+    const px = new Uint8ClampedArray(w * h * 4);
+    let seed = 12345;
+    for (let i = 0; i < w * h; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      px[i * 4] = seed & 255;
+      px[i * 4 + 1] = (seed >> 8) & 255;
+      px[i * 4 + 2] = (seed >> 16) & 255; // B 随机，通常远大于 48
+      px[i * 4 + 3] = 255;
+    }
+    expect(recognizeExact(px as Pixels, w, h)).toBe(false);
+  });
+
+  test("纯灰图不命中（半径塌缩成点）", () => {
+    const w = 64;
+    const h = 128;
+    const px = new Uint8ClampedArray(w * h * 4).fill(128);
+    for (let i = 0; i < w * h; i++) px[i * 4 + 3] = 255;
+    expect(recognizeExact(px as Pixels, w, h)).toBe(false);
+  });
+
+  test("太小的不认", () => {
+    expect(recognizeExact(exactPixels(2, 8) as Pixels, 2, 8)).toBe(false);
   });
 });

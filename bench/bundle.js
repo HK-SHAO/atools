@@ -352,38 +352,44 @@ async function gray16Png(data, width, height, meta) {
   }
   return out;
 }
-async function readGray16(bytes) {
+function parsePng(bytes) {
   if (!isPng(bytes))
     return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let at = 8;
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  const idat = [];
+  let info = null;
   while (at + 12 <= bytes.length) {
     const len = view.getUint32(at);
     if (at + 12 + len > bytes.length)
       return null;
     const type = ascii(bytes.subarray(at + 4, at + 8));
     if (type === "IHDR") {
-      width = view.getUint32(at + 8);
-      height = view.getUint32(at + 12);
-      bitDepth = bytes[at + 16];
-      colorType = bytes[at + 17];
-    } else if (type === "IDAT") {
-      idat.push(bytes.subarray(at + 8, at + 8 + len));
+      info = {
+        width: view.getUint32(at + 8),
+        height: view.getUint32(at + 12),
+        bitDepth: bytes[at + 16],
+        colorType: bytes[at + 17],
+        interlace: bytes[at + 20],
+        plte: null,
+        idat: []
+      };
+    } else if (type === "PLTE" && info) {
+      info.plte = bytes.subarray(at + 8, at + 8 + len);
+    } else if (type === "IDAT" && info) {
+      info.idat.push(bytes.subarray(at + 8, at + 8 + len));
     } else if (type === "IEND") {
       break;
     }
     at += 12 + len;
   }
-  if (colorType !== 0 || bitDepth !== 16)
-    return null;
+  return info;
+}
+async function inflate(idat) {
   let total = 0;
   for (const c of idat)
     total += c.length;
+  if (total === 0)
+    return null;
   const concat = new Uint8Array(total);
   let o = 0;
   for (const c of idat) {
@@ -391,19 +397,109 @@ async function readGray16(bytes) {
     o += c.length;
   }
   const stream = new Blob([concat]).stream().pipeThrough(new DecompressionStream("deflate"));
-  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
-  const data = new Uint16Array(width * height);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function unfilter(raw, width, height, bpp) {
+  const stride = width * bpp;
+  if (raw.length < height * (stride + 1))
+    return null;
+  const out = new Uint8Array(height * stride);
   for (let y = 0;y < height; y++) {
-    const row = y * (width * 2 + 1);
-    if (raw[row] !== 0)
-      return null;
-    for (let x = 0;x < width; x++) {
-      const hi = raw[row + 1 + x * 2];
-      const lo = raw[row + 2 + x * 2];
-      data[y * width + x] = (hi << 8 | lo) >>> 0;
+    const ft = raw[y * (stride + 1)];
+    const src = y * (stride + 1) + 1;
+    const dst = y * stride;
+    for (let i = 0;i < stride; i++) {
+      const x = raw[src + i];
+      const a = i >= bpp ? out[dst + i - bpp] : 0;
+      const b = y > 0 ? out[dst + i - stride] : 0;
+      const c = y > 0 && i >= bpp ? out[dst + i - bpp - stride] : 0;
+      let v;
+      if (ft === 0)
+        v = x;
+      else if (ft === 1)
+        v = x + a;
+      else if (ft === 2)
+        v = x + b;
+      else if (ft === 3)
+        v = x + (a + b >> 1);
+      else {
+        const p = a + b - c | 0;
+        const pa = Math.abs(p - a);
+        const pb = Math.abs(p - b);
+        const pc = Math.abs(p - c);
+        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+      }
+      out[dst + i] = v & 255;
     }
   }
+  return out;
+}
+async function readGray16(bytes) {
+  const info = parsePng(bytes);
+  if (!info || info.colorType !== 0 || info.bitDepth !== 16 || info.interlace !== 0)
+    return null;
+  const raw = await inflate(info.idat);
+  if (!raw)
+    return null;
+  const flat = unfilter(raw, info.width, info.height, 2);
+  if (!flat)
+    return null;
+  const { width, height } = info;
+  const data = new Uint16Array(width * height);
+  for (let i = 0;i < width * height; i++)
+    data[i] = (flat[i * 2] << 8 | flat[i * 2 + 1]) >>> 0;
   return { width, height, data };
+}
+async function readIndexedRamp(bytes) {
+  const info = parsePng(bytes);
+  if (!info || info.colorType !== 3 || info.interlace !== 0)
+    return null;
+  if (![1, 2, 4, 8].includes(info.bitDepth))
+    return null;
+  const plte = info.plte;
+  if (!plte || plte.length % 3 !== 0)
+    return null;
+  const count = plte.length / 3;
+  if (count > 1 << info.bitDepth)
+    return null;
+  const steps = count - 1;
+  if (steps < 1)
+    return null;
+  for (let q = 0;q < count; q++) {
+    const level = Math.round(Math.min(q, steps) * 255 / steps);
+    if (plte[q * 3] !== RAMP[level * 3])
+      return null;
+    if (plte[q * 3 + 1] !== level)
+      return null;
+    if (plte[q * 3 + 2] !== RAMP[level * 3 + 2])
+      return null;
+  }
+  const raw = await inflate(info.idat);
+  if (!raw)
+    return null;
+  const flat = unfilter(raw, info.width, info.height, 1);
+  if (!flat)
+    return null;
+  const { width, height } = info;
+  const depth = info.bitDepth;
+  const levels = new Uint8Array(width * height);
+  for (let y = 0;y < height; y++) {
+    const rowAt = y * Math.ceil(width * depth / 8);
+    let acc = 0;
+    let bits = 0;
+    let k = 0;
+    for (let x = 0;x < width; x++) {
+      while (bits < depth) {
+        acc = acc << 8 | flat[rowAt + k++];
+        bits += 8;
+      }
+      const idx = acc >>> bits - depth & (1 << depth) - 1;
+      bits -= depth;
+      acc &= (1 << bits) - 1;
+      levels[y * width + x] = Math.min(255, Math.round(Math.min(idx, steps) * 255 / steps));
+    }
+  }
+  return { width, height, levels };
 }
 
 // src/lib/params.ts
@@ -414,7 +510,7 @@ var FINENESS = [
 ];
 var VOICE = {
   mode: "compact",
-  sr: 0,
+  sr: 8000,
   bits: 8,
   fineness: 1,
   fmax: 0,
@@ -438,7 +534,13 @@ var TUNE = {
   tol: [0.1, 0.0000000001],
   rtisi: true,
   rtisiIters: 8,
-  rtisiGl: 0
+  rtisiGl: 0,
+  fine: {
+    rtisiIters: 16,
+    rtisiBudget: 200000000,
+    glIters: 8,
+    glBudgetMs: 12000
+  }
 };
 var TWO_PI = Math.PI * 2;
 var wrap = (a) => {
@@ -788,6 +890,7 @@ var MAX_PIXELS = 8000000;
 var DB_MIN = -120;
 var DB_MAX = 0;
 var DB_SPAN = DB_MAX - DB_MIN;
+var SYNTH_TUNE = { phaseDeadZone: 0.1 };
 var SLICE_MS = 12;
 var GL_BUDGET_MS = 2600;
 var GL_MIN_ITERS = 8;
@@ -819,12 +922,11 @@ function shapeFor(enc, sr, samples) {
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
   const bands = enc.mode === "exact" ? BANDS : 1;
   if (frames > MAX_FRAMES)
-    throw new Error(`这段会出 ${frames} 帧，超过 ${MAX_FRAMES}：裁剪区间或调低采样率`);
+    throw new Error("音频太长，图放不下：剪短一点，或调低采样率");
   if (frames * bins * bands > MAX_PIXELS)
-    throw new Error("频谱图太大了：调低精度或采样率");
+    throw new Error("图太大了：把「精细度」或「采样率」调低一些");
   return { win, hop, frames, bins, samples };
 }
-
 class Frames {
   size;
   bins;
@@ -912,8 +1014,8 @@ async function encode(pcm, sr, enc, alive, onProgress) {
         const db = 20 * Math.log10(Math.sqrt(re * re + im * im) / scale);
         levels[base + b] = magToLevel(db);
         const a = Math.atan2(im, re);
-        phaseCos[base + b] = clampByte((Math.cos(a) * 0.5 + 0.5) * 255 | 0);
-        phaseSin[base + b] = clampByte((Math.sin(a) * 0.5 + 0.5) * 255 | 0);
+        phaseCos[base + b] = clampByte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
+        phaseSin[base + b] = clampByte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
       }
       if (Date.now() >= next) {
         if (alive && !alive())
@@ -993,22 +1095,38 @@ var coverage = (win, hop, frames, padded) => {
   }
   return cover;
 };
-async function synthesiseExact(meta, levels, phaseCos, phaseSin, alive, onProgress) {
+async function synthesiseExact(spec, alive, onProgress) {
+  const { meta, levels, phaseCos, phaseSin } = spec;
+  if (!phaseCos || !phaseSin)
+    return invert(spec, alive, onProgress);
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
   const padded = samples + win;
   const acc = new Float64Array(padded);
   const scale = win / 4;
   let next = 0;
+  const holdC = new Float64Array(bins).fill(1);
+  const holdS = new Float64Array(bins);
   for (let f = 0;f < frames; f++) {
     const base = f * bins;
     for (let b = 0;b < bins; b++) {
       const m = Math.pow(10, levelToMagDb(levels[base + b]) / 20) * scale;
-      const c = (phaseCos[base + b] - 127.5) / 127.5;
-      const s = (phaseSin[base + b] - 127.5) / 127.5;
-      const a = Math.atan2(s, c);
-      core.re[b] = m * Math.cos(a);
-      core.im[b] = m * Math.sin(a);
+      const cr = (phaseCos[base + b] - 127.5) / 127.5;
+      const cs = (phaseSin[base + b] - 127.5) / 127.5;
+      const h = Math.sqrt(cr * cr + cs * cs);
+      let c;
+      let s;
+      if (h > SYNTH_TUNE.phaseDeadZone) {
+        c = cr / h;
+        s = cs / h;
+        holdC[b] = c;
+        holdS[b] = s;
+      } else {
+        c = holdC[b];
+        s = holdS[b];
+      }
+      core.re[b] = m * c;
+      core.im[b] = m * s;
     }
     core.add(acc, f * hop);
     if (Date.now() >= next) {
@@ -1060,7 +1178,7 @@ function finish(x, win, samples) {
   }
   return out;
 }
-async function glRefine(x, target, spec, iters, alive, onProgress) {
+async function glRefine(x, target, spec, iters, alive, onProgress, budgetMs = GL_BUDGET_MS) {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
@@ -1075,7 +1193,7 @@ async function glRefine(x, target, spec, iters, alive, onProgress) {
     if (cover[i] > top)
       top = cover[i];
   const floor = top * 0.05;
-  const deadline = Date.now() + GL_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
   let next = 0;
   for (let it = 0;it < iters; it++) {
     acc.fill(0);
@@ -1116,7 +1234,7 @@ async function glRefine(x, target, spec, iters, alive, onProgress) {
       break;
   }
 }
-async function invert(spec, alive, onProgress) {
+async function invert(spec, alive, onProgress, fine = false) {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
   const scale = win / 4;
@@ -1125,7 +1243,8 @@ async function invert(spec, alive, onProgress) {
   const warm = TUNE.pghi ? phaseFromMagnitude(target, frames, bins, win, hop) : null;
   let next = 0;
   const y = await rtisiLa(target, frames, bins, win, hop, samples, {
-    iters: TUNE.rtisiIters,
+    iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
+    budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
     warm,
     tick: (m, total) => {
       if (Date.now() < next)
@@ -1142,15 +1261,15 @@ async function invert(spec, alive, onProgress) {
   const x = new Float64Array(padded);
   for (let i = 0;i < samples; i++)
     x[win / 2 + i] = y[i];
-  if (TUNE.rtisiGl > 0)
-    await glRefine(x, target, spec, TUNE.rtisiGl, alive, onProgress);
+  if (fine || TUNE.rtisiGl > 0)
+    await glRefine(x, target, spec, fine ? TUNE.fine.glIters : TUNE.rtisiGl, alive, onProgress, fine ? TUNE.fine.glBudgetMs : undefined);
   return finish(x, win, samples);
 }
-async function synthesise(spec, alive, onProgress) {
+async function synthesise(spec, alive, onProgress, quality = "fast") {
   const { meta, phaseCos, phaseSin } = spec;
   if (meta.exact && phaseCos && phaseSin)
-    return synthesiseExact(meta, spec.levels, phaseCos, phaseSin, alive, onProgress);
-  return invert(spec, alive, onProgress);
+    return synthesiseExact(spec, alive, onProgress);
+  return invert(spec, alive, onProgress, quality === "fine");
 }
 function paramsForImage(frames, rows, sr, bits, ref, exact) {
   const clamped = Math.max(2, Math.min(rows, MAX_WIN / 2 + 1));
@@ -1162,10 +1281,11 @@ function paramsForImage(frames, rows, sr, bits, ref, exact) {
 }
 
 // src/lib/image.ts
-var VERSION = 4;
+var FORMAT_VERSION = 4;
+var MIN_VERSION = 3;
 function metaToText(meta) {
   return JSON.stringify([
-    VERSION,
+    FORMAT_VERSION,
     meta.sr,
     meta.win,
     meta.hop,
@@ -1180,10 +1300,15 @@ function metaToText(meta) {
 function textToMeta(text) {
   try {
     const v = JSON.parse(text);
-    if (!Array.isArray(v) || v.length < 10 || v[0] !== VERSION)
+    if (!Array.isArray(v))
       return null;
-    const n = v.slice(1).map(Number);
-    if (n.some((x) => !Number.isFinite(x)))
+    const ver = v[0];
+    if (typeof ver !== "number" || !Number.isInteger(ver) || ver < MIN_VERSION)
+      return null;
+    if (v.length < 10)
+      return null;
+    const n = v.slice(1, 10).map(Number);
+    if (n.some((x, i) => i === 7 ? !Number.isFinite(x) : !Number.isInteger(x)))
       return null;
     const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n;
     if (sr <= 0 || win <= 0 || hop <= 0 || frames <= 0 || bins <= 0 || samples < 0)
@@ -1260,6 +1385,51 @@ function sniff(bytes) {
 }
 var MAX_SOURCE_PIXELS = 24000000;
 var FOREIGN_FRAMES = 6000;
+function winFromBins(bins) {
+  const raw = Math.max(2, (bins - 1) * 2);
+  let win = 256;
+  while (win * 2 <= Math.min(raw, 4096))
+    win *= 2;
+  return win;
+}
+function metaFromGeometry(frames, bins, exact, bits) {
+  const win = winFromBins(bins);
+  return {
+    sr: 8000,
+    win,
+    hop: win / 2,
+    frames: Math.max(2, Math.min(frames, MAX_FRAMES)),
+    bins: Math.min(bins, win / 2 + 1),
+    samples: Math.max(2, Math.min(frames, MAX_FRAMES)) * (win / 2),
+    bits,
+    ref: 0,
+    exact
+  };
+}
+function recognizeExact(pixels, w, h) {
+  if (w < 4 || h < 8)
+    return false;
+  const rows = Math.floor(h / 2);
+  const stepX = Math.max(1, Math.floor(w / 48));
+  const stepY = Math.max(1, Math.floor(rows / 24));
+  let ok = 0;
+  let total = 0;
+  for (let y = 0;y < rows; y += stepY) {
+    for (let x = 0;x < w; x += stepX) {
+      const p = ((rows + y) * w + x) * 4;
+      total++;
+      if (pixels[p + 2] > 48)
+        continue;
+      const cr = pixels[p] - 127.5;
+      const cs = pixels[p + 1] - 127.5;
+      const rad2 = cr * cr + cs * cs;
+      if (rad2 < 400 || rad2 > 40000)
+        continue;
+      ok++;
+    }
+  }
+  return ok >= 12 && ok / Math.max(1, total) >= 0.55;
+}
 function surface(width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -1269,28 +1439,71 @@ function surface(width, height) {
     throw new Error("这个浏览器不支持 canvas");
   return { canvas, ctx };
 }
-function sampleBand(data, width, rowTop, rowCount, frames, bins, pick) {
+function sampleLevels(data, width, rowTop, rowCount, frames, bins) {
   const out = new Uint8Array(frames * bins);
   const sx = width / frames;
   const sy = rowCount / bins;
-  const rows = new Int32Array(bins);
-  for (let b = 0;b < bins; b++) {
-    const up = Math.min(rowCount - 1, Math.floor((b + 0.5) * sy));
-    rows[b] = rowTop + rowCount - 1 - up;
-  }
   for (let f = 0;f < frames; f++) {
-    const col = Math.min(width - 1, Math.floor((f + 0.5) * sx)) * 4;
-    const base = f * bins;
+    const x0 = Math.min(width - 1, Math.floor(f * sx));
+    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
     for (let b = 0;b < bins; b++) {
-      const p = rows[b] * width * 4 + col;
-      out[base + b] = pick(data[p], data[p + 1], data[p + 2]);
+      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
+      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      let sum = 0;
+      let n = 0;
+      for (let y = y0;y < y1; y++) {
+        const imgRow = rowTop + rowCount - 1 - y;
+        for (let x = x0;x < x1; x++) {
+          const p = (imgRow * width + x) * 4;
+          sum += luma(data[p], data[p + 1], data[p + 2]);
+          n++;
+        }
+      }
+      out[f * bins + b] = FROM_LUMA[Math.round(sum / Math.max(1, n)) & 255];
     }
   }
   return out;
 }
-function rescaled(meta, width) {
-  const frames = Math.max(2, Math.min(width, MAX_FRAMES));
-  const hop = Math.max(1, Math.min(meta.win, Math.round(meta.samples / frames)));
+function samplePhase(data, width, rowTop, rowCount, frames, bins) {
+  const cos = new Uint8Array(frames * bins);
+  const sin = new Uint8Array(frames * bins);
+  const sx = width / frames;
+  const sy = rowCount / bins;
+  let sumLen = 0;
+  let cells = 0;
+  for (let f = 0;f < frames; f++) {
+    const x0 = Math.min(width - 1, Math.floor(f * sx));
+    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+    for (let b = 0;b < bins; b++) {
+      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
+      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      let sc = 0;
+      let ss = 0;
+      let n = 0;
+      for (let y = y0;y < y1; y++) {
+        const imgRow = rowTop + rowCount - 1 - y;
+        for (let x = x0;x < x1; x++) {
+          const p = (imgRow * width + x) * 4;
+          sc += data[p] - 127.5;
+          ss += data[p + 1] - 127.5;
+          n++;
+        }
+      }
+      const cr = sc / n;
+      const cs = ss / n;
+      const h = Math.sqrt(cr * cr + cs * cs);
+      sumLen += h;
+      cells++;
+      const k = h > 0.000001 ? 127.5 / h : 0;
+      cos[f * bins + b] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
+      sin[f * bins + b] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
+    }
+  }
+  return { cos, sin, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
+}
+function rescaled(meta, width, maxHop) {
+  const hop = Math.max(1, Math.min(Math.round(maxHop), Math.round(meta.samples / Math.max(2, width))));
+  const frames = Math.max(2, Math.min(MAX_FRAMES, Math.round(meta.samples / hop)));
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 async function readCompact16(bytes, meta) {
@@ -1309,10 +1522,59 @@ async function readCompact16(bytes, meta) {
   }
   return { meta, levels, phaseCos: null, phaseSin: null };
 }
+var READ_TUNE = { phaseReliable: 0.5 };
 async function imageToSpectrum(file, fileName) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
-  const meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
+  let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
+  if (meta === null) {
+    const g16 = await readGray16(bytes);
+    if (g16 && g16.width * g16.height <= MAX_SOURCE_PIXELS) {
+      const gmeta = metaFromGeometry(g16.width, g16.height, false, 16);
+      const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+      const sx = g16.width / gmeta.frames;
+      const sy = g16.height / gmeta.bins;
+      for (let f = 0;f < gmeta.frames; f++) {
+        const col = Math.min(g16.width - 1, Math.floor((f + 0.5) * sx));
+        for (let b = 0;b < gmeta.bins; b++) {
+          const row = Math.min(g16.height - 1, Math.floor((b + 0.5) * sy));
+          levels[f * gmeta.bins + b] = Math.min(255, g16.data[row * g16.width + col] * 255 / 65535) | 0;
+        }
+      }
+      return {
+        spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+        mode: "compact",
+        container,
+        width: g16.width,
+        height: g16.height,
+        phaseReliability: null,
+        guessed: true
+      };
+    }
+    const idx = await readIndexedRamp(bytes);
+    if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
+      const gmeta = metaFromGeometry(idx.width, idx.height, false, 8);
+      const levels = new Uint8Array(gmeta.frames * gmeta.bins);
+      const sx = idx.width / gmeta.frames;
+      const sy = idx.height / gmeta.bins;
+      for (let f = 0;f < gmeta.frames; f++) {
+        const col = Math.min(idx.width - 1, Math.floor((f + 0.5) * sx));
+        for (let b = 0;b < gmeta.bins; b++) {
+          const row = Math.min(idx.height - 1, Math.floor((b + 0.5) * sy));
+          levels[f * gmeta.bins + b] = idx.levels[row * idx.width + col];
+        }
+      }
+      return {
+        spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
+        mode: "compact",
+        container,
+        width: idx.width,
+        height: idx.height,
+        phaseReliability: null,
+        guessed: true
+      };
+    }
+  }
   let bitmap = await createImageBitmap(file, { colorSpaceConversion: "none" });
   const width = bitmap.width;
   const height = bitmap.height;
@@ -1333,51 +1595,73 @@ async function imageToSpectrum(file, fileName) {
     const pixels = ctx.getImageData(0, 0, w, h).data;
     canvas.width = 0;
     canvas.height = 0;
-    const known = meta !== null;
-    const exact = known && meta.exact;
+    let m0 = meta;
+    if (m0 === null && recognizeExact(pixels, w, h)) {
+      m0 = metaFromGeometry(w, Math.floor(h / 2), true, 0);
+    }
+    const known = m0 !== null;
+    const exact = m0 !== null && m0.exact;
     const bandRows = exact ? Math.max(1, Math.floor(h / BANDS)) : h;
-    const intact = known && w === meta.frames && bandRows === meta.bins;
-    if (known && !meta.exact && meta.bits >= 16 && w === meta.frames && h === meta.bins) {
+    const intact = m0 !== null && w === m0.frames && bandRows === m0.bins;
+    if (m0 !== null && !m0.exact && m0.bits >= 16 && w === m0.frames && h === m0.bins) {
       return {
-        spec: await readCompact16(bytes, meta),
+        spec: await readCompact16(bytes, m0),
         mode: "compact",
         container,
         width: w,
-        height: h
+        height: h,
+        phaseReliability: null,
+        guessed: false
       };
     }
-    if (exact) {
-      const next = intact ? { ...meta } : { ...rescaled(meta, w), exact: true };
-      const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) => FROM_LUMA[luma(r, g, b)]);
-      const cosRaw = sampleBand(pixels, w, bandRows, bandRows, next.frames, next.bins, (r) => r);
-      const sinRaw = sampleBand(pixels, w, bandRows, bandRows, next.frames, next.bins, (_r, g) => g);
+    if (exact && m0) {
+      const binsFit0 = Math.min(m0.bins, bandRows);
+      const winFit = winFromBins(binsFit0);
+      const binsFit = Math.min(binsFit0, winFit / 2 + 1);
+      const rs = rescaled(m0, w, winFit / 2);
+      const next = intact && binsFit === m0.bins ? { ...m0 } : { ...rs, bins: binsFit, win: winFit, exact: true };
+      const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
+      const ph = samplePhase(pixels, w, bandRows, bandRows, next.frames, next.bins);
+      const keep = ph.reliability >= READ_TUNE.phaseReliable;
       const mode = intact ? "exact" : "degraded";
       return {
-        spec: { meta: { ...next, exact: true }, levels, phaseCos: cosRaw, phaseSin: sinRaw },
+        spec: {
+          meta: { ...next, exact: true },
+          levels,
+          phaseCos: keep ? ph.cos : null,
+          phaseSin: keep ? ph.sin : null
+        },
         mode,
         container,
         width: w,
-        height: h
+        height: h,
+        phaseReliability: ph.reliability,
+        guessed: !known
       };
     }
-    const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
-    const rows = Math.max(2, Math.min(intact ? meta.bins : bandRows, 1025));
+    const frames = m0 !== null ? Math.min(w, m0.frames) : Math.min(w, FOREIGN_FRAMES);
+    const rows = Math.max(2, Math.min(intact && m0 ? m0.bins : bandRows, 1025));
     let next;
-    if (intact) {
-      next = { ...meta, bins: meta.bins };
-    } else if (meta !== null) {
-      next = rescaled(meta, w);
+    if (m0 !== null && intact) {
+      next = { ...m0, bins: m0.bins };
+    } else if (m0 !== null) {
+      const binsFit0 = Math.min(m0.bins, bandRows);
+      const winFit = winFromBins(binsFit0);
+      const rs = rescaled(m0, w, winFit / 2);
+      next = { ...rs, bins: Math.min(binsFit0, winFit / 2 + 1), win: winFit };
     } else {
       next = paramsForImage(frames, rows, 44100, 8, 0, false);
     }
-    const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) => FROM_LUMA[luma(r, g, b)]);
+    const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
     const mode = !known ? "foreign" : intact ? "compact" : "degraded";
     return {
       spec: { meta: next, levels, phaseCos: null, phaseSin: null },
       mode,
       container,
       width: w,
-      height: h
+      height: h,
+      phaseReliability: null,
+      guessed: false
     };
   } finally {
     bitmap.close();
@@ -1649,11 +1933,20 @@ function targetDb(level, meta) {
   const q = Math.round(level * steps / 255);
   return (meta.exact ? -120 : meta.ref - span) + q / steps * (meta.exact ? 120 : span);
 }
+var VIA_SPEC = {
+  png: { scale: 1, type: "image/png" },
+  jpeg: { scale: 1, type: "image/jpeg" },
+  half: { scale: 0.5, type: "image/png" },
+  s75: { scale: 0.75, type: "image/png" },
+  s90: { scale: 0.9, type: "image/png" },
+  jpeg75: { scale: 0.75, type: "image/jpeg" }
+};
 async function degrade(blob, via, name) {
   if (via === "png")
     return blob;
+  const spec = VIA_SPEC[via];
+  const scale = spec?.scale ?? (via === "half" ? 0.5 : 1);
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none" });
-  const scale = via === "half" ? 0.5 : 1;
   const w = Math.max(1, Math.round(bitmap.width * scale));
   const h = Math.max(1, Math.round(bitmap.height * scale));
   const canvas = document.createElement("canvas");
@@ -1662,7 +1955,7 @@ async function degrade(blob, via, name) {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
-  const type = via === "jpeg" || via === "jpeg-anon" ? "image/jpeg" : "image/png";
+  const type = spec?.type ?? (via === "jpeg" || via === "jpeg-anon" ? "image/jpeg" : "image/png");
   const out = await new Promise((done) => canvas.toBlob(done, type, 0.72));
   canvas.width = 0;
   canvas.height = 0;
@@ -1687,6 +1980,10 @@ function setTune(t) {
     TUNE.rtisiIters = t.rtisiIters;
   if (t.rtisiGl !== undefined)
     TUNE.rtisiGl = t.rtisiGl;
+  if (t.phaseReliable !== undefined)
+    READ_TUNE.phaseReliable = t.phaseReliable;
+  if (t.phaseDeadZone !== undefined)
+    SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
   return JSON.stringify(TUNE);
 }
 async function synthProbe(pcm, sr, win, hop, bits, seconds = 4) {
@@ -1818,12 +2115,20 @@ async function runCase(srcPcm, srcSr, name, c) {
   const spec = await encode(tuned, sr, enc);
   let back = spec;
   let bytes = 0;
+  let rel = null;
+  let readMode = "";
   if (c.via !== "none") {
     const png = await spectrumToPng(spec);
-    const fileName = c.via === "jpeg-anon" ? "untitled.jpg" : downloadName(name, spec.meta);
-    const degraded = await degrade(png, c.via, fileName);
+    const anon = c.via.endsWith("-anon");
+    const viaKey = anon ? c.via.slice(0, -5) : c.via;
+    const isJpeg = viaKey.startsWith("jpeg");
+    const fileName = anon ? isJpeg ? "untitled.jpg" : "untitled.png" : downloadName(name, spec.meta);
+    const degraded = await degrade(png, viaKey, fileName);
     bytes = degraded.size;
-    back = (await imageToSpectrum(degraded, fileName)).spec;
+    const read = await imageToSpectrum(degraded, fileName);
+    back = read.spec;
+    rel = read.phaseReliability;
+    readMode = read.mode;
   }
   const y = await synthesise(back);
   const ref = tuned.subarray(0, Math.min(tuned.length, y.length));
@@ -1839,6 +2144,8 @@ async function runCase(srcPcm, srcSr, name, c) {
     frames: spec.meta.frames,
     bins: spec.meta.bins,
     seconds: Math.round(spec.meta.samples / sr * 10) / 10,
+    rel,
+    readMode,
     m: {
       snr: Math.round(a.snr * 10) / 10,
       corr: Math.round(a.corr * 1000) / 1000,
@@ -1860,6 +2167,65 @@ function levelErr(a, b) {
       worst = d;
   }
   return worst;
+}
+async function sigProbeBlob(bytes) {
+  const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none" });
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const px = ctx.getImageData(0, 0, w, h).data;
+  bitmap.close();
+  canvas.width = 0;
+  canvas.height = 0;
+  const rows = Math.floor(h / 2);
+  const stepX = Math.max(1, Math.floor(w / 48));
+  const stepY = Math.max(1, Math.floor(rows / 24));
+  let total = 0;
+  let okB = 0;
+  let okR = 0;
+  let ok = 0;
+  let bMax = 0;
+  let rMin = 1e9;
+  let rMax = 0;
+  for (let y = 0;y < rows; y += stepY)
+    for (let x = 0;x < w; x += stepX) {
+      const p = ((rows + y) * w + x) * 4;
+      total++;
+      const b = px[p + 2];
+      if (b > bMax)
+        bMax = b;
+      if (b <= 48)
+        okB++;
+      const cr = px[p] - 127.5;
+      const cs = px[p + 1] - 127.5;
+      const r = Math.sqrt(cr * cr + cs * cs);
+      if (r < rMin)
+        rMin = r;
+      if (r > rMax)
+        rMax = r;
+      if (r >= 20 && r <= 200)
+        okR++;
+      if (b <= 48 && r >= 20 && r <= 200)
+        ok++;
+    }
+  const hit = await imageToSpectrum(new Blob([bytes.slice()]), "untitled.bin");
+  return `${w}×${h} rows=${rows} 采样 ${total}  B≤48: ${(okB / total * 100).toFixed(0)}% (max ${bMax})  ` + `半径20-200: ${(okR / total * 100).toFixed(0)}% (${rMin.toFixed(0)}..${rMax.toFixed(0)})  ` + `全过: ${(ok / total * 100).toFixed(0)}%  → 认图 ${hit.mode}${hit.guessed ? "/guessed" : ""} rel=${hit.phaseReliability?.toFixed(2) ?? "-"}`;
+}
+async function sigProbe(srcPcm, srcSr, via) {
+  const enc = { mode: "exact", sr: 0, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 };
+  const sr = srcSr;
+  const tuned = resample(slice(srcPcm, srcSr, 0, 0), srcSr, sr, 0);
+  const spec = await encode(tuned, sr, enc);
+  const png = await spectrumToPng(spec);
+  const anon = via.endsWith("-anon");
+  const viaKey = anon ? via.slice(0, -5) : via;
+  const isJpeg = viaKey.startsWith("jpeg");
+  const degraded = await degrade(png, viaKey, isJpeg ? "untitled.jpg" : "untitled.png");
+  return sigProbeBlob(new Uint8Array(await degraded.arrayBuffer()));
 }
 async function pngCheck(bits) {
   const out = [];
@@ -2176,5 +2542,7 @@ export {
   reconProbe,
   runCase,
   setTune,
+  sigProbe,
+  sigProbeBlob,
   synthProbe
 };

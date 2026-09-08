@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { FFT, hannWindow } from "./fft";
-import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
+import { SR_OPTIONS, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
@@ -30,6 +30,10 @@ export const DEFAULT_SR = 44100;
 const DB_MIN = -120;
 const DB_MAX = 0;
 const DB_SPAN = DB_MAX - DB_MIN;
+
+/** 相位矢量死区：读回来的 (cos,sin) 长度比低于它说明该格被压缩/缩放平均到
+ *  相位无定义 —— 沿用上一帧相位，避免注入随机相位产生噼啪。可调供评测对比。 */
+export const SYNTH_TUNE = { phaseDeadZone: 0.1 };
 
 /** 一次让出主线程前允许跑多久；之后再继续，保证进度条和界面一直动。 */
 const SLICE_MS = 12;
@@ -104,9 +108,9 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
   const bands = enc.mode === "exact" ? BANDS : 1;
 
-  if (frames > MAX_FRAMES)
-    throw new Error(`这段会出 ${frames} 帧，超过 ${MAX_FRAMES}：裁剪区间或调低采样率`);
-  if (frames * bins * bands > MAX_PIXELS) throw new Error("频谱图太大了：调低精度或采样率");
+  if (frames > MAX_FRAMES) throw new Error("音频太长，图放不下：剪短一点，或调低采样率");
+  if (frames * bins * bands > MAX_PIXELS)
+    throw new Error("图太大了：把「精细度」或「采样率」调低一些");
 
   return { win, hop, frames, bins, samples };
 }
@@ -138,7 +142,7 @@ export function fitEncode(
       if (sr === want) return { enc: e, note: null };
       return {
         enc: { ...e, sr, fmax: e.fmax >= sr / 2 ? 0 : e.fmax },
-        note: `素材较长，采样率已自动降为 ${srLabel(sr)}；想用更高精度可先裁剪区间`,
+        note: `音频较长，已自动调低采样率；想更清晰可先剪短`,
       };
     }
   }
@@ -147,7 +151,7 @@ export function fitEncode(
   const secs = Math.floor((MAX_FRAMES * hopOf(e)) / sr);
   return {
     enc: { ...e, sr, fmax: 0, end: e.start + secs },
-    note: `素材过长，已降为 ${srLabel(sr)} 并只取前 ${secs} 秒`,
+    note: `音频太长，只保留前 ${secs} 秒`,
   };
 }
 
@@ -381,7 +385,7 @@ async function synthesiseExact(
       const h = Math.sqrt(cr * cr + cs * cs);
       let c: number;
       let s: number;
-      if (h > 0.1) {
+      if (h > SYNTH_TUNE.phaseDeadZone) {
         c = cr / h;
         s = cs / h;
         holdC[b] = c;

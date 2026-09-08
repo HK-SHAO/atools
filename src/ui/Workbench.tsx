@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import { audit, type LossRow } from "../lib/audit";
-import { downloadName, FORMAT_VERSION, spectrumToPng, type ReadMode } from "../lib/image";
+import { downloadName, spectrumToPng, type ReadMode } from "../lib/image";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
   FINENESS,
   SR_OPTIONS,
-  dbSpanOf,
   hzLabel,
   srLabel,
   type Encode,
@@ -56,30 +55,24 @@ function save(blob: Blob, filename: string): void {
 }
 
 const MODE_NOTE: Record<ReadMode, string | null> = {
-  exact: "可逆：上段是能看的幅度谱，下段是相位（R=cos/G=sin）。存 PNG 近乎无损、零爆音；JPEG/WebP 有损只平滑漂移相位、不爆音，保真请用 PNG",
+  exact: "可逆模式：音质几乎无损。要长期保存请用 PNG，转成 JPEG 音质会略降",
   compact: null,
-  degraded: "这张图被改过，按亮度反查幅度，相位靠迭代重建",
-  foreign: "陌生图片，整幅当幅度读",
+  degraded: "这张图被压缩或缩放过，音质会打折扣",
+  foreign: "这不是本工具生成的图，试着把画面明暗当声音来读",
 };
 
 const kb = (n: number): string =>
   n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
 /**
- * 自检结果一句话说完。
- *
- * 紧凑模式本来就没有相位，相关系数天然上不去 —— 所以顺带标一句"谱"，
- * 那才是这个模式该看的：谱差小 = 听着像。
+ * 自检结果一句话说完，外行能懂：只报「还原度」（波形有多像原声），
+ * 数字背后的信噪比/谱差留给评测台。
  */
 function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
-  if (exact && own.level === 0 && own.corr > 0.999)
-    return `自检 · 原图往返零损失（层级偏差 0，相关 ${own.corr.toFixed(3)}）`;
-  const cell = (r: LossRow): string =>
-    `${r.label} 相关 ${r.corr.toFixed(2)} · 谱差 ${r.lsd.toFixed(1)}${
-      r.level > 0 ? ` · 层级 ${r.level}` : ""
-    }`;
-  return `自检 · ${rows.map(cell).join("　·　")}`;
+  if (exact && own.level === 0 && own.corr > 0.999) return "自检 · 存出再读回，完全一致";
+  const cell = (r: LossRow): string => `${r.label} 还原度 ${Math.round(r.corr * 100)}%`;
+  return `自检 · ${rows.map(cell).join("，")}`;
 }
 
 export function Workbench({
@@ -193,9 +186,8 @@ export function Workbench({
       </div>
 
       <p className="facts">
-        格式 v{FORMAT_VERSION} · {srLabel(meta.sr)}Hz · {meta.frames} × {meta.bins} ·{" "}
-        {compact ? `${enc.bits} bit · ${dbSpanOf(enc.bits)} dB` : "可逆"} · {kb(png.size)} ·{" "}
-        {clock(duration)}
+        {srLabel(meta.sr)} 采样 · {clock(duration)} · {kb(png.size)}
+        {compact ? "" : " · 可逆"}
       </p>
       {note && <p className="facts dim">{note}</p>}
 
@@ -210,11 +202,11 @@ export function Workbench({
           换一个
         </button>
         <button type="button" className="act" onClick={check} disabled={checking || busy}>
-          {checking ? "自检中" : "验损"}
+          {checking ? "质检中" : "质检"}
         </button>
         {canRefine && (
           <button type="button" className="act" onClick={onRefine} disabled={busy}>
-            精修相位
+            精修音质
           </button>
         )}
       </div>
@@ -232,16 +224,19 @@ export function Workbench({
           onPick={v => set("mode", v)}
         />
         <Row<number>
-          label="采样率"
+          label="采样"
           value={enc.sr}
           options={SR_OPTIONS.map(sr => ({ value: sr, label: srLabel(sr) }))}
           onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
         />
         {compact && (
           <Row<number>
-            label="位深"
+            label="音质"
             value={enc.bits}
-            options={BITS_OPTIONS.map(b => ({ value: b, label: `${b}` }))}
+            options={BITS_OPTIONS.map(b => ({
+              value: b,
+              label: b === 2 ? "最低" : b === 4 ? "低" : b === 8 ? "高" : "最高",
+            }))}
             onPick={v => set("bits", v)}
           />
         )}
@@ -256,7 +251,7 @@ export function Workbench({
         />
         {compact && (
           <Row<number>
-            label="上限"
+            label="频宽"
             value={enc.fmax}
             options={fmaxOptions}
             onPick={v => set("fmax", v)}
@@ -290,7 +285,7 @@ export function Workbench({
                 max={duration}
                 step={0.1}
                 value={range ? range.end : endShown(enc.end)}
-                placeholder="-1"
+                placeholder="结尾"
                 onChange={e =>
                   setRange({ start: range ? range.start : String(enc.start), end: e.target.value })
                 }

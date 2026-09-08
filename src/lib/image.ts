@@ -160,27 +160,34 @@ export function metaFromGeometry(frames: number, bins: number, exact: boolean, b
 
 /**
  * 像素签名认可逆图：下半段必须是相位段 —— B≈0 且 (R,G) 落在以 (127.5,127.5)
- * 为圆心的单位圆上。随机照片/纯色图几乎不可能撞上这个签名。
+ * 为圆心的圆环上。随机照片/纯色图几乎不可能撞上这个签名。
+ *
+ * 判定是统计式的（≥60% 采样点命中）：有损压缩的 B 通道噪声、缩放后奇数高度
+ * 的边界行、极端压损塌掉的矢量，都由这 40% 的容错吃掉，不再逐像素硬卡。
  */
 export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
-  if (w < 4 || h < 8 || h % 2 !== 0) return false;
-  const rows = h / 2;
+  if (w < 4 || h < 8) return false;
+  const rows = Math.floor(h / 2);
   const stepX = Math.max(1, Math.floor(w / 48));
   const stepY = Math.max(1, Math.floor(rows / 24));
-  let checked = 0;
+  let ok = 0;
+  let total = 0;
   for (let y = 0; y < rows; y += stepY) {
     for (let x = 0; x < w; x += stepX) {
       const p = ((rows + y) * w + x) * 4;
-      if (pixels[p + 2]! > 8) return false;
+      total++;
+      if (pixels[p + 2]! > 48) continue;
       const cr = pixels[p]! - 127.5;
       const cs = pixels[p + 1]! - 127.5;
       const rad2 = cr * cr + cs * cs;
-      // 量化 ±0.7、有损压缩漂移、缩放平均都放得下；纯黑/纯灰图会被半径卡掉。
-      if (rad2 < 2600 || rad2 > 29000) return false;
-      checked++;
+      // 缩放把相邻相位矢量平均，长度会缩水（0.5× 时约剩 0.4 → 半径 ≈51），
+      // JPEG 的 B 通道会 ring 到 ~125 —— 判定放宽到 B≤48、半径 20..200，
+      // 再靠 55% 的命中率门槛把随机照片挡在外面。
+      if (rad2 < 400 || rad2 > 40000) continue;
+      ok++;
     }
   }
-  return checked >= 12;
+  return ok >= 12 && ok / Math.max(1, total) >= 0.55;
 }
 
 function surface(width: number, height: number) {
@@ -284,12 +291,18 @@ export function samplePhase(
 }
 
 /**
- * 图被缩放/转码过，但还认得出是我们出的：频段划分照原样，
- * 只是列数变了 —— 把帧数换成列数，跳距跟着变，总时长保持不变。
+ * 图被缩放/转码过，但还认得出是我们出的：几何参数按「总时长不变」重推。
+ *
+ *   帧数 ← 由时长与跳距回推（列多了就多帧、列少了读端用重复列补齐）
+ *   跳距 ← 时长/列数，封顶半窗 —— Hann 配 WOLA 时 hop 超过半窗，
+ *          窗缝里的 coverage 会漏到接近零，出来的是周期性的哒哒声。
  */
-function rescaled(meta: Meta, width: number): Meta {
-  const frames = Math.max(2, Math.min(width, MAX_FRAMES));
-  const hop = Math.max(1, Math.min(meta.win, Math.round(meta.samples / frames)));
+function rescaled(meta: Meta, width: number, maxHop: number): Meta {
+  const hop = Math.max(
+    1,
+    Math.min(Math.round(maxHop), Math.round(meta.samples / Math.max(2, width))),
+  );
+  const frames = Math.max(2, Math.min(MAX_FRAMES, Math.round(meta.samples / hop)));
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 
@@ -325,9 +338,12 @@ export interface Decoded {
   guessed: boolean;
 }
 
-/** 相位可靠阈值：矢量长度比低于它说明相位已被缩放/压缩平均到不可信，
- * 保留只会更糟 —— 弃用相位、退回幅度重建（实测缩放 0.5× 时比值 0.41）。 */
-const PHASE_RELIABLE = 0.8;
+/** 相位可靠阈值：矢量长度比低于它说明相位已被缩放平均到不可信，
+ * 保留只会更糟 —— 弃用相位、退回幅度重建（实测缩放 0.5× 时比值 0.31-0.41）。
+ * 但 JPEG 的色度下采样只会把比值压到 0.6 左右，相位方向大体还在 ——
+ * 实测保留它：相关 0.22 → 0.65。所以阈值取 0.5，正好分开这两种损伤。
+ * 可调：评测台用它做分级信任实验。 */
+export const READ_TUNE = { phaseReliable: 0.5 };
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -440,10 +456,20 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     // 可逆图：上段幅度谱、下段相位。相位可靠性不够（被缩放平均/严重压损）
     // 就弃用，退回幅度重建 —— 存着垃圾相位只会更糟。
     if (exact && m0) {
-      const next = intact ? { ...m0 } : { ...rescaled(m0, w), exact: true };
+      // 竖向缩放后每段行数可能不足 bins：把频点数压到实际可用的行数（格内面积
+      // 平均恰好等效于把相邻频点合并），窗宽跟着 bins 走，保住「bins = win/2+1」
+      // 的几何关系与正确的频率轴。不这样做的话读出来的谱是错乱的，比不用还糟。
+      const binsFit0 = Math.min(m0.bins, bandRows);
+      const winFit = winFromBins(binsFit0);
+      const binsFit = Math.min(binsFit0, winFit / 2 + 1);
+      const rs = rescaled(m0, w, winFit / 2);
+      const next =
+        intact && binsFit === m0.bins
+          ? { ...m0 }
+          : { ...rs, bins: binsFit, win: winFit, exact: true };
       const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
       const ph = samplePhase(pixels, w, bandRows, bandRows, next.frames, next.bins);
-      const keep = ph.reliability >= PHASE_RELIABLE;
+      const keep = ph.reliability >= READ_TUNE.phaseReliable;
       const mode: ReadMode = intact ? "exact" : "degraded";
       return {
         spec: {
@@ -464,13 +490,18 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     const frames = m0 !== null ? Math.min(w, m0.frames) : Math.min(w, FOREIGN_FRAMES);
     const rows = Math.max(2, Math.min(intact && m0 ? m0.bins : bandRows, 1025));
     // 三段互斥：intact 是我们原图且尺寸对得上；否则认得出是自己的图（转过格式 /
-    // 改过尺寸）就沿用原窗与频段、只把帧数换成列数；再否则就是完全陌生的图，
+    // 改过尺寸）就按「时长不变」重推帧数与跳距；再否则就是完全陌生的图，
     // 整张当幅度谱，按通用默认参数起手。
     let next: Meta;
     if (m0 !== null && intact) {
       next = { ...m0, bins: m0.bins };
     } else if (m0 !== null) {
-      next = rescaled(m0, w);
+      // 竖向缩放后行数可能不足 bins：频点数压到可用行数，窗宽跟着走（与可逆分支同理），
+      // 否则频轴错乱，读出来的谱比不用还糟。
+      const binsFit0 = Math.min(m0.bins, bandRows);
+      const winFit = winFromBins(binsFit0);
+      const rs = rescaled(m0, w, winFit / 2);
+      next = { ...rs, bins: Math.min(binsFit0, winFit / 2 + 1), win: winFit };
     } else {
       next = paramsForImage(frames, rows, 44100, 8, 0, false);
     }

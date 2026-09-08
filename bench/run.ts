@@ -1,5 +1,14 @@
 /** 驱动 Chromium 跑评测台。dev 用，不进 src。 */
 
+// 每次先重打 bundle，杜绝「改了 src 忘了重编、测的是旧代码」的坑。
+// 注意：这个 Bun 版本 build({outfile}) 只产出到内存，必须显式落盘。
+const built = await Bun.build({
+  entrypoints: [`${import.meta.dir}/entry.ts`],
+  target: "browser",
+});
+if (!built.success) throw new AggregateError(built.logs, "bench bundle 构建失败");
+await Bun.write(`${import.meta.dir}/bundle.js`, built.outputs[0]!);
+
 const CHROME =
   "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
 const PORT = Number(process.env.BENCH_PORT ?? 4330);
@@ -7,7 +16,8 @@ const CDP = 9600 + Math.floor(Math.random() * 300);
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const FILES = (process.env.FILES ?? "voice/greeting.mp3,voice/evolve-1.mp3,voice/hurt-1.mp3,voice/victory.mp3,audio-examples/popipo.m4a,audio-examples/love-story.m4a")
+// 默认语料只放 mp3：Chromium 快照没有 AAC 专有解码器，m4a 解不开（要测 m4a 用 FILES 覆盖 + 真 Chrome）。
+const FILES = (process.env.FILES ?? "voice/greeting.mp3,voice/evolve-1.mp3,voice/hurt-1.mp3,voice/victory.mp3")
   .split(",")
   .filter(Boolean);
 
@@ -25,7 +35,7 @@ const CASES = JSON.parse(
 
 const MAX_SEC = Number(process.env.MAX_SEC ?? 8);
 
-const server = Bun.spawn(["bun", `${import.meta.dir}/serve.ts`], {
+const server = Bun.spawn([process.execPath, `${import.meta.dir}/serve.ts`], {
   env: { ...process.env, PORT: String(PORT) },
   stdout: "ignore",
   stderr: "inherit",
@@ -115,6 +125,8 @@ try {
     bins: number;
     seconds: number;
     m: { snr: number; corr: number; conv: number; lsd: number; magSnr: number; levelErr: number };
+    rel: number | null;
+    readMode: string;
   }[] = [];
 
   const TUNE = process.env.TUNE ? JSON.parse(process.env.TUNE) : null;
@@ -138,6 +150,8 @@ try {
           `  SNR ${String(m.snr).padStart(6)}  相关 ${m.corr.toFixed(3)}` +
           `  收敛 ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
           `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelErr).padStart(3)}` +
+          `  认图 ${row.readMode || "-"}` +
+          `  相位可靠 ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
           `  ${row.ms}ms`,
       );
     }
@@ -210,6 +224,17 @@ try {
         );
   }
   console.log("\nPNG 体检:", (await ev(`return await Bench.pngCheck([1,2,4,6,8])`)) as string[]);
+  if (process.env.SIG) {
+    const sr2 = (await ev(`return window.__src.sr`)) as number;
+    for (const via of JSON.parse(process.env.SIG) as string[])
+      console.log(
+        "  签名",
+        via.padEnd(12),
+        (await ev(
+          `return await Bench.sigProbe(window.__src.pcm.subarray(0, 4 * window.__src.sr), window.__src.sr, ${JSON.stringify(via)})`,
+        )) as string,
+      );
+  }
   await Bun.write("/tmp/bench.json", JSON.stringify(rows, null, 2));
   console.log("\nerrs:", errs.length ? errs.slice(0, 3).join(" | ") : "(none)");
   ws.close();

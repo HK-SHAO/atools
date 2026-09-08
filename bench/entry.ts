@@ -7,8 +7,9 @@
 
 import { decodeAudioFile } from "../src/lib/audio";
 import { FFT, hannWindow } from "../src/lib/fft";
-import { imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
+import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
 import { dbSpanOf, FINENESS, hopOf, winOf, VOICE, type Encode, type Mode } from "../src/lib/params";
+import { SYNTH_TUNE } from "../src/lib/spectrum";
 import { resample, slice } from "../src/lib/resample";
 import { encode, synthesise, type Spectrum } from "../src/lib/spectrum";
 import { phaseFromMagnitude, TUNE } from "../src/lib/phase";
@@ -21,8 +22,18 @@ export interface Case {
   fineness: 0 | 1 | 2;
   fmax: number;
   mode: Mode;
-  /** 图片降级方式；none = 不落盘，直接拿内存里的谱还原 */
-  via: "png" | "jpeg" | "half" | "jpeg-anon" | "none";
+  /** 图片降级方式；none = 不落盘，直接拿内存里的谱还原；
+   *  -anon 后缀 = 连文件名一起丢掉。 */
+  via:
+    | "png"
+    | "jpeg"
+    | "half"
+    | "jpeg-anon"
+    | "half-anon"
+    | "s75"
+    | "s90"
+    | "jpeg75"
+    | "none";
 }
 
 export interface Metrics {
@@ -48,6 +59,10 @@ export interface Row {
   frames: number;
   bins: number;
   seconds: number;
+  /** 读端相位可靠性（矢量长度比）；无相位段为 null。 */
+  rel: number | null;
+  /** 读端认图结果：exact / compact / degraded / foreign。 */
+  readMode: string;
   m: Metrics;
 }
 
@@ -202,10 +217,24 @@ function targetDb(level: number, meta: Spectrum["meta"]): number {
   return (meta.exact ? -120 : meta.ref - span) + (q / steps) * (meta.exact ? 120 : span);
 }
 
+/** 各降级方式的缩放系数与容器。canvas 重编码一律剥掉 tEXt，模拟真实的转发链路。 */
+const VIA_SPEC: Record<
+  string,
+  { scale: number; type: "image/png" | "image/jpeg" }
+> = {
+  png: { scale: 1, type: "image/png" },
+  jpeg: { scale: 1, type: "image/jpeg" },
+  half: { scale: 0.5, type: "image/png" },
+  s75: { scale: 0.75, type: "image/png" },
+  s90: { scale: 0.9, type: "image/png" },
+  jpeg75: { scale: 0.75, type: "image/jpeg" },
+};
+
 async function degrade(blob: Blob, via: Case["via"], name: string): Promise<Blob> {
   if (via === "png") return blob;
+  const spec = VIA_SPEC[via];
+  const scale = spec?.scale ?? (via === "half" ? 0.5 : 1);
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none" });
-  const scale = via === "half" ? 0.5 : 1;
   const w = Math.max(1, Math.round(bitmap.width * scale));
   const h = Math.max(1, Math.round(bitmap.height * scale));
   const canvas = document.createElement("canvas");
@@ -214,7 +243,7 @@ async function degrade(blob: Blob, via: Case["via"], name: string): Promise<Blob
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
-  const type = via === "jpeg" || via === "jpeg-anon" ? "image/jpeg" : "image/png";
+  const type = spec?.type ?? (via === "jpeg" || via === "jpeg-anon" ? "image/jpeg" : "image/png");
   const out = await new Promise<Blob | null>(done => canvas.toBlob(done, type, 0.72));
   canvas.width = 0;
   canvas.height = 0;
@@ -237,6 +266,8 @@ export function setTune(
     rtisi: boolean;
     rtisiIters: number;
     rtisiGl: number;
+    phaseReliable: number;
+    phaseDeadZone: number;
   }>,
 ): string {
   if (t.pghi !== undefined) TUNE.pghi = t.pghi;
@@ -246,6 +277,8 @@ export function setTune(
   if (t.rtisi !== undefined) TUNE.rtisi = t.rtisi;
   if (t.rtisiIters !== undefined) TUNE.rtisiIters = t.rtisiIters;
   if (t.rtisiGl !== undefined) TUNE.rtisiGl = t.rtisiGl;
+  if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;
+  if (t.phaseDeadZone !== undefined) SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
   return JSON.stringify(TUNE);
 }
 
@@ -404,12 +437,25 @@ export async function runCase(
   const spec = await encode(tuned, sr, enc);
   let back = spec;
   let bytes = 0;
+  let rel: number | null = null;
+  let readMode = "";
   if (c.via !== "none") {
     const png = await spectrumToPng(spec);
-    const fileName = c.via === "jpeg-anon" ? "untitled.jpg" : downloadName(name, spec.meta);
-    const degraded = await degrade(png, c.via, fileName);
+    // via 带 -anon 后缀 = 文件名也一起丢掉（模拟微信转发），只留裸图。
+    const anon = c.via.endsWith("-anon");
+    const viaKey = (anon ? c.via.slice(0, -5) : c.via) as Case["via"];
+    const isJpeg = viaKey.startsWith("jpeg");
+    const fileName = anon
+      ? isJpeg
+        ? "untitled.jpg"
+        : "untitled.png"
+      : downloadName(name, spec.meta);
+    const degraded = await degrade(png, viaKey, fileName);
     bytes = degraded.size;
-    back = (await imageToSpectrum(degraded, fileName)).spec;
+    const read = await imageToSpectrum(degraded, fileName);
+    back = read.spec;
+    rel = read.phaseReliability;
+    readMode = read.mode;
   }
   const y = await synthesise(back);
 
@@ -427,6 +473,8 @@ export async function runCase(
     frames: spec.meta.frames,
     bins: spec.meta.bins,
     seconds: Math.round((spec.meta.samples / sr) * 10) / 10,
+    rel,
+    readMode,
     m: {
       snr: Math.round(a.snr * 10) / 10,
       corr: Math.round(a.corr * 1000) / 1000,
@@ -450,8 +498,79 @@ function levelErr(a: Spectrum, b: Spectrum): number {
   return worst;
 }
 
-/** 单独体检：各 bit 深的索引色 PNG 能不能被浏览器原样解回来。 */
-export async function pngCheck(bits: number[]): Promise<string[]> {
+/**
+ * 像素签名诊断：给定（已降级的）图字节，返回 recognizeExact 的内部统计
+ * （采样点数、B 通道分布、矢量半径分布），用来调签名阈值。
+ */
+export async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none" });
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  ctx.drawImage(bitmap, 0, 0);
+  const px = ctx.getImageData(0, 0, w, h).data;
+  bitmap.close();
+  canvas.width = 0;
+  canvas.height = 0;
+  const rows = Math.floor(h / 2);
+  const stepX = Math.max(1, Math.floor(w / 48));
+  const stepY = Math.max(1, Math.floor(rows / 24));
+  let total = 0;
+  let okB = 0;
+  let okR = 0;
+  let ok = 0;
+  let bMax = 0;
+  let rMin = 1e9;
+  let rMax = 0;
+  for (let y = 0; y < rows; y += stepY)
+    for (let x = 0; x < w; x += stepX) {
+      const p = ((rows + y) * w + x) * 4;
+      total++;
+      const b = px[p + 2]!;
+      if (b > bMax) bMax = b;
+      if (b <= 48) okB++;
+      const cr = px[p]! - 127.5;
+      const cs = px[p + 1]! - 127.5;
+      const r = Math.sqrt(cr * cr + cs * cs);
+      if (r < rMin) rMin = r;
+      if (r > rMax) rMax = r;
+      if (r >= 20 && r <= 200) okR++;
+      if (b <= 48 && r >= 20 && r <= 200) ok++;
+    }
+  const hit = await imageToSpectrum(new Blob([bytes.slice()]), "untitled.bin");
+  return (
+    `${w}×${h} rows=${rows} 采样 ${total}  B≤48: ${((okB / total) * 100).toFixed(0)}% (max ${bMax})  ` +
+    `半径20-200: ${((okR / total) * 100).toFixed(0)}% (${rMin.toFixed(0)}..${rMax.toFixed(0)})  ` +
+    `全过: ${((ok / total) * 100).toFixed(0)}%  → 认图 ${hit.mode}${hit.guessed ? "/guessed" : ""} rel=${hit.phaseReliability?.toFixed(2) ?? "-"}`
+  );
+}
+
+/** 端到端签名诊断：exact 编码 → 指定方式降级 → 签名统计。 */
+export async function sigProbe(
+  srcPcm: Samples,
+  srcSr: number,
+  via: Case["via"],
+): Promise<string> {
+  const enc: Encode = { mode: "exact", sr: 0, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 };
+  const sr = srcSr;
+  const tuned = resample(slice(srcPcm, srcSr, 0, 0), srcSr, sr, 0);
+  const spec = await encode(tuned, sr, enc);
+  const png = await spectrumToPng(spec);
+  const anon = via.endsWith("-anon");
+  const viaKey = (anon ? via.slice(0, -5) : via) as Case["via"];
+  const isJpeg = viaKey.startsWith("jpeg");
+  const degraded = await degrade(
+    png,
+    viaKey,
+    isJpeg ? "untitled.jpg" : "untitled.png",
+  );
+  return sigProbeBlob(new Uint8Array(await degraded.arrayBuffer()));
+}
+
+/** 单独体检：各 bit 深的索引色 PNG 能不能被浏览器原样解回来。 */export async function pngCheck(bits: number[]): Promise<string[]> {
   const out: string[] = [];
   for (const b of bits) {
     const frames = 37;

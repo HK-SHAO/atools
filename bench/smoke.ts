@@ -1,4 +1,4 @@
-/** 界面冒烟：定宽起页面 → 点内置示例 → 点验损 → 点频谱图试跳转，只报控制台错误。 */
+/** 界面冒烟：定宽起页面 → 点内置示例 → 点质检 → 点频谱图试跳转，只报控制台错误。 */
 
 const CHROME =
   "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
@@ -129,9 +129,9 @@ try {
   `);
   await shot("playing");
 
-  // 验损
+  // 质检
   await ev(`
-    const b = [...document.querySelectorAll('button')].find(x => /验损/.test(x.textContent ?? ""));
+    const b = [...document.querySelectorAll('button')].find(x => /质检/.test(x.textContent ?? ""));
     b?.click();
     return "";
   `);
