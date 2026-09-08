@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clock } from "./usePlayback";
 
-/** 最长录约 100 秒：即便麦克风是 48kHz，紧凑模式默认窗下也压在频谱图帧数上限内，
- *  不会录完却因"超过 20000 帧"而编码失败。 */
+/** 最长录约 100 秒：即便 48kHz，紧凑默认窗也压在频谱图帧数上限内，不会录完却编码失败。 */
 const MAX_SECONDS = 100;
 
 export interface CapturedSamples {
@@ -19,14 +18,49 @@ function audioCtor(): typeof AudioContext | undefined {
 }
 
 /**
- * 麦克风录制：直接抓单声道 PCM（不走"容器编码 → decodeAudioData 再解码"的弯路）。
+ * 采集 worklet：把输入拷贝攒批，经 port 发回主线程。
+ * 以 Blob 内联加载 —— 不需要独立 worklet 文件，构建零配置。
+ * process() 从不写输出：节点直连 destination 也只送静音（无回声），
+ * 同时保证节点被渲染图持续拉取 —— 这是官方的 mic-capture 模式。
+ */
+const CAPTURE_CODE = `
+class MicCapture extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.batch = new Float32Array(2048);
+    this.fill = 0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (input && input[0]) {
+      const ch = input[0];
+      let i = 0;
+      while (i < ch.length) {
+        const n = Math.min(ch.length - i, this.batch.length - this.fill);
+        this.batch.set(ch.subarray(i, i + n), this.fill);
+        this.fill += n;
+        i += n;
+        if (this.fill === this.batch.length) {
+          this.port.postMessage(this.batch.slice(0));
+          this.fill = 0;
+        }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("mic-capture", MicCapture);
+`;
+
+/**
+ * 麦克风录制：AudioWorklet 直采单声道 PCM。
  *
- * 之所以不落容器：Safari 等浏览器的 MediaRecorder 产物（mp4/aac）经常让
- * decodeAudioData 抛出 "Unable to decode audio data"，录音几秒就崩在"解不出这段音频"。
- * 这里走 Web Audio 采集图，onaudioprocess 里把采样直接攒成 Float32，
- * 拿到的就是我们要的素材，零编解码依赖、跨浏览器一致。
- *
- * 只管采集与收尾，结果经 onCaptured 交出去；卸载时静默丢弃，绝不回调已死的组件。
+ * 为什么不用 MediaRecorder：它产 webm/mp4 容器，Safari 等浏览器的产物
+ * decodeAudioData 经常解不开（"Unable to decode audio data"），录完就崩。
+ * 为什么不用 ScriptProcessorNode：deprecated，且 Safari 上
+ * MediaStreamSource → ScriptProcessor 有出全零的著名 bug。
+ * AudioWorklet（Chrome 66+ / Firefox 76+ / Safari 14.1+）是当下的标准做法：
+ * 渲染线程里拷采样，主线程只收批，可靠且不卡 UI。
  */
 export function useMic(onCaptured: (s: CapturedSamples) => void) {
   const [recording, setRecording] = useState(false);
@@ -35,15 +69,16 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
 
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
-  const nodeRef = useRef<ScriptProcessorNode | null>(null);
-  const gainRef = useRef<GainNode | null>(null);
-  const chunksRef = useRef<Float32Array[]>([]);
+  const nodeRef = useRef<AudioWorkletNode | null>(null);
+  const srcRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const chunksRef = useRef<Float32Array<ArrayBuffer>[]>([]);
   const totalRef = useRef(0);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onRef = useRef(onCaptured);
   onRef.current = onCaptured;
-  const disposedRef = useRef(false);
+  const deadRef = useRef(false);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -52,23 +87,26 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
     }
   };
 
-  /** 停掉采集图、灭灯、收掉流与 AudioContext。不发射结果。 */
+  /** 停图、灭灯、收掉流与 AudioContext。不发射结果。 */
   const stopGraph = useCallback(() => {
     clearTimer();
     const node = nodeRef.current;
     nodeRef.current = null;
     if (node) {
-      node.onaudioprocess = null;
+      node.port.onmessage = null;
       try {
         node.disconnect();
       } catch {
         /* 已断开 */
       }
     }
-    gainRef.current?.disconnect();
-    gainRef.current = null;
+    srcRef.current?.disconnect();
+    srcRef.current = null;
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
+    const url = urlRef.current;
+    urlRef.current = null;
+    if (url) URL.revokeObjectURL(url);
     const ctx = ctxRef.current;
     ctxRef.current = null;
     void ctx?.close();
@@ -89,76 +127,89 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
     totalRef.current = 0;
     stopGraph();
     setRecording(false);
-    if (total > 0 && !disposedRef.current) onRef.current({ pcm, sr, name: `录音 ${clock(seconds)}` });
+    // 本会话就此作废；下次 start 复位。StrictMode 的挂载-卸载-再挂载会让 cleanup
+    // 提前跑一次 —— 不复位的话录完永远不交付，这正是上一版的坑。
+    // 置位还堵住一个竞态：权限弹窗还挂着时收场，start 的后续代码不得再建图。
+    const deliver = total > 0 && !deadRef.current;
+    deadRef.current = true;
+    if (deliver) onRef.current({ pcm, sr, name: `录音 ${clock(seconds)}` });
   }, [recording, seconds, stopGraph]);
 
   const start = useCallback(async () => {
     setError(null);
     if (recording) return; // 防重入：采集中的再点一次直接忽略
-    if (!navigator.mediaDevices?.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia || !audioCtor()) {
       setError("这个浏览器不支持录音");
       return;
     }
+    deadRef.current = false;
+
+    // 先亮 UI：点下立刻进"录制中"，权限弹窗、建图的等待不再让人以为没点上。
+    setSeconds(0);
+    setRecording(true);
+    timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000);
 
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
     } catch (e) {
+      stopGraph();
+      setRecording(false);
       const name = e instanceof DOMException ? e.name : "";
       setError(name === "NotAllowedError" ? "没给麦克风权限" : "打不开麦克风");
       return;
     }
-
-    const Ctor = audioCtor();
-    if (!Ctor) {
+    if (deadRef.current) {
+      // 等权限期间被收场/卸载了：把刚拿到的流也停掉，静默退出。
       stream.getTracks().forEach(t => t.stop());
-      setError("这个浏览器不支持录音");
       return;
     }
 
+    const Ctor = audioCtor()!;
     const ctx = new Ctor();
     try {
       await ctx.resume();
     } catch {
-      /* 某些浏览器在用户手势里 resume 才生效，失败也无妨 */
+      /* 用户手势里创建的上下文通常会自动运行，失败无妨 */
     }
 
     try {
-      const srcNode = ctx.createMediaStreamSource(stream);
-      // ScriptProcessor 是 deprecated 但仍全平台可用、且零额外模块；
-      // 必须接到 destination 才会触发 onaudioprocess，中间串一个静音 gain 防回声/外放。
-      const proc = ctx.createScriptProcessor(4096, 1, 1);
-      const gain = ctx.createGain();
-      gain.gain.value = 0;
+      const url = URL.createObjectURL(new Blob([CAPTURE_CODE], { type: "application/javascript" }));
+      urlRef.current = url;
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      urlRef.current = null;
 
-      chunksRef.current = [];
-      totalRef.current = 0;
-      proc.onaudioprocess = ev => {
-        const ch = ev.inputBuffer.getChannelData(0);
-        const copy = new Float32Array(ch.length);
-        copy.set(ch);
-        chunksRef.current.push(copy);
-        totalRef.current += copy.length;
+      const node = new AudioWorkletNode(ctx, "mic-capture");
+      node.port.onmessage = (ev: MessageEvent) => {
+        const data = ev.data as Float32Array<ArrayBuffer>;
+        chunksRef.current.push(data);
+        totalRef.current += data.length;
       };
+      const src = ctx.createMediaStreamSource(stream);
+      src.connect(node);
+      // worklet 不写输出 → 直连 destination 也只送静音：无回声，且节点保证被拉取。
+      node.connect(ctx.destination);
 
-      srcNode.connect(proc);
-      proc.connect(gain);
-      gain.connect(ctx.destination);
+      if (deadRef.current) {
+        // 等权限/建图期间组件被卸载了：静默收尾。
+        stopGraph();
+        return;
+      }
 
       streamRef.current = stream;
       ctxRef.current = ctx;
-      nodeRef.current = proc;
-      gainRef.current = gain;
-
-      setSeconds(0);
-      setRecording(true);
-      timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000);
+      nodeRef.current = node;
+      srcRef.current = src;
+      chunksRef.current = [];
+      totalRef.current = 0;
+      setSeconds(0); // 计时从真正开始采集这一刻起算
     } catch {
-      stream.getTracks().forEach(t => t.stop());
-      void ctx.close();
+      stopGraph();
+      setRecording(false);
       setError("这个浏览器不支持录音");
     }
-  }, [recording]);
+  }, [recording, stopGraph]);
 
   // 到上限自动停。
   useEffect(() => {
@@ -168,7 +219,7 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
   // 卸载时静默收尾，别让麦克风一直亮着、也别向已死的组件回调。
   useEffect(
     () => () => {
-      disposedRef.current = true;
+      deadRef.current = true;
       clearTimer();
       chunksRef.current = [];
       totalRef.current = 0;
