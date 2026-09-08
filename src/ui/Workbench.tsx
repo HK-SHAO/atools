@@ -101,9 +101,21 @@ export function Workbench({
   );
   const [loss, setLoss] = useState<LossRow[] | null>(null);
   const [checking, setChecking] = useState(false);
+  // 区间输入走草稿态：敲字只改本地草稿，失焦/回车才提交，避免每敲一键就重跑整条流水线。
+  const [range, setRange] = useState<{ start: string; end: string } | null>(null);
 
   // 参数一变，上一次的自检就作废了。
   useEffect(() => setLoss(null), [spec]);
+  // 外部改了区间（裁静音、换参数），丢掉正在编辑的草稿。
+  useEffect(() => setRange(null), [enc.start, enc.end]);
+
+  const commitRange = () => {
+    if (!range) return;
+    const start = Math.max(0, Number(range.start) || 0);
+    const end = Math.max(0, Number(range.end) || 0);
+    setRange(null);
+    if (start !== enc.start || end !== enc.end) onEnc({ ...enc, start, end });
+  };
 
   const check = useCallback(async () => {
     setChecking(true);
@@ -131,6 +143,9 @@ export function Workbench({
   const note = MODE_NOTE[mode];
 
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
+
+  /** 止 = 0 表示到结尾，输入框里显示空、占位符 -1。 */
+  const endShown = (end: number): string => (end === 0 ? "" : String(end));
 
   const fmaxOptions: Option<number>[] = FMAX_OPTIONS.filter(hz => hz === 0 || hz < nyquist).map(
     hz => ({ value: hz, label: hzLabel(hz) }),
@@ -246,8 +261,14 @@ export function Workbench({
                 min={0}
                 max={duration}
                 step={0.1}
-                value={enc.start}
-                onChange={e => set("start", Math.max(0, Number(e.target.value) || 0))}
+                value={range ? range.start : String(enc.start)}
+                onChange={e =>
+                  setRange({ start: e.target.value, end: range ? range.end : endShown(enc.end) })
+                }
+                onBlur={commitRange}
+                onKeyDown={e => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
               />
             </label>
             <label className="num">
@@ -257,9 +278,15 @@ export function Workbench({
                 min={0}
                 max={duration}
                 step={0.1}
-                value={enc.end === 0 ? "" : enc.end}
+                value={range ? range.end : endShown(enc.end)}
                 placeholder="-1"
-                onChange={e => set("end", Math.max(0, Number(e.target.value) || 0))}
+                onChange={e =>
+                  setRange({ start: range ? range.start : String(enc.start), end: e.target.value })
+                }
+                onBlur={commitRange}
+                onKeyDown={e => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
               />
             </label>
             <button type="button" className="chip" onClick={onTrim}>

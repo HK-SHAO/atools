@@ -4,7 +4,7 @@ import type { Samples } from "./lib/arrays";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "./lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
-import { Aborted, encode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
+import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
 import { useContainerScale } from "./ui/useContainerScale";
 import { useMic, type CapturedSamples } from "./ui/useMic";
 import { clock } from "./ui/usePlayback";
@@ -54,6 +54,7 @@ export function App() {
   const [mode, setMode] = useState<ReadMode>("compact");
   const [stage, setStage] = useState<Stage>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const genRef = useRef(0);
 
@@ -61,6 +62,7 @@ export function App() {
   useEffect(() => {
     if (!source) {
       setJob(null);
+      setHint(null);
       return;
     }
     let cancelled = false;
@@ -69,8 +71,17 @@ export function App() {
     void (async () => {
       setStage({ label: "转换", value: 0.05 });
       try {
-        const sr = enc.sr > 0 ? enc.sr : source.sr;
         const clipped = slice(source.pcm, source.sr, enc.start, enc.end);
+        // 载入优先：素材超上限就自动降采样率让它放得下，而不是报错拒载。
+        // 改了参数就交给 effect 用新 enc 重跑，本次不再往下走。
+        const fit = fitEncode(enc, source.sr, clipped.length);
+        if (fit.enc !== enc) {
+          setHint(fit.note);
+          setEnc(fit.enc);
+          return;
+        }
+        setHint(null);
+        const sr = enc.sr > 0 ? enc.sr : source.sr;
         const tuned = resample(clipped, source.sr, sr, enc.mode === "compact" ? enc.fmax : 0);
         if (cancelled) return;
         await nextFrame();
@@ -258,6 +269,7 @@ export function App() {
             </span>
           </p>
         )}
+        {hint && <p className="note">{hint}</p>}
         {error && <p className="note is-error">{error}</p>}
 
         <footer className="foot">

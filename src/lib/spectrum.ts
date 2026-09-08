@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { FFT, hannWindow } from "./fft";
-import { dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { rtisiLa } from "./rtisi";
 
@@ -109,6 +109,46 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   if (frames * bins * bands > MAX_PIXELS) throw new Error("频谱图太大了：调低精度或采样率");
 
   return { win, hop, frames, bins, samples };
+}
+
+/** 和 shapeFor 同一套判断，但不抛错：放得下返回 true。 */
+function fits(enc: Encode, sr: number, samples: number): boolean {
+  const bins = rowsFor(winOf(enc), sr, enc.mode === "compact" ? enc.fmax : 0);
+  const frames = Math.floor(Math.max(1, samples) / hopOf(enc)) + 1;
+  const bands = enc.mode === "exact" ? BANDS : 1;
+  return frames <= MAX_FRAMES && frames * bins * bands <= MAX_PIXELS;
+}
+
+/**
+ * 载入优先：素材超限时自动降采样率让它放得下，而不是甩错误拒载。
+ * srcSamples 是裁剪后、重采样前的样本数；各候选采样率下的帧数按比例折算。
+ */
+export function fitEncode(
+  e: Encode,
+  srcSr: number,
+  srcSamples: number,
+): { enc: Encode; note: string | null } {
+  const want = e.sr > 0 ? e.sr : srcSr;
+  // 从想要的目标往下试：32k → 16k → 8k。
+  const lower = (SR_OPTIONS as readonly number[])
+    .filter(s => s > 0 && s < want)
+    .sort((a, b) => b - a);
+  for (const sr of [want, ...lower]) {
+    if (fits(e, sr, Math.ceil((srcSamples * sr) / srcSr) + hopOf(e))) {
+      if (sr === want) return { enc: e, note: null };
+      return {
+        enc: { ...e, sr, fmax: e.fmax >= sr / 2 ? 0 : e.fmax },
+        note: `素材较长，采样率已自动降为 ${srLabel(sr)}；想用更高精度可先裁剪区间`,
+      };
+    }
+  }
+  // 连 8k 都放不下（超长录音）：只取放得下的前一段。
+  const sr = 8000;
+  const secs = Math.floor((MAX_FRAMES * hopOf(e)) / sr);
+  return {
+    enc: { ...e, sr, fmax: 0, end: e.start + secs },
+    note: `素材过长，已降为 ${srLabel(sr)} 并只取前 ${secs} 秒`,
+  };
 }
 
 /** 一段窗口化 FFT 的复用缓冲区，避免每帧新建。 */

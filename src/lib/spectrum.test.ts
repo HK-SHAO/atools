@@ -3,7 +3,7 @@ import type { Samples } from "./arrays";
 import { FFT } from "./fft";
 import { exactPixels, metaFromName, metaToText, sampleBand, textToMeta } from "./image";
 import { indexedPng, isPng, readMeta, withMeta } from "./png";
-import { BANDS, encode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
+import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { resample, silenceBounds, slice } from "./resample";
 
@@ -317,6 +317,30 @@ describe("shape", () => {
   test("refuses oversized requests", () => {
     expect(() => shapeFor(VOICE, 8000, 8000 * 700)).toThrow();
     expect(() => shapeFor({ ...VOICE, fineness: 2 }, 44100, 44100 * 600)).toThrow();
+  });
+
+  test("fitEncode downsamples long audio instead of refusing it", () => {
+    // fade.m4a 场景：约 4.4 分钟 44.1kHz，默认参数会出 4.5 万帧。
+    const samples = 44100 * 264;
+    expect(() => shapeFor(VOICE, 44100, samples)).toThrow();
+
+    const fit = fitEncode(VOICE, 44100, samples);
+    expect(fit.note).not.toBeNull();
+    expect(fit.enc.sr).toBe(16000);
+    // 适配后的参数必须真的放得下（样本数按比例折算）。
+    const tuned = shapeFor(fit.enc, fit.enc.sr, Math.ceil((samples * fit.enc.sr) / 44100));
+    expect(tuned.frames).toBeLessThanOrEqual(20000);
+    expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
+
+    // 短素材不动参数。
+    const short = fitEncode(VOICE, 44100, 44100 * 30);
+    expect(short.enc).toEqual(VOICE);
+    expect(short.note).toBeNull();
+
+    // 超长素材：降 8k 并裁掉多余区间。
+    const huge = fitEncode(VOICE, 44100, 44100 * 3600);
+    expect(huge.enc.sr).toBe(8000);
+    expect(huge.enc.end - huge.enc.start).toBeLessThanOrEqual((20000 * hopOf(huge.enc)) / 8000);
   });
 
   test("budget holds for sane lengths", () => {
