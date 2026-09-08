@@ -8,16 +8,52 @@ export interface Decoded {
   sr: number;
 }
 
+/**
+ * 按文件头认音频容器。返回人话格式名，decode 失败时给用户指路用。
+ * 手机录音的高频坑：微信语音（AMR/SILK）、通话录音（3GP/AMR）浏览器根本
+ * 不带解码器，裸报 "Unable to decode audio data" 等于没说。
+ */
+export function sniffAudio(b: Uint8Array): string {
+  const ascii = (at: number, len: number): string =>
+    String.fromCharCode(...b.subarray(at, at + len));
+  if (b.length > 12) {
+    const brand = ascii(8, 4);
+    if (brand.startsWith("3gp")) return "3GP（手机通话录音常用）";
+    if (ascii(4, 4) === "ftyp") return "M4A/MP4";
+  }
+  if (ascii(0, 5) === "#!AMR") return "AMR（微信等语音常用）";
+  if (ascii(1, 9) === "#!SILK_V3" || ascii(0, 9) === "#!SILK_V3") return "SILK（微信语音专有）";
+  if (ascii(0, 4) === "OggS") return "OGG";
+  if (ascii(0, 4) === "fLaC") return "FLAC";
+  if (ascii(0, 4) === "RIFF") return "WAV";
+  if (ascii(0, 3) === "ID3" || (b[0] === 0xff && (b[1]! & 0xe0) === 0xe0)) return "MP3";
+  return "";
+}
+
+const DECODE_HELP =
+  "支持 m4a、mp3、wav、ogg、flac。若来自微信或通话录音，请先用录音 App 另存为这些格式";
+
+/** decodeAudioData 的回调式包装 —— 旧 webkit 实现不认 Promise 形式，
+ *  调了既不报错也不回调（永远挂起），回调式在所有实现上都可用。 */
+function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
+  return new Promise((ok, no) => {
+    void ctx.decodeAudioData(data, ok, err =>
+      no(err instanceof Error ? err : new Error(String(err ?? "解码失败"))),
+    );
+  });
+}
+
 export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
   const Ctor =
     window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("这个浏览器不支持 Web Audio");
 
+  const head = sniffAudio(new Uint8Array(data));
   const ctx = new Ctor();
   try {
     // data 会被 decodeAudioData 拿走所有权，先留一份副本，
     // 免得调用方还想拿同一份字节干别的事时拿到空的。
-    const buffer = await ctx.decodeAudioData(data.slice(0));
+    const buffer = await decodeRaw(ctx, data.slice(0));
     const tracks = buffer.numberOfChannels;
     const n = buffer.length;
     if (n === 0) throw new Error("这段音频是空的");
@@ -38,7 +74,11 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
     return { pcm, sr: buffer.sampleRate };
   } catch (e) {
     if (e instanceof Error && /空/.test(e.message)) throw e;
-    throw new Error(`解不出这段音频：${e instanceof Error ? e.message : String(e)}`);
+    // Chrome 的原始报错 "Unable to decode audio data" 对用户没有信息量，
+    // 换成格式 + 出路的说法。Flac/ogg 在 Safari 老版本解不开也走这里。
+    if (head === "AMR（微信等语音常用）" || head === "SILK（微信语音专有）" || head.startsWith("3GP"))
+      throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
+    throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
   } finally {
     void ctx.close();
   }

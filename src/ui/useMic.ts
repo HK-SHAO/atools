@@ -135,11 +135,49 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
     if (deliver) onRef.current({ pcm, sr, name: `录音 ${clock(seconds)}` });
   }, [recording, seconds, stopGraph]);
 
+  /** 麦克风失败的一句话解释。区分：非安全环境 / 内嵌窗口没授权 / 权限被拒 / 设备被占。 */
+  function explainMicError(e: unknown): string {
+    const name = e instanceof DOMException ? e.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      // 内嵌 iframe（预览面板、聊天内置浏览器）没有麦克风授权时，
+      // 就算系统权限已给、getUserMedia 也一律拒绝 —— Android 上的高频坑。
+      const inFrame = window.self !== window.top;
+      if (inFrame) return "当前窗口不给录音：本页嵌在别的页面里。请在浏览器中单独打开本站再录";
+      return "麦克风权限被拒了：请在浏览器地址栏的权限设置里允许麦克风，然后重试";
+    }
+    if (name === "NotReadableError" || name === "TrackStartError")
+      return "麦克风被占用：请关掉其他正在录音或通话的程序再试";
+    if (name === "OverconstrainedError") return "这个设备的麦克风参数不支持";
+    return "打不开麦克风";
+  }
+
+  /** 打开麦克风流。先按单声道请求，设备不认就退回默认参数。 */
+  async function openStream(): Promise<MediaStream> {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: { ideal: 1 }, echoCancellation: false, noiseSuppression: false },
+      });
+    } catch (e) {
+      const name = e instanceof DOMException ? e.name : "";
+      if (name === "OverconstrainedError" || name === "NotFoundError") {
+        // 部分安卓设备对任何硬参数都不认 —— 裸请求必成。
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      throw e;
+    }
+  }
+
   const start = useCallback(async () => {
     setError(null);
     if (recording) return; // 防重入：采集中的再点一次直接忽略
     if (!navigator.mediaDevices?.getUserMedia || !audioCtor()) {
       setError("这个浏览器不支持录音");
+      return;
+    }
+    if (window.isSecureContext === false) {
+      // getUserMedia 只在 https / localhost 存在。手机用局域网 IP 访问开发
+      // 服务器时正是这种场景，提前说明比一句「不支持」有用。
+      setError("录音需要安全环境：请用 https 或在本机 localhost 打开本页");
       return;
     }
     deadRef.current = false;
@@ -151,12 +189,11 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+      stream = await openStream();
     } catch (e) {
       stopGraph();
       setRecording(false);
-      const name = e instanceof DOMException ? e.name : "";
-      setError(name === "NotAllowedError" ? "没给麦克风权限" : "打不开麦克风");
+      setError(explainMicError(e));
       return;
     }
     if (deadRef.current) {
