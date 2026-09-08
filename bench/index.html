@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>bench</title>
+  </head>
+  <body>
+    <pre id="out">loading…</pre>
+    <script type="module">
+      import * as Bench from "/bundle.js";
+      window.Bench = Bench;
+      document.getElementById("out").textContent = "ready";
+    </script>
+  </body>
+</html>

@@ -1,21 +1,105 @@
-# bun-react-tailwind-template
+# atools · 频谱
 
-To install dependencies:
+把音频变成可下载的频谱图，把频谱图还原成可播放的音频 —— 双向可逆，可调压缩比。
 
 ```bash
 bun install
+bun dev          # http://localhost:3000
+bun start        # 生产
+bun test         # 算法 / 元数据测试
+bun run build    # 产物到 dist/
 ```
 
-To start a development server:
+把音频或本工具导出的图拖进页面即可。频谱图本身就是进度条 —— 点或拖到任意位置跳转，左右方向键微调。
 
-```bash
-bun dev
+## 两种模式
+
+| | 紧凑（默认） | 可逆 |
+| -- | -- | -- |
+| 图里藏的是什么 | 一张纯粹的频谱图：时间 × 频率，暖色深浅表示幅度 | 上 1/4 是频谱图，下面三段额外存幅度精度与相位 |
+| 存多少信息 | 幅度，按位深（1–8 bit）量化 | 16 bit 幅度 + 16 bit 相位 |
+| 还原音频 | Griffin-Lim 迭代补相位 | 直接逆 STFT |
+| 文件大小 | 几 KB ~ 几十 KB | 几百 KB |
+| 默认参数 | 8 kHz、4 bit、N=256（人声够用） | 同源采样率、N=1024、4× 重叠 |
+
+紧凑模式的图就是频谱图本身 —— 上面暖色、下面深色、里面是频谱。相位没藏，所以读图永远不靠"取巧"，随便转格式、随便改尺寸、随便找一张陌生图片丢进来，工具都能出声。
+
+## 转换参数
+
+每一项都跟着改下面的事实行（`xx Hz · 帧 × 行 · 位深 · 动态范围 · 实际大小 · 时长`）和频谱图本身。
+
+| 参数 | 默认 | 说明 |
+| -- | -- | -- |
+| 模式 | 紧凑 / 可逆 | 见上表 |
+| 采样率 | 8 k / 16 k / 32 k / 原 | 降采样同时把带宽也裁了 |
+| 位深 | 2 / 4 / 6 / 8 bit | 紧凑模式才有效；动态范围自动 = 12·位深 dB |
+| 精度 | 省 / 中 / 细 | 调整窗口大小与跳距（256/2、512/2、1024/4） |
+| 上限 | 全 / 2k / 4k / 6k / 8k Hz | 紧凑模式才有效；超过奈奎斯特的选项自动隐藏 |
+| 区间 | 起 / 止 | 时间裁剪，单位秒；"裁静音"自动找首尾静默边界 |
+
+### 文件大小参考
+
+12 秒合成人声（1033 KB 的 16-bit PCM）：
+
+| 模式 | 采样率 | 位深 | 窗口 | 帧 × 行 | PNG |
+| -- | -- | -- | -- | -- | -- |
+| 紧凑 | 8 k | 2 bit | 256 | 751 × 129 | 2.8 KB |
+| 紧凑 | 8 k | 4 bit | 256 | 751 × 129 | 26 KB |
+| 紧凑 | 8 k | 8 bit | 256 | 751 × 129 | 87 KB |
+| 紧凑 | 16 k | 4 bit | 256 | 1501 × 129 | 41 KB |
+| 紧凑 | 32 k | 6 bit | 512 | 1501 × 257 | 243 KB |
+| 可逆 | 44.1 k | — | 1024 | 2068 × 2052 | ≈ 900 KB |
+
+紧凑模式的 PNG 走真索引色（位深几 bit，调色板就 2ⁿ 个颜色），所以 4-bit 紧凑图的字节数是 4-bit RGB8 PNG 的六分之一左右。
+
+## 四档解码
+
+任何一张图都能出声，工具按可用信息自动选档：
+
+- **精确**（可逆图，无损容器，尺寸对得上）：16 位幅度 + 16 位相位直接逆变换，SNR ≈ 89 dB
+- **紧凑**（我们出的紧凑图，无损容器，尺寸对得上）：幅度按亮度反查，相位 Griffin-Lim 补
+- **降级**（我们出的图但被改过：转 JPEG、缩放、改名）：同上，但要重采样
+- **通用**（完全陌生）：整张当幅度读，Griffin-Lim 补相位
+
+文件名里写着一份元数据（`name_SR8000_N256_H128_F626_L50000_B4.{png,jpg,webp,...}`）作为 tEXt 丢失后的兜底，所以转格式、改尺寸之后只要名字还在就还认得出。
+
+### 紧凑链路的质量
+
+3 秒合成信号（双音 + 扫频 + 噪声），4 bit 紧凑图：
+
+| 步骤 | 局部相关 | 谱形 SNR |
+| -- | -- | -- |
+| 原信号 vs 8 kHz 重采样 | — | — |
+| 紧凑图还原（Griffin-Lim 64 轮 + 动量） | 0.70 | 21 dB |
+| 8 bit 紧凑图还原 | 0.89 | 25 dB |
+| 可逆模式还原 | 0.999 | 89 dB |
+
+## 设计与动效
+
+颜色、字、间距、圆角、动效全部走容器相对单位 `var(--u)`：根字号从 14 px（窄屏）到 19 px（宽屏）之间随挂载容器宽高连续变化。暖纸底、毛玻璃卡片、贴纸按钮、squircle 圆角的具体规范见 `~/.workbuddy/skills/warm-paper-ui/SKILL.md`。
+
+## 结构
+
 ```
-
-To run for production:
-
-```bash
-bun start
+src/
+  index.html / index.ts        server + 入口
+  frontend.tsx / App.tsx       React 外壳
+  index.css                    设计令牌（暖纸 + 毛玻璃）
+  lib/
+    fft.ts                     radix-2 复数 FFT
+    palette.ts                 调色板：保证 G==level，亮度严格单调
+    params.ts                  转换参数模型 + 默认值
+    resample.ts                加窗 sinc 重采样（兼作低通）+ 时间裁剪 + 找静音
+    spectrum.ts                STFT 编解码 + Griffin-Lim（核心）
+    png.ts                     PNG tEXt 块注入、读取，索引色 PNG 编码（1/2/4/6/8 bit）
+    wav.ts                     16-bit PCM 单声道 WAV
+    audio.ts                   浏览器音频解码（多声道降混单声道） + 示例
+    image.ts                   频谱 ↔ 图片、容器嗅探、文件头 fallback
+  ui/
+    useContainerScale.ts       按容器宽度写 --u
+    usePlayback.ts             Web Audio 播放 + 进度 ref，懒建 ctx
+    raster.ts                  频谱最大池化 + 显示栅格
+    Spectrogram.tsx            频谱图即进度条
+    Workbench.tsx              加载后的工作台
+    Row.tsx                    通用一行参数（标签 + 一排小按钮）
 ```
-
-This project was created using `bun init` in bun v1.4.3. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

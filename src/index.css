@@ -2,49 +2,495 @@
 
 @layer base {
   :root {
-    @apply text-[rgba(255,255,255,0.87)] bg-[#242424] font-sans;
+    /* 由 useContainerScale 按挂载容器的实际尺寸覆盖，这里只是首帧兜底 */
+    --u: 16px;
+    --c-vw: 3.75px;
+    --c-vh: 6.67px;
+
+    --paper: #fdf7ec;
+    --ink: #3d3427;
+    --soft: #8a7d68;
+    --line: rgba(61, 52, 39, 0.13);
+    --glass: rgba(255, 252, 245, 0.66);
+    --glass-line: rgba(255, 255, 255, 0.6);
+
+    --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.625 * var(--u)) rgba(61, 52, 39, 0.06);
+    --shadow-card: 0 calc(0.5 * var(--u)) calc(1.375 * var(--u)) rgba(61, 52, 39, 0.07);
+    --blur: blur(calc(0.75 * var(--u))) saturate(1.2);
+
+    --r-sm: calc(0.375 * var(--u));
+    --r-md: calc(0.75 * var(--u));
+    --r-lg: calc(1 * var(--u));
+    --r-pill: calc(62.5 * var(--u));
+
+    --font: ui-rounded, -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
+      system-ui, sans-serif;
+
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
   }
 
   body {
-    @apply grid place-items-center min-w-[320px] min-h-screen relative m-0;
+    margin: 0;
   }
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  opacity: 0.05;
-  background: url("./logo.svg");
-  background-size: 256px;
-  transform: rotate(-12deg) scale(1.35);
-  animation: slide 30s linear infinite;
-  pointer-events: none;
+@layer components {
+  .app {
+    position: relative;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    isolation: isolate;
+    background:
+      radial-gradient(circle at 18% 12%, rgba(255, 196, 83, 0.3), transparent 44%),
+      linear-gradient(180deg, #fff8ea 0%, #f8e6c4 100%);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: var(--u);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    text-autospace: normal;
+  }
+
+  .shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: calc(0.75 * var(--u));
+    width: 100%;
+    /* 不设上限：宽屏就整幅铺开，参数区自己横向排开，别把空间浪费在两边留白上。 */
+    margin: 0 auto;
+    padding-top: max(calc(1.25 * var(--u)), env(safe-area-inset-top, 0px));
+    padding-bottom: max(calc(1.5 * var(--u)), env(safe-area-inset-bottom, 0px));
+    padding-left: max(calc(1 * var(--u)), env(safe-area-inset-left, 0px));
+    padding-right: max(calc(1 * var(--u)), env(safe-area-inset-right, 0px));
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    gap: calc(0.5 * var(--u));
+  }
+
+  .head h1 {
+    margin: 0;
+    font-size: calc(1 * var(--u));
+    font-weight: 600;
+    letter-spacing: 0.22em;
+  }
+
+  .head p {
+    margin: 0;
+    font-size: calc(0.625 * var(--u));
+    letter-spacing: 0.1em;
+    color: var(--soft);
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: calc(0.625 * var(--u));
+    padding: calc(0.875 * var(--u));
+    border: 1px solid var(--glass-line);
+    border-radius: var(--r-lg);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 频谱图即进度条 */
+  .spec {
+    position: relative;
+    width: 100%;
+    height: clamp(calc(6.5 * var(--u)), calc(24 * var(--c-vh)), calc(12 * var(--u)));
+    overflow: hidden;
+    border-radius: var(--r-md);
+    background: #1d1710;
+    box-shadow: inset 0 0 0 1px rgba(61, 52, 39, 0.16);
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  .spec-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 播放头：一根极细的亮线，不发光不抢戏。
+     left 给到百分比，再用 translateX 往回挪"自身宽度 × 进度"——
+     于是在 0% 时贴着左内沿、100% 时贴着右内沿，两头都规规矩矩待在画面里，
+     既不会探出去被裁掉，也不会压住频谱的第一列／最后一列。
+     从没动过的初始态干脆不画（opacity 0），让频谱图先是一张干净的图。 */
+  .spec-head {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: calc(0.15 * var(--u));
+    border-radius: var(--r-pill);
+    background: #fffdf7;
+    box-shadow: 0 0 0 1px rgba(29, 23, 16, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, left;
+  }
+
+  .spec:focus-visible {
+    outline: calc(0.125 * var(--u)) solid rgba(147, 200, 234, 0.8);
+    outline-offset: calc(0.125 * var(--u));
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: calc(0.5 * var(--u));
+  }
+
+  .icon-btn {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: calc(2.125 * var(--u));
+    height: calc(2.125 * var(--u));
+    padding: 0;
+    border: 1px solid var(--glass-line);
+    border-radius: var(--r-pill);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
+    box-shadow: var(--shadow-ctl);
+    color: var(--ink);
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.16s ease;
+  }
+
+  .icon-btn:active {
+    transform: scale(0.96);
+  }
+
+  .icon-btn:focus-visible {
+    outline: calc(0.125 * var(--u)) solid rgba(147, 200, 234, 0.8);
+    outline-offset: calc(0.125 * var(--u));
+  }
+
+  .ico {
+    width: calc(1 * var(--u));
+    height: calc(1 * var(--u));
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .time {
+    margin: 0;
+    font-size: calc(0.75 * var(--u));
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+
+  .facts {
+    margin: 0;
+    font-size: calc(0.625 * var(--u));
+    letter-spacing: 0.03em;
+    color: var(--soft);
+  }
+
+  /* 按钮就是按钮：描边 + 毛玻璃底的胶囊，看得出来能按。 */
+  .btn,
+  .act,
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: calc(0.1875 * var(--u)) calc(0.625 * var(--u));
+    border: 1px solid rgba(61, 52, 39, 0.16);
+    border-radius: var(--r-pill);
+    background: rgba(255, 252, 245, 0.72);
+    box-shadow: var(--shadow-ctl);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: calc(0.6875 * var(--u));
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+    line-height: 1.5;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      transform 0.1s ease,
+      box-shadow 0.16s ease,
+      border-color 0.16s ease,
+      background 0.16s ease,
+      color 0.16s ease;
+  }
+
+  .btn:active,
+  .act:active,
+  .chip:active {
+    transform: scale(0.97);
+  }
+
+  .btn:focus-visible,
+  .act:focus-visible,
+  .chip:focus-visible {
+    outline: calc(0.125 * var(--u)) solid rgba(147, 200, 234, 0.8);
+    outline-offset: calc(0.125 * var(--u));
+  }
+
+  .btn:disabled,
+  .act:disabled,
+  .chip:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(0.375 * var(--u));
+    padding-top: calc(0.625 * var(--u));
+    border-top: 1px solid var(--line);
+  }
+
+  .act {
+    padding-inline: calc(0.75 * var(--u));
+  }
+
+  .dim {
+    color: var(--soft);
+  }
+
+  /* 转换参数：窄屏一行一组；宽屏（见文件末尾）会自动排成多列。 */
+  .params {
+    display: flex;
+    flex-direction: column;
+    gap: calc(0.125 * var(--u));
+    padding-top: calc(0.625 * var(--u));
+    border-top: 1px solid var(--line);
+  }
+
+  .prow {
+    display: flex;
+    align-items: center;
+    gap: calc(0.625 * var(--u));
+    min-width: 0;
+  }
+
+  .plabel {
+    flex: none;
+    width: calc(2.5 * var(--u));
+    font-size: calc(0.625 * var(--u));
+    letter-spacing: 0.08em;
+    color: var(--soft);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(0.3125 * var(--u));
+    min-width: 0;
+  }
+
+  .chip {
+    min-width: calc(1.75 * var(--u));
+    padding-inline: calc(0.5 * var(--u));
+  }
+
+  .chip.is-on {
+    border-color: var(--ink);
+    background: var(--ink);
+    box-shadow: none;
+    color: var(--paper);
+  }
+
+  .num {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(0.25 * var(--u));
+    padding: calc(0.125 * var(--u)) calc(0.5 * var(--u));
+    border: 1px solid rgba(61, 52, 39, 0.16);
+    border-radius: var(--r-pill);
+    background: rgba(255, 252, 245, 0.72);
+    font-size: calc(0.625 * var(--u));
+    letter-spacing: 0.05em;
+    color: var(--soft);
+  }
+
+  .num input {
+    width: calc(2.125 * var(--u));
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: calc(0.6875 * var(--u));
+    font-variant-numeric: tabular-nums;
+  }
+
+  .num input:focus-visible {
+    outline: calc(0.125 * var(--u)) solid rgba(147, 200, 234, 0.8);
+    outline-offset: calc(0.125 * var(--u));
+  }
+
+  .tick {
+    font-size: calc(0.6875 * var(--u));
+    letter-spacing: 0.1em;
+  }
+
+  .drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(0.25 * var(--u));
+    padding: calc(1.75 * var(--u)) calc(1 * var(--u));
+    border: 1px dashed var(--line);
+    border-radius: var(--r-md);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.18s ease;
+  }
+
+  .drop-lead {
+    font-size: calc(0.9375 * var(--u));
+    letter-spacing: 0.04em;
+  }
+
+  .drop-sub {
+    font-size: calc(0.6875 * var(--u));
+    letter-spacing: 0.06em;
+    color: var(--soft);
+  }
+
+  .drop-act {
+    margin-top: calc(0.625 * var(--u));
+    padding: calc(0.3125 * var(--u)) calc(1.125 * var(--u));
+    border: 1px solid rgba(61, 52, 39, 0.22);
+    border-radius: var(--r-pill);
+    background: rgba(255, 252, 245, 0.78);
+    box-shadow: var(--shadow-ctl);
+    color: var(--ink);
+    font-size: calc(0.75 * var(--u));
+    letter-spacing: 0.14em;
+  }
+
+  .app.is-dragging .drop {
+    border-color: rgba(61, 52, 39, 0.3);
+  }
+
+  .note {
+    display: flex;
+    align-items: center;
+    gap: calc(0.625 * var(--u));
+    margin: 0;
+    font-size: calc(0.6875 * var(--u));
+    letter-spacing: 0.08em;
+    color: var(--soft);
+  }
+
+  .note-bar {
+    flex: 1;
+    height: calc(0.125 * var(--u));
+    border-radius: var(--r-pill);
+    background: rgba(61, 52, 39, 0.1);
+    overflow: hidden;
+  }
+
+  .note-bar > span {
+    display: block;
+    height: 100%;
+    background: rgba(61, 52, 39, 0.42);
+    transition: width 0.12s linear;
+  }
+
+  .note.is-error {
+    color: #96411f;
+  }
+
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(0.25 * var(--u)) calc(0.75 * var(--u));
+    font-size: calc(0.625 * var(--u));
+    letter-spacing: 0.04em;
+    color: var(--soft);
+  }
+
+  /*
+   * 宽屏：容器够宽就把参数横向铺开，一行放完。
+   * data-wide 由 useContainerScale 按容器实测宽度打上 —— 不靠视口猜，
+   * 因为这个 app 经常被塞进 iframe 或某个固定宽度的格子里。
+   */
+  .app[data-wide] .params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(calc(11 * var(--u)), 1fr));
+    column-gap: calc(1.25 * var(--u));
+    row-gap: calc(0.125 * var(--u));
+    align-items: center;
+  }
+
+  .app[data-wide] .card {
+    gap: calc(0.5 * var(--u));
+  }
+
+  .app[data-wide] .prow {
+    gap: calc(0.5 * var(--u));
+  }
 }
 
-@keyframes slide {
-  from {
-    background-position: 0 0;
+@media (hover: hover) {
+  .icon-btn:hover {
+    box-shadow: var(--shadow-card);
   }
-  to {
-    background-position: 256px 224px;
+
+  .act:hover:not(:disabled) {
+    border-color: rgba(61, 52, 39, 0.3);
+    box-shadow: var(--shadow-card);
+  }
+
+  .chip:hover:not(.is-on):not(:disabled) {
+    border-color: rgba(61, 52, 39, 0.34);
+  }
+
+  .drop:hover {
+    border-color: rgba(61, 52, 39, 0.26);
+  }
+
+  .app.is-dragging .drop,
+  .drop:has(input:focus-visible) {
+    border-color: rgba(61, 52, 39, 0.3);
   }
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0);
+@supports (corner-shape: squircle) {
+  .card,
+  .spec,
+  .drop {
+    corner-shape: squircle;
   }
-  to {
-    transform: rotate(360deg);
+
+  .icon-btn {
+    corner-shape: round;
   }
 }
 
-@media (prefers-reduced-motion) {
-  *,
-  ::before,
-  ::after {
-    animation: none !important;
+@media (prefers-reduced-motion: reduce) {
+  .app *,
+  .app *::before,
+  .app *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
