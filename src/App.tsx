@@ -6,6 +6,8 @@ import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
 import { Aborted, encode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
 import { useContainerScale } from "./ui/useContainerScale";
+import { useMic } from "./ui/useMic";
+import { clock } from "./ui/usePlayback";
 import { Workbench } from "./ui/Workbench";
 
 interface Source {
@@ -144,6 +146,8 @@ export function App() {
     }
   }, []);
 
+  const mic = useMic(run);
+
   const demo = useCallback(() => {
     setMode("compact");
     setEnc(e => reopen(e));
@@ -204,21 +208,36 @@ export function App() {
           />
         ) : (
           <section className="card">
-            <label className="drop">
-              <input
-                type="file"
-                accept="audio/*,image/*"
-                hidden
-                onChange={e => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void run(file);
-                }}
-              />
+            <div className="drop">
               <span className="drop-lead">拖进一段音频，或者一张图</span>
               <span className="drop-sub">mp3 · wav · flac · m4a · ogg ↔ png · jpg · webp</span>
-              <span className="drop-act">选文件</span>
-            </label>
+              <div className="drop-acts">
+                <label className="drop-act">
+                  选文件
+                  <input
+                    type="file"
+                    accept="audio/*,image/*"
+                    hidden
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) void run(file);
+                    }}
+                  />
+                </label>
+                {mic.recording ? (
+                  <button type="button" className="drop-act is-rec" onClick={mic.stop}>
+                    <span className="rec-dot" aria-hidden="true" />
+                    停止 {clock(mic.seconds)}
+                  </button>
+                ) : (
+                  <button type="button" className="drop-act" onClick={mic.start}>
+                    录制
+                  </button>
+                )}
+              </div>
+              {mic.error && <p className="drop-err">{mic.error}</p>}
+            </div>
           </section>
         )}
 

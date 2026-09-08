@@ -391,6 +391,48 @@
     border-color: rgba(61, 52, 39, 0.3);
   }
 
+  .drop-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: calc(0.375 * var(--u));
+    margin-top: calc(0.625 * var(--u));
+  }
+
+  /* 录制中：红边 + 跳动的圆点，一眼看出在录。 */
+  .drop-act.is-rec {
+    border-color: rgba(150, 65, 31, 0.5);
+    color: #96411f;
+  }
+
+  .rec-dot {
+    width: calc(0.5 * var(--u));
+    height: calc(0.5 * var(--u));
+    border-radius: 50%;
+    background: #c0392b;
+    animation: rec-pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes rec-pulse {
+    0%,
+    100% {
+      opacity: 0.3;
+      transform: scale(0.8);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+  }
+
+  .drop-err {
+    margin: calc(0.5 * var(--u)) 0 0;
+    font-size: calc(0.6875 * var(--u));
+    letter-spacing: 0.06em;
+    color: #96411f;
+  }
+
   .note {
     display: flex;
     align-items: center;
