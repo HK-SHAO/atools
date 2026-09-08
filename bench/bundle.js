@@ -684,6 +684,7 @@ function mirror(re, im, bins, size) {
 
 // src/lib/spectrum.ts
 var BANDS = 4;
+var COLOR_BANDS = 2;
 var MIN_WIN = 256;
 var MAX_WIN = 4096;
 var MAX_FRAMES = 20000;
@@ -720,7 +721,7 @@ function shapeFor(enc, sr, samples) {
   const hop = hopOf(enc);
   const bins = rowsFor(win, sr, enc.mode === "compact" ? enc.fmax : 0);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
-  const bands = enc.mode === "exact" ? BANDS : 1;
+  const bands = enc.mode === "exact" ? COLOR_BANDS : 1;
   if (frames > MAX_FRAMES)
     throw new Error(`这段会出 ${frames} 帧，超过 ${MAX_FRAMES}：裁剪区间或调低采样率`);
   if (frames * bins * bands > MAX_PIXELS)
@@ -797,11 +798,12 @@ async function encode(pcm, sr, enc, alive, onProgress) {
   const x = new Float64Array(padded);
   for (let i = 0;i < samples; i++)
     x[win / 2 + i] = pcm[i];
-  const meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
+  const meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false, color: false };
   const scale = win / 4;
   let next = 0;
   if (enc.mode === "exact") {
     meta.exact = true;
+    meta.color = true;
     const levels = new Uint8Array(frames * bins);
     const fine = new Uint8Array(frames * bins);
     const phaseCos = new Uint8Array(frames * bins);
@@ -1091,7 +1093,7 @@ function paramsForImage(frames, rows, sr, bits, ref, exact) {
   const bins = Math.min(clamped, win / 2 + 1);
   const hop = Math.max(1, Math.round(win / 4));
   const count = Math.max(1, Math.min(frames, MAX_FRAMES));
-  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact };
+  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact, color: false };
 }
 
 // src/lib/image.ts
@@ -1107,18 +1109,19 @@ function metaToText(meta) {
     meta.samples,
     meta.bits,
     Math.round(meta.ref * 10) / 10,
-    meta.exact ? 1 : 0
+    meta.exact ? 1 : 0,
+    meta.color ? 1 : 0
   ]);
 }
 function textToMeta(text) {
   try {
     const v = JSON.parse(text);
-    if (!Array.isArray(v) || v.length !== 10 || v[0] !== VERSION)
+    if (!Array.isArray(v) || v.length < 10 || v[0] !== VERSION)
       return null;
     const n = v.slice(1).map(Number);
     if (n.some((x) => !Number.isFinite(x)))
       return null;
-    const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n;
+    const [sr, win, hop, frames, bins, samples, bits, ref, exact, color] = n;
     if (sr <= 0 || win <= 0 || hop <= 0 || frames <= 0 || bins <= 0 || samples < 0)
       return null;
     if ((win & win - 1) !== 0 || win < 256 || win > 4096)
@@ -1127,16 +1130,27 @@ function textToMeta(text) {
       return null;
     if (bins > win / 2 + 1)
       return null;
-    return { sr, win, hop, frames, bins, samples, bits, ref, exact: exact === 1 };
+    return {
+      sr,
+      win,
+      hop,
+      frames,
+      bins,
+      samples,
+      bits,
+      ref,
+      exact: exact === 1,
+      color: color === 1
+    };
   } catch {
     return null;
   }
 }
 function metaFromName(name) {
-  const m = /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(name);
+  const m = /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?(?:_C(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(name);
   if (!m)
     return null;
-  const [sr, win, hop, frames, samples, bits] = [1, 2, 3, 4, 5, 6].map((i) => m[i] === undefined ? Number.NaN : Number(m[i]));
+  const [sr, win, hop, frames, samples, bits, color] = [1, 2, 3, 4, 5, 6, 7].map((i) => m[i] === undefined ? Number.NaN : Number(m[i]));
   if (![sr, win, hop, frames, samples].every((x) => Number.isFinite(x) && x > 0))
     return null;
   if ((win & win - 1) !== 0)
@@ -1151,12 +1165,13 @@ function metaFromName(name) {
     samples,
     bits: b,
     ref: 0,
-    exact: b === 0
+    exact: b === 0,
+    color: Number.isFinite(color) ? color === 1 : false
   };
 }
 function downloadName(base, meta) {
   const stem = base.replace(/\.[^.]+$/, "") || "spectrum";
-  return `${stem}_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}.png`;
+  return `${stem}_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}_C${meta.color ? 1 : 0}.png`;
 }
 function sniff(bytes) {
   const tag = (at, s) => s.split("").every((c, i) => bytes[at + i] === c.charCodeAt(0));
@@ -1266,11 +1281,28 @@ async function imageToSpectrum(file, fileName) {
     canvas.height = 0;
     const known = meta !== null;
     const exact = known && meta.exact;
-    const bandRows = known && meta.exact ? Math.max(1, Math.floor(h / BANDS)) : h;
+    const geomColor = exact && Math.abs(h - 2 * (meta?.bins ?? 0)) <= Math.abs(h - 4 * (meta?.bins ?? 0));
+    const color = exact && (known && meta.color || geomColor);
+    const bandRows = exact ? color ? Math.max(1, Math.floor(h / COLOR_BANDS)) : Math.max(1, Math.floor(h / BANDS)) : h;
     const intact = known && w === meta.frames && bandRows === meta.bins;
     if (exact) {
       const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
       const next = intact ? { ...meta, bins: meta.bins } : rescaled(meta, w);
+      if (color) {
+        const cosRaw = sampleBand(pixels, w, 0, bandRows, frames, next.bins, (r) => r);
+        const sinRaw = sampleBand(pixels, w, 0, bandRows, frames, next.bins, (_r, g) => g);
+        const levels = sampleBand(pixels, w, 0, bandRows, frames, next.bins, (_r, _g, b) => b);
+        const fine = sampleBand(pixels, w, bandRows, bandRows, frames, next.bins, (_r, g) => g);
+        const { cos, sin } = toCosSin(cosRaw, sinRaw);
+        const mode = intact ? "exact" : "degraded";
+        return {
+          spec: { meta: { ...next, exact: true, color: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+          mode,
+          container,
+          width: w,
+          height: h
+        };
+      }
       const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) => FROM_LUMA[luma(r, g, b)]);
       const fine = sampleBand(pixels, w, bandRows, bandRows, frames, next.bins, (_r, g) => g);
       const cosRaw = sampleBand(pixels, w, 2 * bandRows, bandRows, frames, next.bins, (_r, g) => g);
@@ -1278,7 +1310,7 @@ async function imageToSpectrum(file, fileName) {
       const { cos, sin } = toCosSin(cosRaw, sinRaw);
       const mode = intact ? "exact" : "degraded";
       return {
-        spec: { meta: { ...next, exact: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+        spec: { meta: { ...next, exact: true, color: false }, levels, fine, phaseCos: cos, phaseSin: sin },
         mode,
         container,
         width: w,
@@ -1304,6 +1336,35 @@ async function imageToSpectrum(file, fileName) {
 function exactPixels(spec) {
   const { meta, levels, fine, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
+  if (meta.color) {
+    const width = frames;
+    const height = COLOR_BANDS * bins;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    let p = 0;
+    for (let row = 0;row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0;f < frames; f++) {
+        const i = f * bins + b;
+        pixels[p] = phaseCos?.[i] ?? 0;
+        pixels[p + 1] = phaseSin?.[i] ?? 0;
+        pixels[p + 2] = levels[i] ?? 0;
+        pixels[p + 3] = 255;
+        p += 4;
+      }
+    }
+    for (let row = 0;row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0;f < frames; f++) {
+        const v = fine?.[f * bins + b] ?? 0;
+        pixels[p] = v;
+        pixels[p + 1] = v;
+        pixels[p + 2] = v;
+        pixels[p + 3] = 255;
+        p += 4;
+      }
+    }
+    return { pixels, width, height };
+  }
   const width = frames;
   const height = BANDS * bins;
   const pixels = new Uint8ClampedArray(width * height * 4);
@@ -1648,7 +1709,7 @@ async function synthProbe(pcm, sr, win, hop, bits, seconds = 4) {
     target[i] = Math.pow(10, (floorDb + c / steps * span) / 20) * scale;
   }
   const spec = {
-    meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false },
+    meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false, color: false },
     levels,
     fine: null,
     phaseCos: null,
@@ -1785,7 +1846,7 @@ async function pngCheck(bits) {
     for (let i = 0;i < levels.length; i++)
       levels[i] = i * 7 % 256;
     const spec = {
-      meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false },
+      meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false, color: false },
       levels,
       fine: null,
       phaseCos: null,

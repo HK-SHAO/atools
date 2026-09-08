@@ -19,7 +19,10 @@ import { rtisiLa } from "./rtisi";
  *   └──────────────┘ 3bins..4bins  相位·低 8 位，灰阶
  */
 
+/** 老版灰度可逆图的段数（上 1/4 才看得见，下面三段是精度+相位）。 */
 export const BANDS = 4;
+/** 新版彩色可逆图的段数：上 1/2 彩色相位谱 + 下 1/2 灰度细幅度。 */
+export const COLOR_BANDS = 2;
 
 export const MIN_WIN = 256;
 export const MAX_WIN = 4096;
@@ -60,6 +63,8 @@ export interface Meta {
   ref: number;
   /** 是否携带相位。 */
   exact: boolean;
+  /** 是否彩色相位谱（R=cos/G=sin/B=幅度，单张 RGB 图）。false = 老版四段灰阶。 */
+  color: boolean;
 }
 
 export interface Spectrum {
@@ -104,7 +109,7 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const hop = hopOf(enc);
   const bins = rowsFor(win, sr, enc.mode === "compact" ? enc.fmax : 0);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
-  const bands = enc.mode === "exact" ? BANDS : 1;
+  const bands = enc.mode === "exact" ? COLOR_BANDS : 1;
 
   if (frames > MAX_FRAMES)
     throw new Error(`这段会出 ${frames} 帧，超过 ${MAX_FRAMES}：裁剪区间或调低采样率`);
@@ -202,12 +207,13 @@ export async function encode(
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
 
-  const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
+  const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false, color: false };
   const scale = win / 4;
   let next = 0;
 
   if (enc.mode === "exact") {
     meta.exact = true;
+    meta.color = true;
     const levels = new Uint8Array(frames * bins);
     const fine = new Uint8Array(frames * bins);
     const phaseCos = new Uint8Array(frames * bins);
@@ -570,5 +576,5 @@ export function paramsForImage(
   const bins = Math.min(clamped, win / 2 + 1);
   const hop = Math.max(1, Math.round(win / 4));
   const count = Math.max(1, Math.min(frames, MAX_FRAMES));
-  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact };
+  return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact, color: false };
 }

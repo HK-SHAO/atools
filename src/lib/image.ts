@@ -1,7 +1,7 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readMeta, withMeta } from "./png";
-import { BANDS, MAX_FRAMES, clampByte, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, COLOR_BANDS, MAX_FRAMES, clampByte, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
 
 /* 任何一张图都要能出声。读取链路分四档：
@@ -25,21 +25,33 @@ export function metaToText(meta: Meta): string {
     meta.bits,
     Math.round(meta.ref * 10) / 10,
     meta.exact ? 1 : 0,
+    meta.color ? 1 : 0,
   ]);
 }
 
 export function textToMeta(text: string): Meta | null {
   try {
     const v: unknown = JSON.parse(text);
-    if (!Array.isArray(v) || v.length !== 10 || v[0] !== VERSION) return null;
+    if (!Array.isArray(v) || v.length < 10 || v[0] !== VERSION) return null;
     const n = (v as unknown[]).slice(1).map(Number);
     if (n.some(x => !Number.isFinite(x))) return null;
-    const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n as number[];
+    const [sr, win, hop, frames, bins, samples, bits, ref, exact, color] = n as number[];
     if (sr! <= 0 || win! <= 0 || hop! <= 0 || frames! <= 0 || bins! <= 0 || samples! < 0) return null;
     if ((win! & (win! - 1)) !== 0 || win! < 256 || win! > 4096) return null;
     if (hop! < 1 || hop! > win!) return null;
     if (bins! > win! / 2 + 1) return null;
-    return { sr: sr!, win: win!, hop: hop!, frames: frames!, bins: bins!, samples: samples!, bits: bits!, ref: ref!, exact: exact! === 1 };
+    return {
+      sr: sr!,
+      win: win!,
+      hop: hop!,
+      frames: frames!,
+      bins: bins!,
+      samples: samples!,
+      bits: bits!,
+      ref: ref!,
+      exact: exact! === 1,
+      color: color! === 1,
+    };
   } catch {
     return null;
   }
@@ -49,11 +61,12 @@ export function textToMeta(text: string): Meta | null {
  *  转格式、改尺寸之后只要名字还在，就还认得出这是我们自己出的图。
  *  老文件名没有 _B，一律按可逆链路解读。 */
 export function metaFromName(name: string): Meta | null {
-  const m = /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(
-    name,
-  );
+  const m =
+    /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?(?:_C(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(
+      name,
+    );
   if (!m) return null;
-  const [sr, win, hop, frames, samples, bits] = [1, 2, 3, 4, 5, 6].map(i =>
+  const [sr, win, hop, frames, samples, bits, color] = [1, 2, 3, 4, 5, 6, 7].map(i =>
     m[i] === undefined ? Number.NaN : Number(m[i]),
   );
   if (![sr, win, hop, frames, samples].every(x => Number.isFinite(x!) && x! > 0)) return null;
@@ -69,12 +82,17 @@ export function metaFromName(name: string): Meta | null {
     bits: b,
     ref: 0,
     exact: b === 0,
+    // 色彩标记只信文件名里的 _C1：没有就按老灰度可逆图处理，真正的彩色判定
+    // 交给 imageToSpectrum 里的几何识别（高度 2 段 / 4 段），免得改过名的图错位。
+    color: Number.isFinite(color) ? color! === 1 : false,
   };
 }
 
 export function downloadName(base: string, meta: Meta): string {
   const stem = base.replace(/\.[^.]+$/, "") || "spectrum";
-  return `${stem}_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}.png`;
+  return `${stem}_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}_C${
+    meta.color ? 1 : 0
+  }.png`;
 }
 
 export type Container = "png" | "bmp" | "webp-lossless" | "jpeg" | "webp" | "gif" | "avif" | "?";
@@ -146,7 +164,7 @@ function surface(width: number, height: number) {
  * 图里第 0 行永远是最高频（频谱图的惯例），写图时翻过一次，这里翻回来，
  * 所以 out 的第 0 行是最低频 —— 和 STFT 的 bin 序一致。
  */
-function sampleBand(
+export function sampleBand(
   data: Pixels,
   width: number,
   rowTop: number,
@@ -228,15 +246,44 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
 
     const known = meta !== null;
     const exact = known && meta.exact;
-    // 可逆图被改过 —— 顶上那 1/4 才是频谱；紧凑图整张都是。
-    const bandRows = known && meta.exact ? Math.max(1, Math.floor(h / BANDS)) : h;
+    // 彩色与否：优先信 meta.color（tEXt 或文件名 _C）；认不出色彩标记时，
+    // 用图像高度判断是 2 段（彩色）还是 4 段（老灰度）——这样改过名、丢了
+    // _C 的 JPEG/WebP 也能正确挑出彩色相位谱，不会误当 4 段灰度去错位采样。
+    const geomColor = exact && Math.abs(h - 2 * (meta?.bins ?? 0)) <= Math.abs(h - 4 * (meta?.bins ?? 0));
+    const color = exact && ((known && meta.color) || geomColor);
+    // 段高：彩色可逆=2 段、灰度可逆=4 段、紧凑/陌生=整张。
+    const bandRows = exact
+      ? color
+        ? Math.max(1, Math.floor(h / COLOR_BANDS))
+        : Math.max(1, Math.floor(h / BANDS))
+      : h;
     const intact = known && w === meta.frames && bandRows === meta.bins;
 
-    // 只要认得出是自己出的四段图（无论有损重编码成 JPEG、还是被缩放过），
+    // 只要认得出是自己出的可逆图（无论有损重编码成 JPEG/WebP、还是被缩放过），
     // 就继续用存进去的相位直接逆变换 —— 比退回 Griffin-Lim / RTISI 噪声小、也不爆音。
     if (exact) {
       const frames = known ? Math.min(w, meta.frames) : Math.min(w, FOREIGN_FRAMES);
       const next = intact ? { ...meta, bins: meta.bins } : rescaled(meta, w);
+
+      // 彩色相位谱：上 1/2 是 RGB（R=cos 相位 / G=sin 相位 / B=幅度粗），
+      // 下 1/2 是灰度细幅度。cos/sin 在 2π 处连续，有损重编码后只平滑漂移、不爆尖刺。
+      if (color) {
+        const cosRaw = sampleBand(pixels, w, 0, bandRows, frames, next.bins, r => r);
+        const sinRaw = sampleBand(pixels, w, 0, bandRows, frames, next.bins, (_r, g) => g);
+        const levels = sampleBand(pixels, w, 0, bandRows, frames, next.bins, (_r, _g, b) => b);
+        const fine = sampleBand(pixels, w, bandRows, bandRows, frames, next.bins, (_r, g) => g);
+        const { cos, sin } = toCosSin(cosRaw, sinRaw);
+        const mode: ReadMode = intact ? "exact" : "degraded";
+        return {
+          spec: { meta: { ...next, exact: true, color: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+          mode,
+          container,
+          width: w,
+          height: h,
+        };
+      }
+
+      // 老版四段灰度可逆图（读历史文件用）。
       const levels = sampleBand(pixels, w, 0, bandRows, next.frames, next.bins, (r, g, b) =>
         FROM_LUMA[luma(r, g, b)]!,
       );
@@ -246,7 +293,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       const { cos, sin } = toCosSin(cosRaw, sinRaw);
       const mode: ReadMode = intact ? "exact" : "degraded";
       return {
-        spec: { meta: { ...next, exact: true }, levels, fine, phaseCos: cos, phaseSin: sin },
+        spec: { meta: { ...next, exact: true, color: false }, levels, fine, phaseCos: cos, phaseSin: sin },
         mode,
         container,
         width: w,
@@ -289,10 +336,44 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   }
 }
 
-/** 可逆模式的四段布局，只在导出时调用。相位走 cos/sin 两段，抗压缩。 */
-function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; height: number } {
+/** 可逆模式：彩色（2 段）或老版四段灰度，只在导出时调用。 */
+export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; height: number } {
   const { meta, levels, fine, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
+
+  // 彩色相位谱：上 1/2 是 RGB（R=cos 相位、G=sin 相位、B=幅度粗 8 位），
+  // 下 1/2 是灰度细幅度。看着像经典 STFT 彩虹图，相位在颜色里，抗有损压缩。
+  if (meta.color) {
+    const width = frames;
+    const height = COLOR_BANDS * bins;
+    const pixels = new Uint8ClampedArray(width * height * 4) as Pixels;
+    let p = 0;
+    for (let row = 0; row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0; f < frames; f++) {
+        const i = f * bins + b;
+        pixels[p] = phaseCos?.[i] ?? 0; // R = cos(相位)
+        pixels[p + 1] = phaseSin?.[i] ?? 0; // G = sin(相位)
+        pixels[p + 2] = levels[i] ?? 0; // B = 幅度·粗
+        pixels[p + 3] = 255;
+        p += 4;
+      }
+    }
+    for (let row = 0; row < bins; row++) {
+      const b = bins - 1 - row;
+      for (let f = 0; f < frames; f++) {
+        const v = fine?.[f * bins + b] ?? 0;
+        pixels[p] = v;
+        pixels[p + 1] = v;
+        pixels[p + 2] = v;
+        pixels[p + 3] = 255;
+        p += 4;
+      }
+    }
+    return { pixels, width, height };
+  }
+
+  // 老版四段灰度（只用来读历史图，不再产出）。
   const width = frames;
   const height = BANDS * bins;
   const pixels = new Uint8ClampedArray(width * height * 4) as Pixels;

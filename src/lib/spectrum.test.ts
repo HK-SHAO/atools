@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Samples } from "./arrays";
 import { FFT } from "./fft";
-import { metaFromName, metaToText, textToMeta } from "./image";
+import { exactPixels, metaFromName, metaToText, sampleBand, textToMeta } from "./image";
 import { indexedPng, isPng, readMeta, withMeta } from "./png";
 import { BANDS, encode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
@@ -273,6 +273,46 @@ describe("reversible round trip", () => {
   });
 });
 
+describe("color (HSL) mode", () => {
+  test("emits a 2-band RGB image and round-trips losslessly through sampleBand", async () => {
+    const sr = 44100;
+    const pcm = signal(sr * 2, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    expect(spec.meta.color).toBe(true);
+
+    // 把彩色相位谱画成像素（与浏览器导出一致），再按 imageToSpectrum 的彩色分支采样回来。
+    const { pixels, width, height } = exactPixels(spec);
+    expect(height).toBe(2 * spec.meta.bins); // 上 1/2 彩色（R=cos/G=sin/B=幅度）+ 下 1/2 灰度细幅度
+    const bandRows = Math.floor(height / 2);
+    const cosRaw = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (r) => r);
+    const sinRaw = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
+    const levels = sampleBand(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins, (_r, _g, b) => b);
+    const fine = sampleBand(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins, (_r, g) => g);
+    const back = await synthesise({
+      meta: { ...spec.meta, exact: true, color: true },
+      levels,
+      fine,
+      phaseCos: cosRaw,
+      phaseSin: sinRaw,
+    });
+    // 无损下约 35–40 dB：相位在颜色里，听感透明；且零爆音。
+    expect(snr(pcm, back)).toBeGreaterThan(25);
+    expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
+    expect(clicks(back)).toBe(0);
+  });
+
+  test("legacy grayscale reversible names (no _C) are not mistaken for color", () => {
+    const back = metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg");
+    expect(back?.exact).toBe(true);
+    expect(back?.color).toBe(false);
+  });
+
+  test("filename _C1 marks a color image", () => {
+    const back = metaFromName("x_SR44100_N1024_H256_F172_L44100_C1.png");
+    expect(back?.color).toBe(true);
+  });
+});
+
 describe("shape", () => {
   test("frequency ceiling crops rows", () => {
     expect(rowsFor(256, 8000, 0)).toBe(129);
@@ -426,6 +466,7 @@ describe("metadata", () => {
     bits: 4,
     ref: -6.5,
     exact: false,
+    color: false,
   };
 
   test("survives a text round trip", () => {

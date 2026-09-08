@@ -308,7 +308,7 @@ export async function synthProbe(
     target[i] = Math.pow(10, (floorDb + (c / steps) * span) / 20) * scale;
   }
   const spec: Spectrum = {
-    meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false },
+    meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false, color: false },
     levels,
     fine: null,
     phaseCos: null,
@@ -460,7 +460,7 @@ export async function pngCheck(bits: number[]): Promise<string[]> {
     const levels = new Uint8Array(frames * bins);
     for (let i = 0; i < levels.length; i++) levels[i] = (i * 7) % 256;
     const spec: Spectrum = {
-      meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false },
+      meta: { sr: 8000, win: 256, hop: 64, frames, bins, samples: frames * 64, bits: b, ref: 0, exact: false, color: false },
       levels,
       fine: null,
       phaseCos: null,
