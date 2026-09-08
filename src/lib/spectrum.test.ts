@@ -193,6 +193,32 @@ describe("compact round trip", () => {
       localCorrelation(pcm, await synthesise(await encode(pcm, sr, { ...VOICE, bits })), sr);
     expect(await at(8)).toBeGreaterThan(await at(2));
   });
+
+  test("fine quality helps phase-free images and never regresses", async () => {
+    const sr = 8000;
+    // 素材要够长（>0.5s），localCorrelation 的 0.25s 分段才凑得满。
+    const pcm = resample(signal(sr * 8, 44100), 44100, sr);
+
+    // 紧凑（无相位）：精修档给足算力，至少不差于快速档。
+    const compactSpec = await encode(pcm, sr, VOICE);
+    const fast = localCorrelation(pcm, await synthesise(compactSpec), sr);
+    const fine = localCorrelation(
+      pcm,
+      await synthesise(compactSpec, undefined, undefined, "fine"),
+      sr,
+    );
+    expect(fine).toBeGreaterThanOrEqual(fast * 0.98);
+  });
+
+  test("stored phase stays the best estimator, even on lossy images", async () => {
+    const sr = 8000;
+    const pcm = resample(signal(sr * 8, 44100), 44100, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    jpegish(spec, 24);
+    // 直逆（用存下的相位）在有损图上仍应远好于任何迭代重建 —— 这是
+    // 「相位必须存」的根本理由，也是精修按钮对可逆图不出现的原因。
+    expect(localCorrelation(pcm, await synthesise(spec), sr)).toBeGreaterThan(0.9);
+  });
 });
 
 /**
@@ -491,8 +517,24 @@ describe("metadata", () => {
     expect(back).toEqual(meta);
   });
 
-  test("rejects junk", () => {
-    expect(textToMeta("")).toBeNull();
+  test("reads older versions via the frozen prefix (backward compat)", () => {
+    // v3 与 v4 的前 10 个字段完全一致；v3 图必须永远能读。
+    const v3 = JSON.stringify([3, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0]);
+    expect(textToMeta(v3)).toEqual(meta);
+    // Round 9 的 v3 曾在末尾追加过 color 字段 —— 前缀不变，忽略扩展。
+    const v3color = JSON.parse(v3) as number[];
+    v3color.push(0);
+    expect(textToMeta(JSON.stringify(v3color))).toEqual(meta);
+  });
+
+  test("reads future versions via the frozen prefix (forward compat)", () => {
+    // 契约：新版本只追加字段、不改前缀。旧应用遇到新图按前缀解，优雅降级。
+    const future = [99, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0, 1, "ext", 42];
+    expect(textToMeta(JSON.stringify(future))).toEqual(meta);
+  });
+
+  test("rejects pre-contract and junk versions", () => {
+    expect(textToMeta(JSON.stringify([2, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, 0]))).toBeNull();
     expect(textToMeta("[2,1,2,3]")).toBeNull();
     expect(textToMeta("[3,0,256,128,1,129,1,4,0,0]")).toBeNull();
   });

@@ -29,7 +29,7 @@ export interface RtisiOptions {
   tick?: (m: number, frames: number) => Promise<void> | void;
 }
 
-const DEFAULT_BUDGET = 5e7;
+export const DEFAULT_BUDGET = 5e7;
 
 /**
  * 只有幅度时反演出波形。返回长度 samples 的单声道信号（未归一化电平）。

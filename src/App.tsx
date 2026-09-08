@@ -168,6 +168,33 @@ export function App() {
 
   const mic = useMic(loadSamples);
 
+  // 精修：愿意多花时间，就把相位用足算力重新对齐（有损图 / 紧凑图都受益）。
+  const refine = useCallback(async () => {
+    if (!job) return;
+    const my = ++genRef.current;
+    const alive = () => genRef.current === my;
+    setError(null);
+    setStage({ label: "精修", value: 0 });
+    try {
+      const pcm = await synthesise(
+        job.spec,
+        alive,
+        v => {
+          if (alive()) setStage({ label: "精修", value: v });
+        },
+        "fine",
+      );
+      if (!alive()) return;
+      setJob(j => (j ? { ...j, pcm } : j));
+      setHint("相位已用更多算力精修 —— 满意的话直接「存音频」");
+    } catch (e) {
+      if (alive() && !(e instanceof Aborted))
+        setError(e instanceof Error ? e.message : "精修失败");
+    } finally {
+      if (alive()) setStage(null);
+    }
+  }, [job]);
+
   const demo = useCallback(() => {
     setMode("compact");
     setEnc(e => reopen(e));
@@ -220,6 +247,7 @@ export function App() {
             enc={enc}
             onEnc={setEnc}
             onTrim={trim}
+            onRefine={refine}
             onReset={() => {
               setSource(null);
               setJob(null);

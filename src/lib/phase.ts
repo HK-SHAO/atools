@@ -28,6 +28,20 @@ export const TUNE = {
   rtisiIters: 8,
   /** RTISI-LA 之后再拿带动量的 GL 全局打磨几轮。0 = 不打磨。 */
   rtisiGl: 0,
+  /**
+   * 「精修」档（用户点按钮、愿意多花时间）：迭代和预算都给足。
+   * 快速档保可用性，精修档保保真度 —— 两条路用同一套算法，只是给多少算力的区别。
+   */
+  fine: {
+    /** RTISI-LA 每帧迭代次数（快速档 8；实测 16 + GL 打磨最优，24 反而过拟合量化噪声）。 */
+    rtisiIters: 16,
+    /** RTISI-LA 计算预算（快速档的 4 倍，前瞻帧数更多）。 */
+    rtisiBudget: 2e8,
+    /** 收尾全局 GL 打磨轮数。 */
+    glIters: 8,
+    /** 全局 GL 时间预算（毫秒）。 */
+    glBudgetMs: 12_000,
+  },
 };
 
 const TWO_PI = Math.PI * 2;

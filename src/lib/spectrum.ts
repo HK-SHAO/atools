@@ -2,7 +2,7 @@ import type { Samples } from "./arrays";
 import { FFT, hannWindow } from "./fft";
 import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
-import { rtisiLa } from "./rtisi";
+import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
 /*
  * 音频 ↔ 图像，单声道。两种布局：
@@ -353,14 +353,14 @@ const coverage = (win: number, hop: number, frames: number, padded: number): Flo
 };
 
 /** 可逆链路：幅度谱 + 相位都在，直接逆变换。 */
+/** 可逆链路：幅度谱 + 相位都在，直接逆变换。存下的相位已是最优估计，不做迭代。 */
 async function synthesiseExact(
-  meta: Meta,
-  levels: Uint8Array | Uint16Array,
-  phaseCos: Uint8Array,
-  phaseSin: Uint8Array,
+  spec: Spectrum,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
 ): Promise<Samples> {
+  const { meta, levels, phaseCos, phaseSin } = spec;
+  if (!phaseCos || !phaseSin) return invert(spec, alive, onProgress);
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
   const padded = samples + win;
@@ -444,6 +444,7 @@ async function glRefine(
   iters: number,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
+  budgetMs: number = GL_BUDGET_MS,
 ): Promise<void> {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
@@ -459,7 +460,7 @@ async function glRefine(
   for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
   const floor = top * 0.05;
 
-  const deadline = Date.now() + GL_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
   let next = 0;
 
   for (let it = 0; it < iters; it++) {
@@ -512,6 +513,7 @@ async function invert(
   spec: Spectrum,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
+  fine = false,
 ): Promise<Samples> {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
@@ -522,7 +524,8 @@ async function invert(
   const warm = TUNE.pghi ? phaseFromMagnitude(target, frames, bins, win, hop) : null;
   let next = 0;
   const y = await rtisiLa(target, frames, bins, win, hop, samples, {
-    iters: TUNE.rtisiIters,
+    iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
+    budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
     warm,
     tick: (m, total) => {
       if (Date.now() < next) return;
@@ -538,22 +541,44 @@ async function invert(
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = y[i]!;
   // 全局打磨：RTISI-LA 逐帧定稿后，再整体回头补几轮，把帧间的残余不一致抹平。
-  if (TUNE.rtisiGl > 0) await glRefine(x, target, spec, TUNE.rtisiGl, alive, onProgress);
+  // 精修档始终打磨（算力给足），快速档按调参口决定。
+  if (fine || TUNE.rtisiGl > 0)
+    await glRefine(
+      x,
+      target,
+      spec,
+      fine ? TUNE.fine.glIters : TUNE.rtisiGl,
+      alive,
+      onProgress,
+      fine ? TUNE.fine.glBudgetMs : undefined,
+    );
   return finish(x, win, samples);
 }
+
+/**
+ * 还原质量档：
+ *   fast —— 默认。迭代与预算按「交互不卡顿」给，零爆音，大多数场景够用。
+ *   fine —— 只对没有存相位的图（紧凑 / 降级 / 陌生）有意义：同一套算法，
+ *           算力给足（更多 RTISI 迭代、更大前瞻预算、收尾全局 GL 打磨）。
+ *           带相位的可逆图不需要精修 —— 直逆已实测最优，按钮也不出现。
+ */
+export type Quality = "fast" | "fine";
 
 export async function synthesise(
   spec: Spectrum,
   alive?: () => boolean,
   onProgress?: (p: number) => void,
+  quality: Quality = "fast",
 ): Promise<Samples> {
   const { meta, phaseCos, phaseSin } = spec;
   // 只要带着相位段（无论容器是否有损、图是否被缩放过），就直接逆变换——
   // cos/sin 在有损重编码下只平滑漂移，比退回迭代噪声小得多、也不爆音。
-  if (meta.exact && phaseCos && phaseSin)
-    return synthesiseExact(meta, spec.levels, phaseCos, phaseSin, alive, onProgress);
-  // 否则（紧凑图，或被压坏/缩放过的可逆图）：PGHI 起手 + RTISI-LA 反演，零爆音。
-  return invert(spec, alive, onProgress);
+  // 实测（q=12/24 JPEG 模拟）：直逆 0.988/0.983，优于 GL 精修（0.975/0.960）
+  // 和 RTISI 暖启动（0.776/0.828）—— 存下的相位本身就是最优估计，无需也不应再迭代。
+  if (meta.exact && phaseCos && phaseSin) return synthesiseExact(spec, alive, onProgress);
+  // 否则（紧凑图，或相位彻底丢失的图）：PGHI 起手 + RTISI-LA 反演，零爆音。
+  // 精修档在这里才有用武之地：算力给足，相位估得更准。
+  return invert(spec, alive, onProgress, quality === "fine");
 }
 
 /** 陌生/被改过的图 → 参数。bits/exact 沿用调用方给的口径。 */

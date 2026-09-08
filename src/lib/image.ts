@@ -11,11 +11,21 @@ import { stepsOf } from "./params";
  *   通用   —— 完全陌生的图：整张就是幅度，一样能放
  */
 
-const VERSION = 4;
+/**
+ * 格式版本契约（完整规范见 docs/format-spec.md）：
+ *
+ *   tEXt("spectrum") = [版本, sr, win, hop, frames, bins, samples, bits, ref, exact, ...扩展]
+ *
+ *   —— 前 10 个字段自 v3 起冻结：只增不改、永不重排。读端认 3..当前版本；
+ *   对未来版本也按前缀解（追加字段不影响前缀语义），所以旧应用读新图、
+ *   新应用读旧图都优雅降级，绝无损毁。文件名文法同样冻结，作为 tEXt 丢失后的兜底。
+ */
+export const FORMAT_VERSION = 4;
+const MIN_VERSION = 3;
 
 export function metaToText(meta: Meta): string {
   return JSON.stringify([
-    VERSION,
+    FORMAT_VERSION,
     meta.sr,
     meta.win,
     meta.hop,
@@ -31,8 +41,12 @@ export function metaToText(meta: Meta): string {
 export function textToMeta(text: string): Meta | null {
   try {
     const v: unknown = JSON.parse(text);
-    if (!Array.isArray(v) || v.length < 10 || v[0] !== VERSION) return null;
-    const n = (v as unknown[]).slice(1).map(Number);
+    if (!Array.isArray(v)) return null;
+    // 前缀冻结契约：认得 3..未来版本的前缀就按前缀解，扩展字段忽略。
+    const ver = v[0];
+    if (typeof ver !== "number" || !Number.isInteger(ver) || ver < MIN_VERSION) return null;
+    if (v.length < 10) return null;
+    const n = (v as unknown[]).slice(1, 10).map(Number);
     if (n.some(x => !Number.isFinite(x))) return null;
     const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n as number[];
     if (sr! <= 0 || win! <= 0 || hop! <= 0 || frames! <= 0 || bins! <= 0 || samples! < 0) return null;

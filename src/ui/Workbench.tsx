@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import { audit, type LossRow } from "../lib/audit";
-import { downloadName, spectrumToPng, type ReadMode } from "../lib/image";
+import { downloadName, FORMAT_VERSION, spectrumToPng, type ReadMode } from "../lib/image";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -34,6 +34,8 @@ interface Props {
   enc: Encode;
   onEnc: (e: Encode) => void;
   onTrim: () => void;
+  /** 用足算力精修相位（用户显式点按钮才走）。 */
+  onRefine: () => void;
   onReset: () => void;
   busy: boolean;
 }
@@ -90,6 +92,7 @@ export function Workbench({
   enc,
   onEnc,
   onTrim,
+  onRefine,
   onReset,
   busy,
 }: Props) {
@@ -141,6 +144,9 @@ export function Workbench({
   const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
+  // 带存相位的可逆图，直逆已实测最优，精修无益（见 synthesise 的注释）；
+  // 只有没相位、要靠算法估的图，精修才买得到质量。
+  const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin);
 
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
 
@@ -187,7 +193,7 @@ export function Workbench({
       </div>
 
       <p className="facts">
-        {srLabel(meta.sr)}Hz · {meta.frames} × {meta.bins} ·{" "}
+        格式 v{FORMAT_VERSION} · {srLabel(meta.sr)}Hz · {meta.frames} × {meta.bins} ·{" "}
         {compact ? `${enc.bits} bit · ${dbSpanOf(enc.bits)} dB` : "可逆"} · {kb(png.size)} ·{" "}
         {clock(duration)}
       </p>
@@ -206,6 +212,11 @@ export function Workbench({
         <button type="button" className="act" onClick={check} disabled={checking || busy}>
           {checking ? "自检中" : "验损"}
         </button>
+        {canRefine && (
+          <button type="button" className="act" onClick={onRefine} disabled={busy}>
+            精修相位
+          </button>
+        )}
       </div>
 
       {loss && <p className="facts">{lossLine(loss, meta.exact)}</p>}
