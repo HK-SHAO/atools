@@ -2,6 +2,10 @@
 
 把音频变成可下载的频谱图，把频谱图还原成可播放的音频 —— 双向转换，可调压缩比。
 
+**[▶ 在线试用](https://www.bilibili.com/toy/atools/index.html)**
+
+![频谱 · 界面截图](docs/screenshot.png)
+
 ```bash
 bun install
 bun dev          # http://localhost:3000
