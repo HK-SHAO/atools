@@ -5,7 +5,6 @@ import { levelToDb } from "./spectrum";
 import type { Samples } from "./arrays";
 import { rtisiLa } from "./rtisi";
 
-/** 用一个 440 Hz 音做 STFT；预期 0 根谐波，整张图就一条亮线，最容易对。 */
 function tone(samples: number, sr: number, freq: number, amp = 0.6): Samples {
   const x = new Float32Array(samples);
   for (let i = 0; i < samples; i++) x[i] = amp * Math.sin((2 * Math.PI * freq * i) / sr);
@@ -25,7 +24,6 @@ describe("rtisi", () => {
   const pad = new Float64Array(padded);
   for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
 
-  // 把声音的 STFT 解出来：幅度、真相位都拿一份。
   const re = new Float64Array(win);
   const im = new Float64Array(win);
   const mag = new Float64Array(frames * bins);
@@ -42,7 +40,6 @@ describe("rtisi", () => {
     }
   }
 
-  /** 给定相位 WOLA 合成。 */
   const wola = (ph: Float64Array): Float64Array => {
     const acc = new Float64Array(padded);
     const cover = new Float64Array(padded);
@@ -79,13 +76,11 @@ describe("rtisi", () => {
 
   test("纯音上 RTISI-LA 比随机起步起步更稳", async () => {
     const y = await rtisiLa(mag, frames, bins, win, hop, x.length, { iters: 8 });
-    // 纯音 + 高冗余：幅度基本就锁在真相位的附近了，相关应明显大于 0
     const a = align(x, Float32Array.from(y) as Samples, 64);
     expect(a.corr).toBeGreaterThan(0.2);
   });
 
   test("一个窗的 padding 不会让最后几帧搞砸整体", async () => {
-    // 短到只有几帧：保证不会爆数组/出 NaN。
     const y = await rtisiLa(
       mag.subarray(0, 5 * bins),
       5,
@@ -116,7 +111,6 @@ describe("metric", () => {
     for (let i = 0; i < x.length; i++) x[i] = Math.sin((2 * Math.PI * 50 * i) / 8000);
     const m = magnitudes(x, 256, 64);
     const s = spectral(m, m);
-    // 相同输入：对数谱距离必须为 0（零误差）；谱收敛应落在数值下限（远优于任何真实重建）。
     expect(s.lsd).toBeCloseTo(0, 3);
     expect(s.conv).toBeLessThan(-100);
   });

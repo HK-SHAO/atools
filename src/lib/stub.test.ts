@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { STUB_ROWS, decodeStub, drawStub, stubBits, stubFits } from "./stub";
 
-/** 画一张 w×h 的 RGBA 图，底部带票根，返回像素。 */
 function draw(w: number, h: number, sr: number, win: number, exact: boolean): Uint8ClampedArray {
   const px = new Uint8ClampedArray(w * h * 4);
   for (let i = 0; i < w * h; i++) {
@@ -14,7 +13,6 @@ function draw(w: number, h: number, sr: number, win: number, exact: boolean): Ui
   return px;
 }
 
-/** 模拟缩放：底部 rows 行按因子 s 水平重采样（盒式均值），并叠加模拟 JPEG 的亮度抖动。 */
 function resampleProfile(px: Uint8ClampedArray, w: number, h: number, rows: number, s: number, noise: number): number[] {
   const band = (y: number, x: number): number => {
     const p = (y * w + x) * 4;
@@ -22,7 +20,6 @@ function resampleProfile(px: Uint8ClampedArray, w: number, h: number, rows: numb
   };
   const out: number[] = [];
   for (let x = 0; x < Math.round(w * s); x++) {
-    // 逆映射到原始坐标的 [x0, x1) 区间求均值（盒式）
     const x0 = x / s;
     const x1 = (x + 1) / s;
     let sum = 0;
@@ -90,12 +87,10 @@ describe("stubBits / drawStub / decodeStub", () => {
       }
       return out;
     };
-    // 底部 4 行 = 纯票根 → 成功
     const info = decodeStub(rows(90 - STUB_ROWS, 90));
     expect(info).not.toBeNull();
     expect(info!.sr).toBe(8000);
     expect(info!.win).toBe(256);
-    // 混入大量内容行 → 阈值内对比度被稀释，应当失败（上层会换行数重试）
     expect(decodeStub(rows(0, STUB_ROWS))).toBeNull();
   });
 

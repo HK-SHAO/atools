@@ -1,5 +1,3 @@
-/** 只给评测台用的静态服务：docs 里的音频 + 打好的 bundle。dev 用，不进 src。 */
-
 const root = import.meta.dir;
 const project = `${root}/..`;
 

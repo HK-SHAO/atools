@@ -1,13 +1,3 @@
-/*
- * 频谱图的配色不是纯装饰：它同时是数据。
- *
- * 约束：绿色通道必须严格等于层级（G === level）。
- *   —— 这样从 PNG 读回时能按 G 精确还原 8 位幅度，不依赖任何反查表；
- *   —— 换格式/压缩/缩放后 G 被破坏，但亮度仍单调，可以按亮度反查继续用。
- * 因此两端只能是纯黑与纯白（亮度 0 与 255 只有一种 RGB 组合），
- * 暖色只出现在中间调 —— 正好是想要的效果。
- */
-
 const STOPS: readonly (readonly [number, number, number])[] = [
   [0, 0, 0],
   [24, 34, 6],
@@ -20,7 +10,6 @@ const STOPS: readonly (readonly [number, number, number])[] = [
 
 export const RAMP = new Uint8Array(256 * 3);
 
-/** 亮度 → 层级。压缩过的图按亮度反查，误差 ±1 级，落在噪声里无所谓。 */
 export const FROM_LUMA = new Uint8Array(256);
 
 function build(): void {

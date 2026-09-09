@@ -1,10 +1,3 @@
-/*
- * 浏览器里的端到端评测台。
- *
- * 只做测量，不带界面：加载 docs 里的真实音频 → 走完整的 encode → PNG → 读图 → synthesise
- * 链路，再算几个标准指标。dev 用，不进 src。
- */
-
 import { decodeAudioFile } from "../src/lib/audio";
 import { FFT, hannWindow } from "../src/lib/fft";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
@@ -16,14 +9,13 @@ import { phaseFromMagnitude, TUNE } from "../src/lib/phase";
 import type { Samples } from "../src/lib/arrays";
 
 export interface Case {
-  /** 采样率；0 = 跟随素材 */
+
   sr: number;
   bits: number;
   fineness: 0 | 1 | 2;
   fmax: number;
   mode: Mode;
-  /** 图片降级方式；none = 不落盘，直接拿内存里的谱还原；
-   *  -anon 后缀 = 连文件名一起丢掉。 */
+
   via:
     | "png"
     | "jpeg"
@@ -37,17 +29,17 @@ export interface Case {
 }
 
 export interface Metrics {
-  /** 对齐后的波形信噪比 dB，越高越好 */
+
   snr: number;
-  /** 波形相关系数，1 = 完全一致 */
+
   corr: number;
-  /** 谱收敛 dB（标准指标），越低越好（负值） */
+
   conv: number;
-  /** 对数谱距离 dB，越低越好 */
+
   lsd: number;
-  /** 幅度与原始谱的一致性 dB，越高越好 */
+
   magSnr: number;
-  /** 读回来的层级与原层级的最大偏差（0 = 完全一致） */
+
   levelErr: number;
 }
 
@@ -59,16 +51,15 @@ export interface Row {
   frames: number;
   bins: number;
   seconds: number;
-  /** 读端相位可靠性（矢量长度比）；无相位段为 null。 */
+
   rel: number | null;
-  /** 读端认图结果：exact / compact / degraded / foreign。 */
+
   readMode: string;
   m: Metrics;
 }
 
 const log10 = Math.log10;
 
-/** 全局找最佳时延后的相关系数与 SNR。 */
 function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
   let best = 0;
@@ -102,13 +93,6 @@ function align(a: Samples, b: Samples, span: number): { corr: number; snr: numbe
   return { corr: bv, snr: 10 * log10(Math.max(sa, 1e-30) / Math.max(se, 1e-30)) };
 }
 
-/**
- * 分窗各自对齐后的平均相关。
- *
- * 全局只找一个时延，重建里那种"慢慢地飘几个样本"的误差就把相关拉到 0.3 了 ——
- * 可听感上它是对的。分窗对齐能量出"局部到底对不对"：分窗高而全局低 = 时延漂移，
- * 两者都低 = 相位本身错了。
- */
 function chunkCorr(a: Samples, b: Samples, chunk: number, span: number): number {
   const n = Math.min(a.length, b.length);
   let sum = 0;
@@ -135,7 +119,6 @@ function chunkCorr(a: Samples, b: Samples, chunk: number, span: number): number 
   return cnt > 0 ? sum / cnt : 0;
 }
 
-/** 一遍 STFT 幅度，用来算谱收敛与对数谱距离。 */
 function magnitudes(x: Samples, win: number, hop: number): Float64Array {
   const fft = new FFT(win);
   const w = hannWindow(win);
@@ -168,7 +151,6 @@ function spectral(ref: Float64Array, got: Float64Array): { conv: number; lsd: nu
   }
   const conv = 10 * log10(Math.max(num, 1e-30) / Math.max(den, 1e-30));
 
-  // 对数谱距离：先各自归一化到峰值，再比 dB，底下 -80 dB 截断。
   let topA = 0;
   let topB = 0;
   for (let i = 0; i < n; i++) {
@@ -187,7 +169,6 @@ function spectral(ref: Float64Array, got: Float64Array): { conv: number; lsd: nu
   return { conv, lsd: 8.686 * Math.sqrt(acc / Math.max(n, 1)) };
 }
 
-/** 按谱算：解码出来的幅度 vs 原始谱幅度。 */
 function magSnr(ref: Samples, spec: Spectrum): number {
   const { meta, levels } = spec;
   const { win, hop, bins, frames } = meta;
@@ -217,7 +198,6 @@ function targetDb(level: number, meta: Spectrum["meta"]): number {
   return (meta.exact ? -120 : meta.ref - span) + (q / steps) * (meta.exact ? 120 : span);
 }
 
-/** 各降级方式的缩放系数与容器。canvas 重编码一律剥掉 tEXt，模拟真实的转发链路。 */
 const VIA_SPEC: Record<
   string,
   { scale: number; type: "image/png" | "image/jpeg" }
@@ -256,7 +236,6 @@ export async function loadAudio(url: string): Promise<{ pcm: Samples; sr: number
   return decodeAudioFile(bytes);
 }
 
-/** 调相位重建的旋钮，评测时用来对比。 */
 export function setTune(
   t: Partial<{
     pghi: boolean;
@@ -282,13 +261,6 @@ export function setTune(
   return JSON.stringify(TUNE);
 }
 
-/**
- * 反演器横评。同一份量化幅度，只换相位重建算法：
- *   上限   真幅度 + 真相位（这套参数能到的最好结果）
- *   PGHI   PGHI 起手 + 带动量 GL（旧路径）
- *   RTISI  RTISI-LA 逐帧反演
- *   +GL    RTISI-LA 之后再全局打磨
- */
 export async function synthProbe(
   pcm: Samples,
   sr: number,
@@ -324,7 +296,6 @@ export async function synthProbe(
     }
   }
 
-  // 量化：跟 encode 里的口径完全一致（峰值作 0 dB 参考，位深换动态范围）。
   let peak = 0;
   for (let i = 0; i < mag.length; i++) if (mag[i]! > peak) peak = mag[i]!;
   const span = bits * 12;
@@ -347,7 +318,6 @@ export async function synthProbe(
     phaseSin: null,
   };
 
-  /** 给定相位直接 WOLA 合成（只用来算上限）。 */
   const wola = (ph: Float64Array): Samples => {
     const acc = new Float64Array(padded);
     const cover = new Float64Array(padded);
@@ -410,7 +380,6 @@ export async function synthProbe(
   return `win=${win} hop=${hop} ${bits}bit  ${out.join("  ")}`;
 }
 
-/** 重采样到目标率，供探针使用。 */
 export function atRate(pcm: Samples, sr: number, to: number): { pcm: Samples; sr: number } {
   return { pcm: resample(pcm, sr, to, 0), sr: to };
 }
@@ -442,7 +411,6 @@ export async function runCase(
   let readMode = "";
   if (c.via !== "none") {
     const png = await spectrumToPng(spec);
-    // via 带 -anon 后缀 = 文件名也一起丢掉（模拟微信转发），只留裸图。
     const anon = c.via.endsWith("-anon");
     const viaKey = (anon ? c.via.slice(0, -5) : c.via) as Case["via"];
     const isJpeg = viaKey.startsWith("jpeg");
@@ -489,7 +457,6 @@ export async function runCase(
   };
 }
 
-/** 读回来的层级 vs 原层级：最大偏差。0 表示这条链路无损。 */
 function levelErr(a: Spectrum, b: Spectrum): number {
   const n = Math.min(a.levels.length, b.levels.length);
   if (n === 0 || a.meta.bins !== b.meta.bins) return 255;
@@ -501,10 +468,6 @@ function levelErr(a: Spectrum, b: Spectrum): number {
   return worst;
 }
 
-/**
- * 像素签名诊断：给定（已降级的）图字节，返回 recognizeExact 的内部统计
- * （采样点数、B 通道分布、矢量半径分布），用来调签名阈值。
- */
 export async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none" });
   const w = bitmap.width;
@@ -551,7 +514,6 @@ export async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<stri
   );
 }
 
-/** 端到端签名诊断：exact 编码 → 指定方式降级 → 签名统计。 */
 export async function sigProbe(
   srcPcm: Samples,
   srcSr: number,
@@ -573,7 +535,7 @@ export async function sigProbe(
   return sigProbeBlob(new Uint8Array(await degraded.arrayBuffer()));
 }
 
-/** 单独体检：各 bit 深的索引色 PNG 能不能被浏览器原样解回来。 */export async function pngCheck(bits: number[]): Promise<string[]> {
+export async function pngCheck(bits: number[]): Promise<string[]> {
   const out: string[] = [];
   for (const b of bits) {
     const frames = 37;
@@ -597,10 +559,6 @@ export async function sigProbe(
   return out;
 }
 
-/**
- * PGHI 体检：拿真实 STFT 相位跟它解出来的比。
- * 返回按能量加权的 RMS 相位误差（度）。随机相位 ≈ 104°，完美 = 0°。
- */
 export function phaseProbe(
   pcm: Samples,
   sr: number,
@@ -633,8 +591,6 @@ export function phaseProbe(
     }
   }
   const est = phaseFromMagnitude(mag, frames, bins, win, hop);
-  // 分成两部分：整体转了多少（k，等价于全通/希尔伯特旋转，听感上无损但波形对不上），
-  // 以及去掉 k 之后还剩多少（这才是 PGHI 本身的本事）。
   let cr = 0;
   let ci = 0;
   let den0 = 0;
@@ -662,13 +618,6 @@ export function phaseProbe(
   );
 }
 
-/**
- * 把"相位恢复"和"量化"两件事分开量。
- *
- * 用未量化的真实幅度，只换相位来源：真相位（上限）/ PGHI / PGHI+GL / 随机+GL。
- * 若"真幅度 + PGHI"就很好，说明相位够了，剩下的差距全是位深的事；
- * 若它也很差，那就是相位恢复本身没到位。
- */
 export function reconProbe(
   pcm: Samples,
   sr: number,
@@ -702,7 +651,6 @@ export function reconProbe(
     }
   }
 
-  // 量化成 quant 位（0 = 不量化）
   if (quant > 0) {
     let peak = 0;
     for (let i = 0; i < mag.length; i++) if (mag[i]! > peak) peak = mag[i]!;
@@ -747,7 +695,6 @@ export function reconProbe(
     return out;
   };
 
-  /** Griffin-Lim：拿给定相位起步，只换幅度不换相位地迭代。 */
   const gl = (ph: Float64Array, iters: number): Float64Array => {
     const cover = new Float64Array(padded);
     for (let f = 0; f < frames; f++)
@@ -804,7 +751,6 @@ export function reconProbe(
     return p;
   };
 
-  /** 合成后的谱与目标幅度差多少（同一网格）—— 用来分辨"没收敛"和"收敛到错的解"。 */
   const fit = (y: Float64Array): number => {
     const full = new Float64Array(padded);
     for (let i = 0; i < y.length; i++) full[win / 2 + i] = y[i]!;
@@ -846,7 +792,6 @@ export function reconProbe(
   );
 }
 
-/** 逐个方向核对梯度：真实相邻点相位差 vs 公式算出来的梯度。 */
 export function gradProbe(pcm: Samples, sr: number, win: number, hop: number): string[] {
   const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * 3))) as Samples;
   const bins = win / 2 + 1;

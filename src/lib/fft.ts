@@ -71,3 +71,12 @@ export function hannWindow(size: number): Float64Array {
   for (let i = 0; i < size; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / size);
   return w;
 }
+
+export function mirrorSpectrum(re: Float64Array, im: Float64Array, bins: number, size: number): void {
+  im[0] = 0;
+  im[bins - 1] = 0;
+  for (let b = 1; b < bins - 1; b++) {
+    re[size - b] = re[b]!;
+    im[size - b] = -im[b]!;
+  }
+}

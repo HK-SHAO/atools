@@ -1,12 +1,3 @@
-/*
- * 相位重建与 FFT 的回归测试。
- *
- * 这几条都是踩过的坑：
- *   频率方向梯度漏了 π      —— 整条频率轴差 180°
- *   heap 在局部极大值处断链 —— 相位被切成成千上万块
- *   重采样把越界抽头算进分母 —— 首尾凭空淡入淡出
- */
-
 import { describe, expect, test } from "bun:test";
 import type { Samples } from "./arrays";
 import { FFT, hannWindow } from "./fft";
@@ -16,7 +7,6 @@ import { resample } from "./resample";
 const TWO_PI = Math.PI * 2;
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 
-/** 线性扫频：时频面上一道干净的脊，是相位重建最好发挥的场景。 */
 function chirp(n: number, sr: number, from: number, to: number): Float64Array {
   const x = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -80,7 +70,6 @@ describe("fft", () => {
     expect(w[128]!).toBeCloseTo(1, 12);
   });
 
-  /** WOLA 能精确还原的前提：Σw² 沿 hop 平移后是常数。Hann 在 hop=win/4 上成立。 */
   test("coverage is flat at hop = win/4", () => {
     const win = 256;
     const hop = win / 4;
@@ -107,7 +96,6 @@ describe("phase from magnitude", () => {
     const { mag, ph, frames, bins } = stft(x, win, hop);
     const got = phaseFromMagnitude(mag, frames, bins, win, hop);
 
-    // 整体转一个常数是免不了的（等于全通，听感无损），先按能量加权求出来再扣掉。
     let cr = 0;
     let ci = 0;
     for (let i = 0; i < mag.length; i++) {
@@ -127,12 +115,10 @@ describe("phase from magnitude", () => {
     expect(rms).toBeLessThan(25);
   });
 
-  /** 半窗偏移让每走一个 bin 相位就转 -π。梯度里必须带着它，漏了整条轴差 180°。 */
   test("the frequency step carries the half-window π", () => {
     const sr = 16000;
     const win = 512;
     const hop = 128;
-    // 幅度沿时间平稳：此时沿 bin 走一步的相位增量就只剩那个 -π。
     const x = chirp(sr * 1, sr, 1200, 1200);
     const { mag, ph, frames, bins } = stft(x, win, hop);
     let top = 0;
@@ -166,7 +152,6 @@ describe("resample", () => {
     const x = new Float32Array(n);
     for (let i = 0; i < n; i++) x[i] = Math.sin((TWO_PI * 400 * i) / sr);
     const y = resample(x as Samples, sr, 8000);
-    // 头尾各 100 个点的包络不该被压掉。
     const rms = (from: number, to: number) => {
       let s = 0;
       for (let i = from; i < to; i++) s += y[i]! * y[i]!;

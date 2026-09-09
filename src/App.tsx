@@ -25,12 +25,10 @@ interface Job {
 const DEMO_RATE = 44100;
 const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
-// 让出主线程、允许 React 刷新进度；用 setTimeout 而非 rAF，避免后台标签页里 rAF 不触发而卡住流水线。
 const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
 
 type Stage = { label: string; value: number } | null;
 
-/** 读进来的图按它自己的参数展示，之后想压再调 —— 所见即所得。 */
 function adoptMeta(meta: Meta, e: Encode): Encode {
   const at = FINENESS.findIndex(f => f.win >= meta.win);
   return {
@@ -72,8 +70,6 @@ export function App() {
       setStage({ label: "转换", value: 0.05 });
       try {
         const clipped = slice(source.pcm, source.sr, enc.start, enc.end);
-        // 载入优先：素材超上限就自动降采样率让它放得下，而不是报错拒载。
-        // 改了参数就交给 effect 用新 enc 重跑，本次不再往下走。
         const fit = fitEncode(enc, source.sr, clipped.length);
         if (fit.enc !== enc) {
           setHint(fit.note);
@@ -177,7 +173,6 @@ export function App() {
 
   const mic = useMic(loadSamples);
 
-  // 精修：愿意多花时间，就把相位用足算力重新对齐（有损图 / 紧凑图都受益）。
   const refine = useCallback(async () => {
     if (!job) return;
     const my = ++genRef.current;

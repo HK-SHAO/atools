@@ -2,17 +2,11 @@ import type { Samples } from "./arrays";
 
 const DEMO_SECONDS = 3.2;
 
-/* 一律单声道：多声道在这里混成一路，后面所有环节只需要处理一条轨。 */
 export interface Decoded {
   pcm: Samples;
   sr: number;
 }
 
-/**
- * 按文件头认音频容器。返回人话格式名，decode 失败时给用户指路用。
- * 手机录音的高频坑：微信语音（AMR/SILK）、通话录音（3GP/AMR）浏览器根本
- * 不带解码器，裸报 "Unable to decode audio data" 等于没说。
- */
 export function sniffAudio(b: Uint8Array): string {
   const ascii = (at: number, len: number): string =>
     String.fromCharCode(...b.subarray(at, at + len));
@@ -33,8 +27,6 @@ export function sniffAudio(b: Uint8Array): string {
 const DECODE_HELP =
   "支持 m4a、mp3、wav、ogg、flac。若来自微信或通话录音，请先用录音 App 另存为这些格式";
 
-/** decodeAudioData 的回调式包装 —— 旧 webkit 实现不认 Promise 形式，
- *  调了既不报错也不回调（永远挂起），回调式在所有实现上都可用。 */
 function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise((ok, no) => {
     void ctx.decodeAudioData(data, ok, err =>
@@ -50,41 +42,35 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
 
   const head = sniffAudio(new Uint8Array(data));
   const ctx = new Ctor();
+  let buffer: AudioBuffer;
   try {
-    // data 会被 decodeAudioData 拿走所有权，先留一份副本，
-    // 免得调用方还想拿同一份字节干别的事时拿到空的。
-    const buffer = await decodeRaw(ctx, data.slice(0));
-    const tracks = buffer.numberOfChannels;
-    const n = buffer.length;
-    if (n === 0) throw new Error("这段音频是空的");
-    const pcm = new Float32Array(n);
-
-    if (tracks === 1) {
-      pcm.set(buffer.getChannelData(0));
-    } else {
-      const parts: Float32Array[] = [];
-      for (let c = 0; c < tracks; c++) parts.push(buffer.getChannelData(c));
-      for (let c = 0; c < tracks; c++) {
-        const src = parts[c]!;
-        for (let i = 0; i < n; i++) pcm[i] = pcm[i]! + src[i]!;
-      }
-      for (let i = 0; i < n; i++) pcm[i] = pcm[i]! / tracks;
-    }
-
-    return { pcm, sr: buffer.sampleRate };
-  } catch (e) {
-    if (e instanceof Error && /空/.test(e.message)) throw e;
-    // Chrome 的原始报错 "Unable to decode audio data" 对用户没有信息量，
-    // 换成格式 + 出路的说法。Flac/ogg 在 Safari 老版本解不开也走这里。
-    if (head === "AMR（微信等语音常用）" || head === "SILK（微信语音专有）" || head.startsWith("3GP"))
+    buffer = await decodeRaw(ctx, data.slice(0));
+  } catch {
+    if (head.startsWith("AMR") || head.startsWith("SILK") || head.startsWith("3GP"))
       throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
     throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
   } finally {
     void ctx.close();
   }
+
+  const tracks = buffer.numberOfChannels;
+  const n = buffer.length;
+  if (n === 0) throw new Error("这段音频是空的");
+  const pcm = new Float32Array(n);
+
+  if (tracks === 1) {
+    pcm.set(buffer.getChannelData(0));
+  } else {
+    for (let c = 0; c < tracks; c++) {
+      const src = buffer.getChannelData(c);
+      for (let i = 0; i < n; i++) pcm[i] = pcm[i]! + src[i]!;
+    }
+    for (let i = 0; i < n; i++) pcm[i] = pcm[i]! / tracks;
+  }
+
+  return { pcm, sr: buffer.sampleRate };
 }
 
-/** 扫频 + 一个衰减和弦 + 两记噪声 —— 频谱图上看得出结构。 */
 export function demoTrack(sr: number): Samples {
   const n = Math.round(sr * DEMO_SECONDS);
   const pcm = new Float32Array(n);

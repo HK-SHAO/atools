@@ -34,37 +34,33 @@ async function decodeAudioFile(data) {
     throw new Error("这个浏览器不支持 Web Audio");
   const head = sniffAudio(new Uint8Array(data));
   const ctx = new Ctor;
+  let buffer;
   try {
-    const buffer = await decodeRaw(ctx, data.slice(0));
-    const tracks = buffer.numberOfChannels;
-    const n = buffer.length;
-    if (n === 0)
-      throw new Error("这段音频是空的");
-    const pcm = new Float32Array(n);
-    if (tracks === 1) {
-      pcm.set(buffer.getChannelData(0));
-    } else {
-      const parts = [];
-      for (let c = 0;c < tracks; c++)
-        parts.push(buffer.getChannelData(c));
-      for (let c = 0;c < tracks; c++) {
-        const src = parts[c];
-        for (let i = 0;i < n; i++)
-          pcm[i] = pcm[i] + src[i];
-      }
-      for (let i = 0;i < n; i++)
-        pcm[i] = pcm[i] / tracks;
-    }
-    return { pcm, sr: buffer.sampleRate };
-  } catch (e) {
-    if (e instanceof Error && /空/.test(e.message))
-      throw e;
-    if (head === "AMR（微信等语音常用）" || head === "SILK（微信语音专有）" || head.startsWith("3GP"))
+    buffer = await decodeRaw(ctx, data.slice(0));
+  } catch {
+    if (head.startsWith("AMR") || head.startsWith("SILK") || head.startsWith("3GP"))
       throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
     throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
   } finally {
     ctx.close();
   }
+  const tracks = buffer.numberOfChannels;
+  const n = buffer.length;
+  if (n === 0)
+    throw new Error("这段音频是空的");
+  const pcm = new Float32Array(n);
+  if (tracks === 1) {
+    pcm.set(buffer.getChannelData(0));
+  } else {
+    for (let c = 0;c < tracks; c++) {
+      const src = buffer.getChannelData(c);
+      for (let i = 0;i < n; i++)
+        pcm[i] = pcm[i] + src[i];
+    }
+    for (let i = 0;i < n; i++)
+      pcm[i] = pcm[i] / tracks;
+  }
+  return { pcm, sr: buffer.sampleRate };
 }
 
 // src/lib/fft.ts
@@ -137,6 +133,14 @@ function hannWindow(size) {
     w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / size);
   return w;
 }
+function mirrorSpectrum(re, im, bins, size) {
+  im[0] = 0;
+  im[bins - 1] = 0;
+  for (let b = 1;b < bins - 1; b++) {
+    re[size - b] = re[b];
+    im[size - b] = -im[b];
+  }
+}
 
 // src/lib/palette.ts
 var STOPS = [
@@ -200,6 +204,35 @@ function crc32(bytes, from, to) {
 }
 var latin1 = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0) & 255);
 var ascii = (b) => String.fromCharCode(...b);
+var textPayload = (meta) => {
+  const key = latin1(KEYWORD);
+  const body = latin1(meta);
+  const out = new Uint8Array(key.length + 1 + body.length);
+  out.set(key, 0);
+  out.set(body, key.length + 1);
+  return out;
+};
+function ihdr(width, height, depth, colorType) {
+  const out = new Uint8Array(13);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  out[8] = depth;
+  out[9] = colorType;
+  return out;
+}
+function assemble(pieces) {
+  let size = 0;
+  for (const p of pieces)
+    size += p.length;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of pieces) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
 var isPng = (b) => SIGNATURE.every((v, i) => b[i] === v);
 function chunk(type, data) {
   const out = new Uint8Array(12 + data.length);
@@ -306,83 +339,34 @@ async function indexedPng(indices, width, height, depth, palette, meta) {
     if (bits > 0)
       raw[at++] = acc << 8 - bits & 255;
   }
-  const ihdr = new Uint8Array(13);
-  const view = new DataView(ihdr.buffer);
-  view.setUint32(0, width);
-  view.setUint32(4, height);
-  ihdr[8] = depth;
-  ihdr[9] = 3;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-  const key = latin1(KEYWORD);
-  const body = latin1(meta);
-  const text = new Uint8Array(key.length + 1 + body.length);
-  text.set(key, 0);
-  text.set(body, key.length + 1);
   const deflated = await zlib(raw);
-  const pieces = [
+  return assemble([
     Uint8Array.from(SIGNATURE),
-    chunk("IHDR", ihdr),
+    chunk("IHDR", ihdr(width, height, depth, 3)),
     chunk("PLTE", palette),
-    chunk("tEXt", text),
+    chunk("tEXt", textPayload(meta)),
     chunk("IDAT", deflated),
     chunk("IEND", new Uint8Array(0))
-  ];
-  let size = 0;
-  for (const p of pieces)
-    size += p.length;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of pieces) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  ]);
 }
 async function gray16Png(data, width, height, meta) {
   const raw = new Uint8Array((width * 2 + 1) * height);
   for (let y = 0;y < height; y++) {
     const row = y * (width * 2 + 1);
-    raw[row] = 0;
     for (let x = 0;x < width; x++) {
       const v = data[y * width + x];
       raw[row + 1 + x * 2] = v >>> 8 & 255;
       raw[row + 2 + x * 2] = v & 255;
     }
   }
-  const ihdr = new Uint8Array(13);
-  const view = new DataView(ihdr.buffer);
-  view.setUint32(0, width);
-  view.setUint32(4, height);
-  ihdr[8] = 16;
-  ihdr[9] = 0;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-  const key = latin1(KEYWORD);
-  const body = latin1(meta);
-  const text = new Uint8Array(key.length + 1 + body.length);
-  text.set(key, 0);
-  text.set(body, key.length + 1);
   const deflated = await zlib(raw);
-  const pieces = [
+  return assemble([
     Uint8Array.from(SIGNATURE),
-    chunk("IHDR", ihdr),
-    chunk("tEXt", text),
+    chunk("IHDR", ihdr(width, height, 16, 0)),
+    chunk("tEXt", textPayload(meta)),
     chunk("IDAT", deflated),
     chunk("IEND", new Uint8Array(0))
-  ];
-  let size = 0;
-  for (const p of pieces)
-    size += p.length;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of pieces) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  ]);
 }
 function parsePng(bytes) {
   if (!isPng(bytes))
@@ -821,7 +805,7 @@ async function rtisiLa(mag, frames, bins, win, hop, samples, opts = {}) {
         im[b] = 0;
       }
     }
-    mirror(re, im, full, L);
+    mirrorSpectrum(re, im, full, L);
     fft.transform(re, im, true);
     const at = k * a;
     for (let n = 0;n < L; n++)
@@ -879,7 +863,7 @@ async function rtisiLa(mag, frames, bins, win, hop, samples, opts = {}) {
         im[b] = 0;
       }
     }
-    mirror(re, im, full, L);
+    mirrorSpectrum(re, im, full, L);
     fft.transform(re, im, true);
     const room = Math.min(L, padded - at);
     for (let n = 0;n < room; n++)
@@ -904,14 +888,6 @@ async function rtisiLa(mag, frames, bins, win, hop, samples, opts = {}) {
   }
   return y;
 }
-function mirror(re, im, bins, size) {
-  im[0] = 0;
-  im[bins - 1] = 0;
-  for (let b = 1;b < bins - 1; b++) {
-    re[size - b] = re[b];
-    im[size - b] = -im[b];
-  }
-}
 
 // src/lib/spectrum.ts
 var BANDS = 2;
@@ -919,6 +895,7 @@ var MIN_WIN = 256;
 var MAX_WIN = 4096;
 var MAX_FRAMES = 20000;
 var MAX_PIXELS = 8000000;
+var DEFAULT_SR = 44100;
 var DB_MIN = -120;
 var DB_MAX = 0;
 var DB_SPAN = DB_MAX - DB_MIN;
@@ -984,12 +961,7 @@ class Frames {
   }
   add(acc, start) {
     const { re, im, win, size } = this;
-    im[0] = 0;
-    im[this.bins - 1] = 0;
-    for (let b = 1;b < this.bins - 1; b++) {
-      re[size - b] = re[b];
-      im[size - b] = -im[b];
-    }
+    mirrorSpectrum(re, im, this.bins, size);
     this.fft.transform(re, im, true);
     for (let m = 0;m < size; m++)
       acc[start + m] = acc[start + m] + re[m] * win[m];
@@ -1991,7 +1963,7 @@ async function imageToSpectrum(file, fileName) {
       const rs = rescaled(m0, w, winFit / 2);
       next = { ...rs, bins: Math.min(binsFit0, winFit / 2 + 1), win: winFit };
     } else {
-      next = paramsForImage(frames, rows, 44100, 8, 0, false);
+      next = paramsForImage(frames, rows, DEFAULT_SR, 8, 0, false);
     }
     const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
     const mode = !known ? "foreign" : intact ? "compact" : "degraded";

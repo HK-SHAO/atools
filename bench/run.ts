@@ -1,7 +1,3 @@
-/** 驱动 Chromium 跑评测台。dev 用，不进 src。 */
-
-// 每次先重打 bundle，杜绝「改了 src 忘了重编、测的是旧代码」的坑。
-// 注意：这个 Bun 版本 build({outfile}) 只产出到内存，必须显式落盘。
 const built = await Bun.build({
   entrypoints: [`${import.meta.dir}/entry.ts`],
   target: "browser",
@@ -16,7 +12,6 @@ const CDP = 9600 + Math.floor(Math.random() * 300);
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// 默认语料只放 mp3：Chromium 快照没有 AAC 专有解码器，m4a 解不开（要测 m4a 用 FILES 覆盖 + 真 Chrome）。
 const FILES = (process.env.FILES ?? "voice/greeting.mp3,voice/evolve-1.mp3,voice/hurt-1.mp3,voice/victory.mp3")
   .split(",")
   .filter(Boolean);
@@ -144,7 +139,7 @@ try {
     if (TUNE) await ev(`Bench.setTune(${JSON.stringify(TUNE)})`);
     await ev(`return (window.__src = await Bench.loadAudio(${JSON.stringify(url)}));`);
     const info = (await ev(
-      `return [window.__src.sr, window.__src.pcm.length]`,  
+      `return [window.__src.sr, window.__src.pcm.length]`,
     )) as unknown as [number, number];
     console.log(`\n── ${file}  ${info[0]}Hz  ${(info[1] / info[0]).toFixed(1)}s`);
     for (const c of CASES) {

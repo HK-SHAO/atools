@@ -1,5 +1,3 @@
-/** 界面冒烟：定宽起页面 → 点内置示例 → 点质检 → 点频谱图试跳转，只报控制台错误。 */
-
 const CHROME =
   "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
 const CDP = 9700 + Math.floor(Math.random() * 200);
@@ -88,7 +86,6 @@ try {
   await shot("empty");
   await ev(`return document.querySelector('.drop-act')?.textContent`);
 
-  // 内置示例
   await ev(`
     const b = [...document.querySelectorAll('button')];
     const t = b.find(x => /示例/.test(x.textContent ?? ""));
@@ -103,7 +100,6 @@ try {
     `return getComputedStyle(document.querySelector('.params')).gridTemplateColumns`,
   );
 
-  // 点频谱图三分之二处：应该开始播放
   const box = (await ev(`
     const s = document.querySelector('.spec');
     const r = s.getBoundingClientRect();
@@ -129,7 +125,6 @@ try {
   `);
   await shot("playing");
 
-  // 质检
   await ev(`
     const b = [...document.querySelectorAll('button')].find(x => /质检/.test(x.textContent ?? ""));
     b?.click();

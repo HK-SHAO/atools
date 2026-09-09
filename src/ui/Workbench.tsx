@@ -24,16 +24,13 @@ const SHEET_ROWS = 360;
 interface Props {
   spec: Spectrum;
   pcm: Samples;
-  /** 已经按当前参数打包好的图，存的时候直接用，顺带给出真实体积。 */
   png: Blob;
   name: string;
-  /** 素材本身的采样率，用来算奈奎斯特、给「上限」筛选项。 */
   srcSr: number;
   mode: ReadMode;
   enc: Encode;
   onEnc: (e: Encode) => void;
   onTrim: () => void;
-  /** 用足算力精修相位（用户显式点按钮才走）。 */
   onRefine: () => void;
   onReset: () => void;
   busy: boolean;
@@ -47,7 +44,6 @@ function save(blob: Blob, filename: string): void {
   a.rel = "noopener";
   document.body.append(a);
   a.click();
-  // 立刻 revoke 会让部分浏览器把下载掐掉，挪到下一轮再收。
   setTimeout(() => {
     a.remove();
     URL.revokeObjectURL(url);
@@ -64,10 +60,6 @@ const MODE_NOTE: Record<ReadMode, string | null> = {
 const kb = (n: number): string =>
   n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
-/**
- * 自检结果一句话说完，外行能懂：只报「还原度」（波形有多像原声），
- * 数字背后的信噪比/谱差留给评测台。
- */
 function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
   if (exact && own.level === 0 && own.corr > 0.999) return "自检 · 存出再读回，完全一致";
@@ -97,12 +89,9 @@ export function Workbench({
   );
   const [loss, setLoss] = useState<LossRow[] | null>(null);
   const [checking, setChecking] = useState(false);
-  // 区间输入走草稿态：敲字只改本地草稿，失焦/回车才提交，避免每敲一键就重跑整条流水线。
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
 
-  // 参数一变，上一次的自检就作废了。
   useEffect(() => setLoss(null), [spec]);
-  // 外部改了区间（裁静音、换参数），丢掉正在编辑的草稿。
   useEffect(() => setRange(null), [enc.start, enc.end]);
 
   const commitRange = () => {
@@ -137,13 +126,10 @@ export function Workbench({
   const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
-  // 带存相位的可逆图，直逆已实测最优，精修无益（见 synthesise 的注释）；
-  // 只有没相位、要靠算法估的图，精修才买得到质量。
   const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin);
 
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
 
-  /** 止 = 0 表示到结尾，输入框里显示空、占位符 -1。 */
   const endShown = (end: number): string => (end === 0 ? "" : String(end));
 
   const fmaxOptions: Option<number>[] = FMAX_OPTIONS.filter(hz => hz === 0 || hz < nyquist).map(

@@ -1,23 +1,12 @@
 import type { Samples } from "./arrays";
 
-/*
- * 加窗 sinc 重采样（也兼作低通）。
- *
- * 不在中间信号上做整条卷积 —— 直接对每个输出点求一次核，
- * 这样长音频降采样也只跟输出长度成正比，不会爆掉。
- */
-
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
-/** 理想低通的冲激响应：2·fc·sinc(2·fc·d)，d 以源采样点为单位。 */
 function kernel(d: number, fc: number): number {
   if (d === 0) return 2 * fc;
   return Math.sin(2 * Math.PI * fc * d) / (Math.PI * d);
 }
 
-/**
- * @param cutoffHz 额外带宽上限；0 表示只按目标采样率的奈奎斯特走。
- */
 export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Samples {
   if (x.length === 0 || (from === to && cutoffHz <= 0)) return x.slice() as Samples;
 
@@ -41,8 +30,6 @@ export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Sa
       const w =
         kernel(d, fc) * (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
       const i = i0 + m;
-      // 权重只累计真正取到样本的那些抽头：头尾越界的抽头若也算进来，
-      // 分母虚高、信号两端会被平白压低，听起来就是个莫名其妙的淡入淡出。
       if (i >= 0 && i < x.length) {
         acc += x[i]! * w;
         wsum += w;
@@ -54,7 +41,6 @@ export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Sa
   return out as Samples;
 }
 
-/** 时间裁剪。整段都要时直接返回原数组，不白拷一份。 */
 export function slice(pcm: Samples, sr: number, start: number, end: number): Samples {
   const a = Math.max(0, Math.min(pcm.length - 1, Math.floor(start * sr)));
   const b = end > 0 ? Math.min(pcm.length, Math.ceil(end * sr)) : pcm.length;
@@ -62,7 +48,6 @@ export function slice(pcm: Samples, sr: number, start: number, end: number): Sam
   return pcm.slice(a, Math.max(a, b)) as Samples;
 }
 
-/** 首尾静音的位置，秒。整段都是静音时返回原区间。 */
 export function silenceBounds(pcm: Samples, sr: number): { start: number; end: number } {
   const step = Math.max(1, Math.round(sr * 0.02));
   const total = Math.floor(pcm.length / step);

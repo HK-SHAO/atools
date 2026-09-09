@@ -4,11 +4,8 @@ import type { Raster } from "./raster";
 interface Props {
   sheet: Raster;
   headRef: RefObject<HTMLDivElement | null>;
-  /** 按下：跳过去并起播 */
   onSeek: (ratio: number) => void;
-  /** 拖动中：只挪竖线 */
   onScrub: (ratio: number) => void;
-  /** 松手：跳到竖线所在处 */
   onCommit: () => void;
   onNudge: (delta: number) => void;
 }
@@ -17,7 +14,6 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // 离屏画布只由这个 memo 持有，换素材时整块交给 GC。
   const source = useMemo(() => {
     const off = document.createElement("canvas");
     off.width = sheet.width;
@@ -62,11 +58,10 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
       tabIndex={0}
       aria-label="播放进度：点按即播，拖动可擦洗，左右方向键微调"
       onPointerDown={e => {
-        // 合成事件下可能没有活跃指针，失败也不影响单击跳转。
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
         } catch {
-          /* 忽略 */
+
         }
         onSeek(ratioAt(e.clientX));
       }}
@@ -77,7 +72,7 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
         } catch {
-          /* 忽略 */
+
         }
         onCommit();
       }}

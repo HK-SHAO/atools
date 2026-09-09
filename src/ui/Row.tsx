@@ -10,7 +10,6 @@ interface Props<T> {
   onPick: (v: T) => void;
 }
 
-/** 一行参数：左边标签，右边一排极简小按钮。 */
 export function Row<T>({ label, value, options, onPick }: Props<T>) {
   return (
     <div className="prow">

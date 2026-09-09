@@ -13,10 +13,8 @@
     "smoke": "bun bench/smoke.ts"
   },
   "dependencies": {
-    "bun-plugin-tailwind": "^0.1.2",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tailwindcss": "^4.3.3"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

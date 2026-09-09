@@ -8,7 +8,6 @@ export interface Raster {
   data: Pixels;
 }
 
-/** 显示用栅格：频率方向最大池化（纯音压扁了也还看得见），时间方向限宽。 */
 const MAX_SHEET_WIDTH = 2400;
 
 export function buildSheet(spec: Spectrum, rows: number, maxWidth = MAX_SHEET_WIDTH): Raster {
@@ -24,7 +23,6 @@ export function buildSheet(spec: Spectrum, rows: number, maxWidth = MAX_SHEET_WI
 
   for (let y = 0; y < height; y++) {
     best.fill(0);
-    // 第 0 行是最高频
     const hi = Math.round(bins * (1 - y / height));
     const lo = Math.max(0, Math.round(bins * (1 - (y + 1) / height)));
 
@@ -35,7 +33,7 @@ export function buildSheet(spec: Spectrum, rows: number, maxWidth = MAX_SHEET_WI
         let m = 0;
         for (let f = from; f < to; f++) {
           const v = levels[f * bins + b]!;
-          const lv = v > 255 ? v >> 8 : v; // 16 位幅度压到 0..255 显示
+          const lv = v > 255 ? v >> 8 : v;
           if (lv > m) m = lv;
         }
         if (m > best[x]!) best[x] = m;

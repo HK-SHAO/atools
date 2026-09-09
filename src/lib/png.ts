@@ -28,6 +28,37 @@ function crc32(bytes: Uint8Array, from: number, to: number): number {
 const latin1 = (s: string): Bytes => Uint8Array.from(s, c => c.charCodeAt(0) & 0xff);
 const ascii = (b: Uint8Array): string => String.fromCharCode(...b);
 
+const textPayload = (meta: string): Uint8Array => {
+  const key = latin1(KEYWORD);
+  const body = latin1(meta);
+  const out = new Uint8Array(key.length + 1 + body.length);
+  out.set(key, 0);
+  out.set(body, key.length + 1);
+  return out;
+};
+
+function ihdr(width: number, height: number, depth: number, colorType: number): Uint8Array {
+  const out = new Uint8Array(13);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  out[8] = depth;
+  out[9] = colorType;
+  return out;
+}
+
+function assemble(pieces: Uint8Array[]): Bytes {
+  let size = 0;
+  for (const p of pieces) size += p.length;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of pieces) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
 export const isPng = (b: Uint8Array): boolean => SIGNATURE.every((v, i) => b[i] === v);
 
 function chunk(type: string, data: Uint8Array): Uint8Array {
@@ -39,7 +70,6 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   return out;
 }
 
-/** Inserts a tEXt chunk right after IHDR so the parameters travel with the file. */
 export function withMeta(png: Uint8Array, meta: string): Bytes {
   const key = latin1(KEYWORD);
   const body = latin1(meta);
@@ -76,11 +106,6 @@ export function readMeta(png: Uint8Array): string | null {
   return null;
 }
 
-/* ------------------------------------------------------------------ *
- * 索引色 PNG —— 紧凑频谱图走这条：调色板就是暖色 ramp，
- * 位深几 bit 图里就只有 2^bits 种颜色，PNG 因此压得非常小。
- * ------------------------------------------------------------------ */
-
 function adler32(b: Uint8Array): number {
   let a = 1;
   let c = 0;
@@ -91,7 +116,6 @@ function adler32(b: Uint8Array): number {
   return (((c << 16) | a) >>> 0) as number;
 }
 
-/** 没有 CompressionStream 时的退路：只写 stored 块，图还是合规的，只是大些。 */
 function stored(data: Uint8Array): Uint8Array {
   const parts: Uint8Array[] = [Uint8Array.from([0x78, 0x01])];
   for (let at = 0; at < data.length; at += 65535) {
@@ -127,10 +151,6 @@ async function zlib(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/**
- * 索引色 PNG。depth ∈ {1,2,4,8}，palette 长度 = 2^depth × 3。
- * 每行前面加一个 filter 字节（0 = None），其余按位打包。
- */
 export async function indexedPng(
   indices: Uint8Array,
   width: number,
@@ -145,7 +165,6 @@ export async function indexedPng(
 
   for (let y = 0; y < height; y++) {
     let at = y * (rowBytes + 1) + 1;
-    // 位深不一定整除 8（比如 6 bit），所以按"攒够一个字节就吐一个"来打包。
     let acc = 0;
     let bits = 0;
     for (let x = 0; x < width; x++) {
@@ -159,50 +178,17 @@ export async function indexedPng(
     if (bits > 0) raw[at++] = (acc << (8 - bits)) & 0xff;
   }
 
-  const ihdr = new Uint8Array(13);
-  const view = new DataView(ihdr.buffer);
-  view.setUint32(0, width);
-  view.setUint32(4, height);
-  ihdr[8] = depth;
-  ihdr[9] = 3;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-
-  const key = latin1(KEYWORD);
-  const body = latin1(meta);
-  const text = new Uint8Array(key.length + 1 + body.length);
-  text.set(key, 0);
-  text.set(body, key.length + 1);
-
   const deflated = await zlib(raw);
-  const pieces = [
+  return assemble([
     Uint8Array.from(SIGNATURE),
-    chunk("IHDR", ihdr),
+    chunk("IHDR", ihdr(width, height, depth, 3)),
     chunk("PLTE", palette),
-    chunk("tEXt", text),
+    chunk("tEXt", textPayload(meta)),
     chunk("IDAT", deflated),
     chunk("IEND", new Uint8Array(0)),
-  ];
-
-  let size = 0;
-  for (const p of pieces) size += p.length;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of pieces) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  ]);
 }
 
-/* ------------------------------------------------------------------ *
- * 16 位灰度 PNG —— 紧凑模式「16 位色深」走这条：canvas 只有 8 位，
- * 存 16 位幅度必须绕过它，直接写原始字节、读时也直接解原始字节。
- * 只用 filter 0（None），读端据此简化。
- * ------------------------------------------------------------------ */
-
-/** 写一张 16 位灰度 PNG。data 长度 = width × height，取值 0..65535。 */
 export async function gray16Png(
   data: Uint16Array,
   width: number,
@@ -212,7 +198,6 @@ export async function gray16Png(
   const raw = new Uint8Array((width * 2 + 1) * height);
   for (let y = 0; y < height; y++) {
     const row = y * (width * 2 + 1);
-    raw[row] = 0; // filter None
     for (let x = 0; x < width; x++) {
       const v = data[y * width + x]!;
       raw[row + 1 + x * 2] = (v >>> 8) & 0xff;
@@ -220,40 +205,14 @@ export async function gray16Png(
     }
   }
 
-  const ihdr = new Uint8Array(13);
-  const view = new DataView(ihdr.buffer);
-  view.setUint32(0, width);
-  view.setUint32(4, height);
-  ihdr[8] = 16; // 位深
-  ihdr[9] = 0; // 颜色类型 0 = 灰度
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-
-  const key = latin1(KEYWORD);
-  const body = latin1(meta);
-  const text = new Uint8Array(key.length + 1 + body.length);
-  text.set(key, 0);
-  text.set(body, key.length + 1);
-
   const deflated = await zlib(raw);
-  const pieces = [
+  return assemble([
     Uint8Array.from(SIGNATURE),
-    chunk("IHDR", ihdr),
-    chunk("tEXt", text),
+    chunk("IHDR", ihdr(width, height, 16, 0)),
+    chunk("tEXt", textPayload(meta)),
     chunk("IDAT", deflated),
     chunk("IEND", new Uint8Array(0)),
-  ];
-
-  let size = 0;
-  for (const p of pieces) size += p.length;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of pieces) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  ]);
 }
 
 export interface Gray16 {
@@ -319,7 +278,6 @@ async function inflate(idat: Uint8Array[]): Promise<Uint8Array | null> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** PNG 滤波还原（bpp = 每像素字节数）。返回去掉滤波字节的连续像素，失败返回 null。 */
 function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): Uint8Array | null {
   const stride = width * bpp;
   if (raw.length < height * (stride + 1)) return null;
@@ -351,7 +309,6 @@ function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): 
   return out;
 }
 
-/** 读 16 位灰度 PNG（我们的紧凑 16 位导出）。非 16 位灰度返回 null。 */
 export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
   const info = parsePng(bytes);
   if (!info || info.colorType !== 0 || info.bitDepth !== 16 || info.interlace !== 0) return null;
@@ -369,14 +326,9 @@ export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
 export interface IndexedRamp {
   width: number;
   height: number;
-  /** 还原出的 8 位幅度层级（0..255）。 */
   levels: Uint8Array;
 }
 
-/**
- * 靠调色板签名认出我们的紧凑图（meta 被剥掉、文件名被改时的兜底）：
- * 调色板必须与暖色 ramp 逐项一致 —— 随便一张索引色 PNG 不会撞上这个签名。
- */
 export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | null> {
   const info = parsePng(bytes);
   if (!info || info.colorType !== 3 || info.interlace !== 0) return null;
@@ -387,7 +339,6 @@ export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | 
   if (count > 1 << info.bitDepth) return null;
   const steps = count - 1;
   if (steps < 1) return null;
-  // 逐项核对调色板 = RAMP(round(q·255/steps))。
   for (let q = 0; q < count; q++) {
     const level = Math.round((Math.min(q, steps) * 255) / steps);
     if (plte[q * 3] !== RAMP[level * 3]) return null;

@@ -32,11 +32,6 @@ const snr = (a: Samples, b: Samples): number => {
   return 10 * Math.log10(sa / se);
 };
 
-/**
- * 分段各自对齐后的平均相关。
- * 只丢相位的重建会有整体延迟和缓慢漂移，全局相关因此很低 —— 但那听不出来，
- * 所以按 0.25 秒一段找最佳时延再平均，才接近耳朵听到的"像不像"。
- */
 const localCorrelation = (a: Samples, b: Samples, sr: number): number => {
   const seg = Math.round(sr * 0.25);
   const n = Math.min(a.length, b.length);
@@ -198,10 +193,8 @@ describe("compact round trip", () => {
 
   test("fine quality helps phase-free images and never regresses", async () => {
     const sr = 8000;
-    // 素材要够长（>0.5s），localCorrelation 的 0.25s 分段才凑得满。
     const pcm = resample(signal(sr * 8, 44100), 44100, sr);
 
-    // 紧凑（无相位）：精修档给足算力，至少不差于快速档。
     const compactSpec = await encode(pcm, sr, VOICE);
     const fast = localCorrelation(pcm, await synthesise(compactSpec), sr);
     const fine = localCorrelation(
@@ -217,19 +210,10 @@ describe("compact round trip", () => {
     const pcm = resample(signal(sr * 8, 44100), 44100, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
     jpegish(spec, 24);
-    // 直逆（用存下的相位）在有损图上仍应远好于任何迭代重建 —— 这是
-    // 「相位必须存」的根本理由，也是精修按钮对可逆图不出现的原因。
     expect(localCorrelation(pcm, await synthesise(spec), sr)).toBeGreaterThan(0.9);
   });
 });
 
-/**
- * 模拟一轮有损重编码（存成 JPEG 再读回来）：
- *   1) 每个字节段量化到 q 级 —— JPEG 的 DCT 量化是主误差；
- *   2) 8×8 块内加一点相对轻微的 DC 偏移，模仿分块量化留下的块边界痕迹。
- * 系数 k 故意压得很小：真实 JPEG 在块边界的错位只有几个灰度级，
- * 远大于此的偏移是无中生有的，会把测试变成一个不真实的压力测试。
- */
 function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   const bands = [spec.levels, spec.phaseCos, spec.phaseSin].filter(
     (b): b is Uint8Array | Uint16Array => b != null,
@@ -247,7 +231,6 @@ function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   }
 }
 
-/** 严重爆音计数：相邻样本跳变超过峰值 30% 的算一次。 */
 const clicks = (a: Samples): number => {
   let peak = 0;
   for (let i = 0; i < a.length; i++) peak = Math.max(peak, Math.abs(a[i]!));
@@ -266,7 +249,6 @@ describe("reversible round trip", () => {
 
     const back = await synthesise(spec);
     expect(back.length).toBe(pcm.length);
-    // 相位走 cos/sin（8 位/段），无损下约 35–40 dB SNR，听感透明。
     expect(snr(pcm, back)).toBeGreaterThan(25);
     expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
     expect(clicks(back)).toBe(0);
@@ -279,11 +261,8 @@ describe("reversible round trip", () => {
     jpegish(spec, 12); // 量化到 12 级 + 轻微分块，模拟一轮很狠的有损重编码
 
     const back = await synthesise(spec);
-    // 相位走 cos/sin（连续场）：有损重编码后虽然幅度/相位有噪，但 SNR 仍有 ~10 dB、
-    // 分段相关 ~0.98，听起来依旧认得出 —— 不会塌成噪声。硬指标是下面这条爆音检查。
     expect(snr(pcm, back)).toBeGreaterThan(9);
     expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.9);
-    // 用户硬要求：不管怎么压、怎么转格式，都不许出现噪音/爆破音。
     expect(clicks(back)).toBe(0);
   });
 
@@ -307,8 +286,6 @@ describe("exact (2-band) mode", () => {
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
     expect(spec.meta.exact).toBe(true);
 
-    // 上段幅度谱（G === 层级，就是那张能看的频谱图），下段相位（R=cos / G=sin）。
-    // 高度 = 2 × bins + 底部票根行（恢复几何用，不属于谱内容）。
     const { pixels, width, height } = exactPixels(spec);
     const stubRows = stubFits(width) ? STUB_ROWS : 0;
     expect(height).toBe(2 * spec.meta.bins + stubRows);
@@ -316,7 +293,6 @@ describe("exact (2-band) mode", () => {
     const bandRows = Math.floor((height - stubRows) / 2);
     const levels = sampleLevels(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins);
     const ph = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
-    // 1:1 完整图，相位矢量长度比必须贴着 1（可靠性达标，相位才会被采用）。
     expect(ph.reliability).toBeGreaterThan(0.98);
     const back = await synthesise({
       meta: { ...spec.meta, exact: true },
@@ -324,7 +300,6 @@ describe("exact (2-band) mode", () => {
       phaseCos: ph.cos,
       phaseSin: ph.sin,
     });
-    // 无损下幅度 8 位 + cos/sin 相位：听感透明，且零爆音。
     expect(snr(pcm, back)).toBeGreaterThan(25);
     expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
     expect(clicks(back)).toBe(0);
@@ -350,28 +325,23 @@ describe("shape", () => {
   });
 
   test("fitEncode downsamples long audio instead of refusing it", () => {
-    // fade.m4a 场景：约 4.4 分钟 44.1kHz。默认 8k（样本数按比例折算）直接放得下。
     const samples = 44100 * 264;
     expect(() => shapeFor(VOICE, 8000, Math.ceil((samples * 8000) / 44100))).not.toThrow();
 
-    // 用户显式要原采样率时放不下，就自动降档而不是报错拒载。
     const want = { ...VOICE, sr: 44100 };
     expect(() => shapeFor(want, 44100, samples)).toThrow();
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
     expect(fit.enc.sr).toBe(16000);
-    // 适配后的参数必须真的放得下（样本数按比例折算）。
     const tuned = shapeFor(fit.enc, fit.enc.sr, Math.ceil((samples * fit.enc.sr) / 44100));
     expect(tuned.frames).toBeLessThanOrEqual(20000);
     expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
 
-    // 短素材不动参数。
     const short = fitEncode(want, 44100, 44100 * 30);
     expect(short.enc).toEqual(want);
     expect(short.note).toBeNull();
 
-    // 超长素材：降 8k 并裁掉多余区间。
     const huge = fitEncode(VOICE, 44100, 44100 * 3600);
     expect(huge.enc.sr).toBe(8000);
     expect(huge.enc.end - huge.enc.start).toBeLessThanOrEqual((20000 * hopOf(huge.enc)) / 8000);
@@ -429,7 +399,6 @@ describe("png", () => {
     while (at + 12 <= bytes.length) {
       const len = view.getUint32(at);
       seen.push(String.fromCharCode(...bytes.subarray(at + 4, at + 8)));
-      // 每段的 CRC 必须自洽
       expect(view.getUint32(at + 8 + len)).toBe(crcOf(bytes, at + 4, at + 8 + len));
       at += 12 + len;
     }
@@ -526,17 +495,14 @@ describe("metadata", () => {
   });
 
   test("reads older versions via the frozen prefix (backward compat)", () => {
-    // v3 与 v4 的前 10 个字段完全一致；v3 图必须永远能读。
     const v3 = JSON.stringify([3, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0]);
     expect(textToMeta(v3)).toEqual(meta);
-    // Round 9 的 v3 曾在末尾追加过 color 字段 —— 前缀不变，忽略扩展。
     const v3color = JSON.parse(v3) as number[];
     v3color.push(0);
     expect(textToMeta(JSON.stringify(v3color))).toEqual(meta);
   });
 
   test("reads future versions via the frozen prefix (forward compat)", () => {
-    // 契约：新版本只追加字段、不改前缀。旧应用遇到新图按前缀解，优雅降级。
     const future = [99, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0, 1, "ext", 42];
     expect(textToMeta(JSON.stringify(future))).toEqual(meta);
   });
@@ -563,7 +529,6 @@ describe("metadata", () => {
   });
 
   test("rejects tampered metas with fractional fields", () => {
-    // 帧数/频点数带小数会让逆变换产出全 NaN —— 必须拒认，走几何认图兜底。
     const bad = JSON.parse(metaToText(meta)) as number[];
     bad[4] = 300.5;
     expect(textToMeta(JSON.stringify(bad))).toBeNull();
@@ -574,7 +539,6 @@ describe("reads our images with no metadata at all", () => {
   const sr = 8000;
 
   function box2(px: Uint8ClampedArray, w: number, h: number): { px: Uint8ClampedArray; w: number; h: number } {
-    // 2×2 块平均（模拟浏览器缩图/色度子采样对相位的破坏）。
     const nw = w >> 1;
     const nh = h >> 1;
     const out = new Uint8ClampedArray(nw * nh * 4);
@@ -605,7 +569,6 @@ describe("reads our images with no metadata at all", () => {
     const { pixels, width, height } = exactPixels(spec);
     expect(recognizeExact(pixels, width, height)).toBe(true);
 
-    // 照片式噪声（RGB 各通道独立随机）不该撞上相位段签名。
     const fake = new Uint8ClampedArray(width * height * 4) as unknown as import("./arrays").Pixels;
     for (let i = 0; i < fake.length; i += 4) {
       fake[i] = Math.random() * 255;
@@ -622,13 +585,11 @@ describe("reads our images with no metadata at all", () => {
     const { pixels, width, height } = exactPixels(spec);
     const bandRows = height >> 1;
 
-    // 2×2 平均后相位矢量相互抵消：可靠性必须掉到阈值之下。
     const half = box2(pixels, width, height);
     const halfRows = half.h >> 1;
     const ph = samplePhase(half.px as unknown as import("./arrays").Pixels, half.w, halfRows, halfRows, half.w, halfRows);
     expect(ph.reliability).toBeLessThan(0.8);
 
-    // 完整图可靠性贴着 1。
     const full = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
     expect(full.reliability).toBeGreaterThan(0.95);
   });
@@ -648,7 +609,6 @@ describe("reads our images with no metadata at all", () => {
     const w = 12;
     const h = 5;
     const indices = Uint8Array.from({ length: w * h }, (_, i) => (i * 37) & 255);
-    // 复刻 compactPng 的调色板构造（8 位）。
     const steps = 255;
     const palette = new Uint8Array(256 * 3);
     for (let q = 0; q < 256; q++) {
@@ -664,7 +624,6 @@ describe("reads our images with no metadata at all", () => {
     expect(hit!.height).toBe(h);
     expect(hit!.levels[0]).toBe(Math.round((indices[0]! * 255) / steps));
 
-    // 调色板被换掉（随便的灰阶）→ 不认。
     const gray = new Uint8Array(256 * 3);
     for (let q = 0; q < 256; q++) gray[q * 3] = gray[q * 3 + 1] = gray[q * 3 + 2] = q;
     const alien = await readIndexedRamp(await indexedPng(indices, w, h, 8, gray, "x"));

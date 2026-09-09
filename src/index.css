@@ -1,8 +1,23 @@
-@import "tailwindcss";
-
 @layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  h1,
+  p {
+    margin: 0;
+  }
+
+  button,
+  input,
+  label {
+    font: inherit;
+  }
+
   :root {
-    /* 由 useContainerScale 按挂载容器的实际尺寸覆盖，这里只是首帧兜底 */
+
     --u: 16px;
     --c-vw: 3.75px;
     --c-vh: 6.67px;
@@ -65,8 +80,7 @@
     flex-direction: column;
     gap: calc(0.75 * var(--u));
     width: 100%;
-    /* 内容封顶：超宽屏上不再无限横向拉伸（--c-max 由 useContainerScale 按
-       CONTENT_MAX 注入，单位系统也在此处定居），正常宽度内仍然整幅铺开。 */
+
     max-width: var(--c-max, 1180px);
     margin: 0 auto;
     padding-top: max(calc(1.25 * var(--u)), env(safe-area-inset-top, 0px));
@@ -108,7 +122,6 @@
     box-shadow: var(--shadow-card);
   }
 
-  /* 频谱图即进度条 */
   .spec {
     position: relative;
     width: 100%;
@@ -127,11 +140,6 @@
     height: 100%;
   }
 
-  /* 播放头：一根极细的亮线，不发光不抢戏。
-     left 给到百分比，再用 translateX 往回挪"自身宽度 × 进度"——
-     于是在 0% 时贴着左内沿、100% 时贴着右内沿，两头都规规矩矩待在画面里，
-     既不会探出去被裁掉，也不会压住频谱的第一列／最后一列。
-     从没动过的初始态干脆不画（opacity 0），让频谱图先是一张干净的图。 */
   .spec-head {
     position: absolute;
     top: 0;
@@ -208,8 +216,6 @@
     color: var(--soft);
   }
 
-  /* 按钮就是按钮：描边 + 毛玻璃底的胶囊，看得出来能按。 */
-  .btn,
   .act,
   .chip {
     display: inline-flex;
@@ -236,20 +242,17 @@
       color 0.16s ease;
   }
 
-  .btn:active,
   .act:active,
   .chip:active {
     transform: scale(0.97);
   }
 
-  .btn:focus-visible,
   .act:focus-visible,
   .chip:focus-visible {
     outline: calc(0.125 * var(--u)) solid rgba(147, 200, 234, 0.8);
     outline-offset: calc(0.125 * var(--u));
   }
 
-  .btn:disabled,
   .act:disabled,
   .chip:disabled {
     opacity: 0.5;
@@ -273,7 +276,6 @@
     color: var(--soft);
   }
 
-  /* 转换参数：窄屏一行一组；宽屏（见文件末尾）会自动排成多列。 */
   .params {
     display: flex;
     flex-direction: column;
@@ -400,7 +402,6 @@
     margin-top: calc(0.625 * var(--u));
   }
 
-  /* 录制中：红边 + 跳动的圆点，一眼看出在录。 */
   .drop-act.is-rec {
     border-color: rgba(150, 65, 31, 0.5);
     color: #96411f;
@@ -472,11 +473,6 @@
     color: var(--soft);
   }
 
-  /*
-   * 宽屏：容器够宽就把参数横向铺开，一行放完。
-   * data-wide 由 useContainerScale 按容器实测宽度打上 —— 不靠视口猜，
-   * 因为这个 app 经常被塞进 iframe 或某个固定宽度的格子里。
-   */
   .app[data-wide] .params {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(calc(11 * var(--u)), 1fr));

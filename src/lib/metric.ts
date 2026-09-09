@@ -1,11 +1,6 @@
 import type { Samples } from "./arrays";
 import { FFT, hannWindow } from "./fft";
 
-/*
- * 还原质量的几个标准度量。库里和评测台共用同一份，免得两套口径对不上。
- */
-
-/** 全局找最佳时延后的相关系数与信噪比。 */
 export function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
   let best = 0;
@@ -39,7 +34,6 @@ export function align(a: Samples, b: Samples, span: number): { corr: number; snr
   return { corr: bv, snr: 10 * Math.log10(Math.max(sa, 1e-30) / Math.max(se, 1e-30)) };
 }
 
-/** 一遍 STFT 幅度，用来算谱收敛与对数谱距离。 */
 export function magnitudes(x: Samples, win: number, hop: number): Float64Array {
   const fft = new FFT(win);
   const w = hannWindow(win);
@@ -61,7 +55,6 @@ export function magnitudes(x: Samples, win: number, hop: number): Float64Array {
   return out;
 }
 
-/** 谱收敛（越低越好）与对数谱距离 dB（越低越好）。 */
 export function spectral(
   ref: Float64Array,
   got: Float64Array,
@@ -76,7 +69,6 @@ export function spectral(
   }
   const conv = 10 * Math.log10(Math.max(num, 1e-30) / Math.max(den, 1e-30));
 
-  // 对数谱距离：先各自归一化到峰值，再比 dB，底下 -80 dB 截断。
   let topA = 0;
   let topB = 0;
   for (let i = 0; i < n; i++) {
@@ -95,7 +87,6 @@ export function spectral(
   return { conv, lsd: 8.686 * Math.sqrt(acc / Math.max(n, 1)) };
 }
 
-/** 一段还原结果跟原始素材比：波形 SNR、相关系数、对数谱距离。 */
 export function compare(ref: Samples, got: Samples): { snr: number; corr: number; lsd: number } {
   const n = Math.min(ref.length, got.length);
   const a = align(ref, got, Math.min(2048, Math.floor(n / 4) || 1));

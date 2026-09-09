@@ -1,5 +1,3 @@
-/** PGHI 的离线实验台：合成信号 + 已知真值，直接看相位重建。 */
-
 import { FFT, hannWindow } from "../src/lib/fft";
 import { phaseFromMagnitude, TUNE } from "../src/lib/phase";
 import type { Samples } from "../src/lib/arrays";
@@ -72,7 +70,6 @@ for (const [win, hop] of [
     TUNE.gamma = g;
     const est = phaseFromMagnitude(mag, frames, bins, win, hop);
     const ours = weightedError(est, ph, mag);
-    // 中心窗相位 = 因果窗相位 + π·b
     const centered = new Float64Array(ph.length);
     for (let f = 0; f < frames; f++)
       for (let b = 0; b < bins; b++)

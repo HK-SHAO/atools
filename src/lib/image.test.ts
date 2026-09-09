@@ -27,9 +27,6 @@ describe("sniff", () => {
     expect(sniff(ftyp("mif1"))).toBe("avif");
   });
 
-  // 关键回归：MP4 家族也有 ftyp 盒，但 major brand 不是 avif，
-  // 一旦误判成 avif，m4a 会被当成图去 createImageBitmap 而报
-  // "The source image could not be decoded"。
   test("m4a / mp4 / mov 不被误判成图像", () => {
     expect(sniff(ftyp("M4A "))).toBe("?");
     expect(sniff(ftyp("isom"))).toBe("?");
@@ -43,7 +40,7 @@ describe("sniff", () => {
 });
 
 describe("recognizeExact（可逆图像素签名）", () => {
-  /** 造一张可逆图：上段任意暖色幅度，下段相位 (cos,sin) 映射到 (R,G)，B=0。 */
+
   function exactPixels(w: number, h: number): Pixels {
     const px = new Uint8ClampedArray(w * h * 4);
     for (let y = 0; y < h; y++) {
@@ -79,7 +76,6 @@ describe("recognizeExact（可逆图像素签名）", () => {
   });
 
   test("相位被缩放平均（矢量塌缩）后仍能认出是可逆图", () => {
-    // 模拟缩放：相位段每两行平均一次，矢量长度缩水但方向未全抵消
     const w = 64;
     const h = 96;
     const src = exactPixels(w, h * 2) as Pixels;
@@ -140,7 +136,6 @@ describe("readCompact16（16 位紧凑图读端，回归：曾把 16 位压成 8
     const back = await readCompact16(new Uint8Array(await png.arrayBuffer()), spec.meta);
     expect(back.levels).toBeInstanceOf(Uint16Array);
 
-    // 响亮 bin 的 dB 刻度误差必须小于半级量化步长
     let checked = 0;
     for (let i = 0; i < spec.levels.length; i++) {
       const v = spec.levels[i]!;
@@ -152,7 +147,6 @@ describe("readCompact16（16 位紧凑图读端，回归：曾把 16 位压成 8
     }
     expect(checked).toBeGreaterThan(10);
 
-    // 端到端：读回的谱合成音频，与原信号对比（相关 > 0.95 才算正常还原）
     const got = await synthesise(back);
     const m = compare(pcm, got);
     expect(m.corr).toBeGreaterThan(0.95);

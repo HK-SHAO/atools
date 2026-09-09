@@ -1,26 +1,10 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { gray16Png, indexedPng, readGray16, readIndexedRamp, readMeta, withMeta } from "./png";
-import { BANDS, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, DEFAULT_SR, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
-/* 任何一张图都要能出声。读取链路分四档：
- *   可逆   —— 无损容器 + 两段齐全（上=幅度谱、下=相位）+ 尺寸对得上：直接逆变换
- *   紧凑   —— 我们出的紧凑图，尺寸未变：幅度按亮度反查，相位 PGHI + RTISI-LA 补
- *   降级   —— 认得出是我们的图，但被转码/缩放过：同上，只是要重采样
- *   通用   —— 完全陌生的图：整张就是幅度，一样能放
- */
-
-/**
- * 格式版本契约（完整规范见 docs/format-spec.md）：
- *
- *   tEXt("spectrum") = [版本, sr, win, hop, frames, bins, samples, bits, ref, exact, ...扩展]
- *
- *   —— 前 10 个字段自 v3 起冻结：只增不改、永不重排。读端认 3..当前版本；
- *   对未来版本也按前缀解（追加字段不影响前缀语义），所以旧应用读新图、
- *   新应用读旧图都优雅降级，绝无损毁。文件名文法同样冻结，作为 tEXt 丢失后的兜底。
- */
 export const FORMAT_VERSION = 4;
 const MIN_VERSION = 3;
 
@@ -43,13 +27,10 @@ export function textToMeta(text: string): Meta | null {
   try {
     const v: unknown = JSON.parse(text);
     if (!Array.isArray(v)) return null;
-    // 前缀冻结契约：认得 3..未来版本的前缀就按前缀解，扩展字段忽略。
     const ver = v[0];
     if (typeof ver !== "number" || !Number.isInteger(ver) || ver < MIN_VERSION) return null;
     if (v.length < 10) return null;
     const n = (v as unknown[]).slice(1, 10).map(Number);
-    // 除 ref（允许一位小数）外全字段必须是整数 —— meta 被人为改坏（小数/乱码）
-    // 宁可拒认、走几何认图兜底，也不能让小数帧数/频点数混进逆变换产出全 NaN 音频。
     if (n.some((x, i) => (i === 7 ? !Number.isFinite(x) : !Number.isInteger(x)))) return null;
     const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n as number[];
     if (sr! <= 0 || win! <= 0 || hop! <= 0 || frames! <= 0 || bins! <= 0 || samples! < 0) return null;
@@ -72,8 +53,6 @@ export function textToMeta(text: string): Meta | null {
   }
 }
 
-/** `name_SR8000_N256_H128_F626_L50000_B8.png` —— tEXt 丢了还有文件名兜底。
- *  转格式、改尺寸之后只要名字还在，就还认得出是我们自己出的图。 */
 export function metaFromName(name: string): Meta | null {
   const m =
     /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(
@@ -117,10 +96,6 @@ export function sniff(bytes: Uint8Array): Container {
     if (tag(12, "VP8L")) return "webp-lossless";
     return "webp";
   }
-  // MP4 家族（m4a / mp4 / mov）同样以 ftyp 盒起步，但 major brand 不是 avif；
-  // 只认真正的 AVIF（major brand 为 avif / avis / mif1），其余一律当"未知"，
-  // 让上层按音频去走解码，免得把 m4a 错当成图去 createImageBitmap 而报
-  // "The source image could not be decoded"。
   if (tag(4, "ftyp")) {
     const major = String.fromCharCode(bytes[8]!, bytes[9]!, bytes[10]!, bytes[11]!);
     if (major === "avif" || major === "avis" || major === "mif1") return "avif";
@@ -132,7 +107,6 @@ export function sniff(bytes: Uint8Array): Container {
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
 
-/** 猜窗宽：bins = win/2 + 1 是本格式的固定关系，往上取不到就退到 2 的幂。 */
 function winFromBins(bins: number): number {
   const raw = Math.max(2, (bins - 1) * 2);
   let win = 256;
@@ -140,10 +114,6 @@ function winFromBins(bins: number): number {
   return win;
 }
 
-/**
- * 没有 tEXt、文件名也被改掉时的最后兜底：靠图本身的几何与签名反推参数。
- * sr 无从得知，按工具默认 8k 解读（界面会提示这是猜的）。
- */
 export function metaFromGeometry(frames: number, bins: number, exact: boolean, bits: number): Meta {
   const win = winFromBins(bins);
   return {
@@ -159,13 +129,6 @@ export function metaFromGeometry(frames: number, bins: number, exact: boolean, b
   };
 }
 
-/**
- * 像素签名认可逆图：下半段必须是相位段 —— B≈0 且 (R,G) 落在以 (127.5,127.5)
- * 为圆心的圆环上。随机照片/纯色图几乎不可能撞上这个签名。
- *
- * 判定是统计式的（≥60% 采样点命中）：有损压缩的 B 通道噪声、缩放后奇数高度
- * 的边界行、极端压损塌掉的矢量，都由这 40% 的容错吃掉，不再逐像素硬卡。
- */
 export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
   if (w < 4 || h < 8) return false;
   const rows = Math.floor(h / 2);
@@ -181,9 +144,6 @@ export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
       const cr = pixels[p]! - 127.5;
       const cs = pixels[p + 1]! - 127.5;
       const rad2 = cr * cr + cs * cs;
-      // 缩放把相邻相位矢量平均，长度会缩水（0.5× 时约剩 0.4 → 半径 ≈51），
-      // JPEG 的 B 通道会 ring 到 ~125 —— 判定放宽到 B≤48、半径 20..200，
-      // 再靠 55% 的命中率门槛把随机照片挡在外面。
       if (rad2 < 400 || rad2 > 40000) continue;
       ok++;
     }
@@ -200,13 +160,6 @@ function surface(width: number, height: number) {
   return { canvas, ctx };
 }
 
-/**
- * 面积平均读幅度段。图被缩放后一个输出格覆盖多个像素，取格内亮度均值再反查
- * 层级 —— 比最邻近采样稳得多（不会跳采丢能量）；1:1 时就是精确单像素读数。
- *
- * 图里第 0 行永远是最高频（频谱图的惯例），写图时翻过一次，这里翻回来，
- * 所以 out 的第 0 行是最低频 —— 和 STFT 的 bin 序一致。
- */
 export function sampleLevels(
   data: Pixels,
   width: number,
@@ -222,7 +175,6 @@ export function sampleLevels(
     const x0 = Math.min(width - 1, Math.floor(f * sx));
     const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
     for (let b = 0; b < bins; b++) {
-      // bin 0 = 最低频 = 图里最下面的行；格在「翻转前」的行坐标里取。
       const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
       const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
       let sum = 0;
@@ -241,11 +193,6 @@ export function sampleLevels(
   return out;
 }
 
-/**
- * 面积平均读相位段：格内对 (cos, sin) 做矢量均值再归一化 —— 相位是角度，
- * 直接平均数值是错的，矢量平均才是正确的「平均相位」。
- * 同时返回平均矢量长度比（0..1）：相互抵消越厉害比值越低，是相位可靠性的直接度量。
- */
 export function samplePhase(
   data: Pixels,
   width: number,
@@ -291,13 +238,6 @@ export function samplePhase(
   return { cos, sin, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
 }
 
-/**
- * 图被缩放/转码过，但还认得出是我们出的：几何参数按「总时长不变」重推。
- *
- *   帧数 ← 由时长与跳距回推（列多了就多帧、列少了读端用重复列补齐）
- *   跳距 ← 时长/列数，封顶半窗 —— Hann 配 WOLA 时 hop 超过半窗，
- *          窗缝里的 coverage 会漏到接近零，出来的是周期性的哒哒声。
- */
 function rescaled(meta: Meta, width: number, maxHop: number): Meta {
   const hop = Math.max(
     1,
@@ -307,8 +247,6 @@ function rescaled(meta: Meta, width: number, maxHop: number): Meta {
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 
-/** 紧凑图 16 位：直接用 16 位灰度 PNG 的原始字节读出幅度，绕过 8 位 canvas。
- *  行序与索引色一致：第 0 行是最高频，读时要翻回来。 */
 export async function readCompact16(bytes: Uint8Array, meta: Meta): Promise<Spectrum> {
   const g = await readGray16(bytes);
   const levels = new Uint16Array(meta.frames * meta.bins);
@@ -335,20 +273,12 @@ export interface Decoded {
   container: Container;
   width: number;
   height: number;
-  /** 相位段平均矢量长度比（0..1）；无相位段为 null。低于阈值时相位已被弃用。 */
   phaseReliability: number | null;
-  /** meta 全丢（tEXt 被剥、文件名被改）靠几何签名认出来时为 true。 */
   guessed: boolean;
 }
 
-/** 相位可靠阈值：矢量长度比低于它说明相位已被缩放平均到不可信，
- * 保留只会更糟 —— 弃用相位、退回幅度重建（实测缩放 0.5× 时比值 0.31-0.41）。
- * 但 JPEG 的色度下采样只会把比值压到 0.6 左右，相位方向大体还在 ——
- * 实测保留它：相关 0.22 → 0.65。所以阈值取 0.5，正好分开这两种损伤。
- * 可调：评测台用它做分级信任实验。 */
 export const READ_TUNE = { phaseReliable: 0.5, phaseReliableJpeg: 0.3 };
 
-/** 从 canvas 像素底部递减行数尝试解码票根（缩放后票根行数 = 8×比例，先猜 8 再往下）。 */
 function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
   for (let rows = STUB_ROWS; rows >= 2; rows--) {
     if (h <= rows) break;
@@ -372,9 +302,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   const container = sniff(bytes);
   let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
 
-  // ---- meta 全丢的兜底（不走 canvas，直接认原始字节）----
   if (meta === null) {
-    // 16 位灰度 PNG：几乎只可能是我们的紧凑 16 位导出。
     const g16 = await readGray16(bytes);
     if (g16 && g16.width * g16.height <= MAX_SOURCE_PIXELS) {
       const gmeta = metaFromGeometry(g16.width, g16.height, false, 16);
@@ -399,10 +327,8 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         guessed: true,
       };
     }
-    // 索引色 PNG 且调色板与暖色 ramp 逐项一致：我们的紧凑图。
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
-      // 票根（原始字节、未缩放，底部 8 行就是票根）：优先用它恢复精确几何。
       let stub: StubInfo | null = null;
       for (let rows = STUB_ROWS; rows >= 2 && !stub; rows--) {
         if (idx.height <= rows) break;
@@ -507,15 +433,9 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     canvas.width = 0;
     canvas.height = 0;
 
-    // ---- 条码票根：meta 被剥、文件名被改、图被缩放后，恢复原始几何与采样率的权威通道 ----
     const stub = stubFromPixels(pixels, w, h);
     if (stub) h = Math.max(2, h - Math.max(1, Math.round((STUB_ROWS * w) / stub.width)));
 
-    // meta 缺失时票根给出全部参数（比几何猜测强得多）；meta 在但图被缩放过时
-    // 也走这里 —— 此时 meta 的几何对不上实际像素，「时长不变」重推在等比缩放下
-    // 会把帧数推成宽度的 4 倍（rescaled 只考虑竖向缩放），比不用还糟；票根知道
-    // 原始宽度与窗长，幅度刻度 ref 仍从 meta 继承。meta 完好且未缩放时上面已
-    // 剔除票根行，走原有 1:1 路径保住全部信息。
     if (stub && (meta === null || w < stub.width * 0.95)) {
       const bins0 = stub.win / 2 + 1;
       const frames0 = stub.width;
@@ -534,9 +454,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         const bandRows = Math.max(1, Math.floor(h / BANDS));
         const levels = sampleLevels(pixels, w, 0, bandRows, frames0, bins0);
         const ph = samplePhase(pixels, w, bandRows, bandRows, frames0, bins0);
-        // 阈值按缩放比分级：票根给出原始宽度 → 未缩放的图只受 JPEG 色度损伤
-        //（可靠 ~0.34，方向仍在，保留大幅优于弃用）；缩放过的图矢量被平均
-        //（~0.2-0.4），保留无益。票根没命中的老图维持统一阈值。
         const scaled = w < stub.width * 0.95;
         const th = scaled ? READ_TUNE.phaseReliable : READ_TUNE.phaseReliableJpeg;
         const keep = ph.reliability >= th;
@@ -571,7 +488,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       };
     }
 
-    // ---- 像素签名兜底：连调色板/灰度签名都没认出来，试试可逆图的相位段签名 ----
     let m0 = meta;
     if (m0 === null && recognizeExact(pixels, w, h)) {
       m0 = metaFromGeometry(w, Math.floor(h / 2), true, 0);
@@ -582,7 +498,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     const bandRows = exact ? Math.max(1, Math.floor(h / BANDS)) : h;
     const intact = m0 !== null && w === m0.frames && bandRows === m0.bins;
 
-    // 16 位紧凑图（带 meta）：幅度藏在 16 位灰度里，canvas 读不到，走原始字节。
     if (m0 !== null && !m0.exact && m0.bits >= 16 && w === m0.frames && h === m0.bins) {
       return {
         spec: await readCompact16(bytes, m0),
@@ -595,12 +510,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       };
     }
 
-    // 可逆图：上段幅度谱、下段相位。相位可靠性不够（被缩放平均/严重压损）
-    // 就弃用，退回幅度重建 —— 存着垃圾相位只会更糟。
     if (exact && m0) {
-      // 竖向缩放后每段行数可能不足 bins：把频点数压到实际可用的行数（格内面积
-      // 平均恰好等效于把相邻频点合并），窗宽跟着 bins 走，保住「bins = win/2+1」
-      // 的几何关系与正确的频率轴。不这样做的话读出来的谱是错乱的，比不用还糟。
       const binsFit0 = Math.min(m0.bins, bandRows);
       const winFit = winFromBins(binsFit0);
       const binsFit = Math.min(binsFit0, winFit / 2 + 1);
@@ -631,21 +541,16 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
 
     const frames = m0 !== null ? Math.min(w, m0.frames) : Math.min(w, FOREIGN_FRAMES);
     const rows = Math.max(2, Math.min(intact && m0 ? m0.bins : bandRows, 1025));
-    // 三段互斥：intact 是我们原图且尺寸对得上；否则认得出是自己的图（转过格式 /
-    // 改过尺寸）就按「时长不变」重推帧数与跳距；再否则就是完全陌生的图，
-    // 整张当幅度谱，按通用默认参数起手。
     let next: Meta;
     if (m0 !== null && intact) {
       next = { ...m0, bins: m0.bins };
     } else if (m0 !== null) {
-      // 竖向缩放后行数可能不足 bins：频点数压到可用行数，窗宽跟着走（与可逆分支同理），
-      // 否则频轴错乱，读出来的谱比不用还糟。
       const binsFit0 = Math.min(m0.bins, bandRows);
       const winFit = winFromBins(binsFit0);
       const rs = rescaled(m0, w, winFit / 2);
       next = { ...rs, bins: Math.min(binsFit0, winFit / 2 + 1), win: winFit };
     } else {
-      next = paramsForImage(frames, rows, 44100, 8, 0, false);
+      next = paramsForImage(frames, rows, DEFAULT_SR, 8, 0, false);
     }
 
     const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
@@ -658,7 +563,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       width: w,
       height: h,
       phaseReliability: null,
-      // 走到这里说明像素签名没命中：带 meta 就是确定的，不带就是真陌生图。
       guessed: false,
     };
   } finally {
@@ -666,7 +570,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   }
 }
 
-/** 可逆模式：上段幅度谱（暖色 ramp，G=层级），下段相位（R=cos / G=sin）。只在导出时调用。 */
 export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; height: number } {
   const { meta, levels, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
@@ -676,8 +579,6 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
   const pixels = new Uint8ClampedArray(width * height * 4) as Pixels;
   let p = 0;
 
-  // 上段：幅度谱。暖色 ramp，绿色通道严格等于层级（G === level），
-  // 读回时按 G（或亮度）精确还原 8 位幅度，不依赖反查表。
   for (let row = 0; row < bins; row++) {
     const b = bins - 1 - row;
     for (let f = 0; f < frames; f++) {
@@ -690,8 +591,6 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
     }
   }
 
-  // 下段：相位。R = cos(相位)、G = sin(相位)。cos/sin 在 2π 处连续，
-  // 有损重编码只平滑漂移，不会在折叠处爆成尖刺。
   for (let row = 0; row < bins; row++) {
     const b = bins - 1 - row;
     for (let f = 0; f < frames; f++) {
@@ -704,7 +603,6 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
     }
   }
 
-  // 票根：meta 被剥、文件名被改、图被缩放后，这是恢复采样率与几何的唯一通道。
   if (stubRows) drawStub(pixels, width, height, meta.sr, meta.win, true);
 
   return { pixels, width, height };
@@ -718,7 +616,6 @@ async function exactPng(spec: Spectrum): Promise<Blob> {
   const raw = await new Promise<Blob | null>(done => canvas.toBlob(done, "image/png"));
   if (!raw) throw new Error("频谱图生成失败");
 
-  // 尽快把这块大画布还给浏览器。
   canvas.width = 0;
   canvas.height = 0;
 
@@ -726,24 +623,15 @@ async function exactPng(spec: Spectrum): Promise<Blob> {
   return new Blob([withMeta(bytes, metaToText(spec.meta))], { type: "image/png" });
 }
 
-/**
- * 紧凑图：一像素一帧一频点，纯幅度。
- * 调色板只有 2^bits 个颜色，位深越低 → 图里颜色越少 → PNG 越小。
- * 16 位走 16 位灰度 PNG（原始字节，绕过 8 位 canvas）。
- */
 async function compactPng(spec: Spectrum): Promise<Blob> {
   const { meta, levels } = spec;
   if (meta.bits >= 16) {
     const { frames, bins } = meta;
-    // 与索引色同款布局：第 0 行是最高频（谱图惯例）。此前把帧主序矩阵直接
-    // 灌给按行主序的 gray16Png，整幅图被转置错乱 —— 正是「图看起来坏了、
-    // 还原不出声音」的根因。
     const g16 = new Uint16Array(frames * bins);
     for (let row = 0; row < bins; row++) {
       const b = bins - 1 - row;
       for (let f = 0; f < frames; f++) {
         const v = levels[f * bins + b]!;
-        // 16 位紧凑图本来就是 0..65535；8 位兜底时升到 16 位。
         g16[row * frames + f] = v > 255 ? v : ((v * 65535) / 255) | 0;
       }
     }
@@ -752,7 +640,6 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
   }
 
   const steps = stepsOf(meta.bits);
-  // PNG 索引色只认 1/2/4/8 位深，6 位之类的只能往上靠到 8。
   const depth = steps <= 1 ? 1 : steps <= 3 ? 2 : steps <= 15 ? 4 : 8;
   const count = 1 << depth;
 
@@ -768,9 +655,6 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
     palette[q * 3 + 2] = RAMP[c + 2]!;
   }
 
-  // 第 0 行是最高频 —— 和读图时的行序对齐。底部另加票根行（若放得下）：
-  // 票根亮度映射到 ramp 两端索引（暗=0、亮=steps），不新增调色板色，
-  // readIndexedRamp 的逐项一致签名不会被破坏。
   const { frames, bins } = meta;
   const stub = stubFits(frames) ? stubLuma(frames, meta.sr, meta.win, false) : null;
   const stubRows = stub ? STUB_ROWS : 0;

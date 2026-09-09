@@ -1,4 +1,3 @@
-import tailwind from "bun-plugin-tailwind";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -10,7 +9,6 @@ const entrypoints = [...new Bun.Glob("src/**/*.html").scanSync()];
 const result = await Bun.build({
   entrypoints,
   outdir,
-  plugins: [tailwind],
   minify: true,
   target: "browser",
   sourcemap: "none",
