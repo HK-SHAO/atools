@@ -93,6 +93,7 @@ export function App() {
         setError(null);
       } catch (e) {
         if (cancelled || e instanceof Aborted) return;
+        console.error(e);
         setError(e instanceof Error ? e.message : "转换失败");
       } finally {
         if (!cancelled) setStage(null);
@@ -153,8 +154,9 @@ export function App() {
       setEnc(e => reopen(e));
       setSource({ pcm: mono, sr, name: file.name });
     } catch (e) {
-      if (alive() && !(e instanceof Aborted))
-        setError(e instanceof Error ? e.message : "这个文件处理不了");
+      if (!alive() || e instanceof Aborted) return;
+      console.error(e);
+      setError(e instanceof Error ? e.message : "这个文件处理不了");
     } finally {
       if (alive()) setStage(null);
     }
@@ -177,10 +179,11 @@ export function App() {
       );
       if (!alive()) return;
       setJob(j => (j ? { ...j, pcm } : j));
-      setHint("相位已精修，满意就点「存音频」");
+      setHint("相位已精修");
     } catch (e) {
-      if (alive() && !(e instanceof Aborted))
-        setError(e instanceof Error ? e.message : "精修失败");
+      if (!alive() || e instanceof Aborted) return;
+      console.error(e);
+      setError(e instanceof Error ? e.message : "精修失败");
     } finally {
       if (alive()) setStage(null);
     }
@@ -195,6 +198,7 @@ export function App() {
         setEnc(e => reopen(e));
         setSource({ pcm, sr, name: "fade（示例，前 12 秒）" });
       } catch (e) {
+        console.error(e);
         setError(e instanceof Error ? e.message : "示例加载失败");
       }
     })();
@@ -231,7 +235,7 @@ export function App() {
     >
       <div className="shell">
         <header className="head">
-          <h1>频谱</h1>
+          <h1>频谱 spectrum</h1>
           <p>声音 ↔ 图像</p>
         </header>
 
@@ -259,7 +263,7 @@ export function App() {
           <section className="card">
             <div className="drop">
               <span className="drop-lead">拖进一段音频，或者一张图</span>
-              <span className="drop-sub">mp3、wav、flac、m4a、ogg、amr ↔ png、jpg、webp</span>
+              <span className="drop-sub">mp3, wav, flac, m4a, ogg, amr ↔ png, jpg, webp</span>
               <div className="drop-acts">
                 <label className="drop-act">
                   选文件

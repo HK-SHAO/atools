@@ -66,7 +66,7 @@ function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
   if (exact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
   const cell = (r: LossRow): string => `${r.label} 还原度 ${Math.round(r.corr * 100)}%`;
-  return `自检：${rows.map(cell).join("，")}`;
+  return `自检：${rows.map(cell).join("；")}`;
 }
 
 export function Workbench({
@@ -116,8 +116,8 @@ export function Workbench({
     try {
       setLoss(await audit(pcm, spec, png, name));
     } catch (e) {
+      console.error(e);
       setLoss(null);
-      void e;
     } finally {
       setChecking(false);
     }
@@ -183,6 +183,7 @@ export function Workbench({
       <p className="facts">
         采样率 {srLabel(meta.sr)}、{clock(duration)}、{kb(png.size)}
         {compact ? "" : "、可逆"}
+        {loss ? `；${lossLine(loss, meta.exact)}` : ""}
       </p>
       {note && <p className="facts dim">{note}</p>}
       {hint && <p className="facts dim">{hint}</p>}
@@ -215,8 +216,6 @@ export function Workbench({
           </button>
         )}
       </div>
-
-      {loss && <p className="facts">{lossLine(loss, meta.exact)}</p>}
 
       <div className="params">
         <Row<Mode>
