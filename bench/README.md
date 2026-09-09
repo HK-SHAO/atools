@@ -42,7 +42,9 @@
   - `SYNTH` / `RECON` / `PHASE` / `GRAD` —— 反演器横评、量化/相位分离、PGHI 梯度体检（详见 entry.ts 各 probe 注释）。
 - `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（CDP 端口与 bundle 文件名都从它派生，互不冲突）。
 - **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
-- 消融与全语料基准数字见 `docs/algorithms.md`。
+- `DATA='["jpeg","s75"]'` —— **训练对转储**：走真实管线（encode → 降损 → 读回），把损伤相位/幅度/置信度与真值相位成对落盘 `bench/.data/`，供 `bench/ml/train.py` 训练相位修正网络。
+- `NEURAL=bench/ml/w_p7.json` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
+- 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
 ## 已标定的经验数字（2026-09，greeting.mp3 / 2.5s 合成）
 

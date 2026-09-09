@@ -61,6 +61,227 @@ export interface Row {
 
 const log10 = Math.log10;
 
+// 实验开关：相位修正小网络（bench/ml/train.py 训练，NEURAL=weights.json 启用）
+interface NeuralWeights {
+  c1w: number[][][][];
+  c1b: number[];
+  c2w: number[][][][];
+  c2b: number[];
+  fcw: number[][];
+  fcb: number[];
+  patch: number;
+}
+let NEURAL: NeuralWeights | null = null;
+
+export function setNeural(w: NeuralWeights | null): void {
+  NEURAL = w;
+}
+
+// 对读回的相位通道逐 bin 跑修正网络（残差式：输出 = 归一化(损伤矢量+修正量)），
+// 只处理幅度显著且 w>0 的 bin 以控制耗时。返回处理 bin 数。
+// 结构与 bench/ml/train.py 一致：c1 5×5 valid + ReLU → c2 3×3 valid + ReLU → fc 2，
+// patch=7 时 c1 输出 3×3、c2 输出 1×1。
+function neuralRefine(spec: Spectrum): number {
+  if (!NEURAL || !spec.phaseCos || !spec.phaseSin || !spec.phaseW) return 0;
+  if (NEURAL.patch !== 7) throw new Error("neuralRefine 仅支持 patch=7");
+  const { frames: F, bins: B } = spec.meta;
+  const Pt = 7;
+  const { c1w, c1b, c2w, c2b, fcw, fcb } = NEURAL;
+  const W = c1w.length;
+  const cos = spec.phaseCos;
+  const sin = spec.phaseSin;
+  const w = spec.phaseW;
+  const lv = spec.levels;
+  let lvMax = 0;
+  for (let i = 0; i < lv.length; i++) if (lv[i]! > lvMax) lvMax = lv[i]!;
+  const outC = new Uint8Array(cos);
+  const outS = new Uint8Array(sin);
+  const ch = new Float64Array(6 * Pt * Pt);
+  const a1 = new Float64Array(W * 9);
+  const feat = new Float64Array(W);
+  let done = 0;
+  for (let f = 0; f < F; f++) {
+    for (let b = 0; b < B; b++) {
+      const i = f * B + b;
+      if (w[i]! === 0 || lv[i]! < lvMax * 0.05) continue;
+      for (let df = 0; df < Pt; df++) {
+        const ff = Math.min(F - 1, Math.max(0, f + df - 3));
+        const fp = (ff / Math.max(F - 1, 1)) * 2 - 1;
+        for (let db = 0; db < Pt; db++) {
+          const bb = Math.min(B - 1, Math.max(0, b + db - 3));
+          const j = ff * B + bb;
+          const base = df * Pt + db;
+          ch[base] = (cos[j]! - 127.5) / 127.5;
+          ch[Pt * Pt + base] = (sin[j]! - 127.5) / 127.5;
+          ch[2 * Pt * Pt + base] = (lv[j]! / 65535) * 2 - 1;
+          ch[3 * Pt * Pt + base] = w[j]! / 127.5 - 1;
+          ch[4 * Pt * Pt + base] = fp;
+          ch[5 * Pt * Pt + base] = (bb / Math.max(B - 1, 1)) * 2 - 1;
+        }
+      }
+      for (let o = 0; o < W; o++) {
+        const cw = c1w[o]!;
+        for (let y = 0; y < 3; y++)
+          for (let x = 0; x < 3; x++) {
+            let v = c1b[o]!;
+            for (let c = 0; c < 6; c++)
+              for (let k = 0; k < 5; k++)
+                for (let l = 0; l < 5; l++)
+                  v += cw[c]![k]![l]! * ch[(c * Pt + y + k) * Pt + x + l]!;
+            a1[o * 9 + y * 3 + x] = v > 0 ? v : 0;
+          }
+      }
+      for (let o = 0; o < W; o++) {
+        const kw = c2w[o]!;
+        let v = c2b[o]!;
+        for (let m = 0; m < W; m++)
+          for (let k = 0; k < 3; k++)
+            for (let l = 0; l < 3; l++)
+              v += kw[m]![k]![l]! * a1[m * 9 + k * 3 + l]!;
+        feat[o] = v > 0 ? v : 0;
+      }
+      let dx = fcb[0]!;
+      let dy = fcb[1]!;
+      for (let m = 0; m < W; m++) {
+        dx += fcw[0]![m]! * feat[m]!;
+        dy += fcw[1]![m]! * feat[m]!;
+      }
+      const cr = (cos[i]! - 127.5) / 127.5 + dx;
+      const cs = (sin[i]! - 127.5) / 127.5 + dy;
+      const h = Math.hypot(cr, cs);
+      const k = h > 1e-6 ? 127.5 / h : 0;
+      outC[i] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
+      outS[i] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
+      done++;
+    }
+  }
+  spec.phaseCos = outC;
+  spec.phaseSin = outS;
+  return done;
+}
+
+// 真值相位：与 encode 相同的加窗网格上算 STFT，输出 uint8（127.5 圆心）。
+// 幅度近零的 bin 相位无意义，写 127 居中值（训练侧按幅度加权即可屏蔽）。
+function stftPhase(x: Samples, win: number, hop: number, frames: number): { cos: Uint8Array; sin: Uint8Array } {
+  const bins = win / 2 + 1;
+  const fft = new FFT(win);
+  const w = hannWindow(win);
+  const pad = new Float64Array(x.length + win);
+  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
+  const re = new Float64Array(win);
+  const im = new Float64Array(win);
+  const cos = new Uint8Array(frames * bins);
+  const sin = new Uint8Array(frames * bins);
+  for (let f = 0; f < frames; f++) {
+    for (let m = 0; m < win; m++) {
+      re[m] = pad[f * hop + m]! * w[m]!;
+      im[m] = 0;
+    }
+    fft.transform(re, im);
+    for (let b = 0; b < bins; b++) {
+      const mg = Math.hypot(re[b]!, im[b]!);
+      const i = f * bins + b;
+      if (mg < 1e-12) {
+        cos[i] = 127;
+        sin[i] = 127;
+        continue;
+      }
+      cos[i] = Math.max(0, Math.min(255, Math.round((re[b]! / mg) * 127.5 + 127.5)));
+      sin[i] = Math.max(0, Math.min(255, Math.round((im[b]! / mg) * 127.5 + 127.5)));
+    }
+  }
+  return { cos, sin };
+}
+
+// 把真值相位按归一化位置双线性重采样到读回网格（缩放损伤后两网格不同），
+// 单位矢量插值后重新归一化半径。
+function resamplePhase(
+  cos: Uint8Array,
+  sin: Uint8Array,
+  F: number,
+  B: number,
+  F2: number,
+  B2: number,
+): { cos: Uint8Array; sin: Uint8Array } {
+  const outC = new Uint8Array(F2 * B2);
+  const outS = new Uint8Array(F2 * B2);
+  for (let f = 0; f < F2; f++) {
+    const tf = F2 > 1 ? (f / (F2 - 1)) * (F - 1) : 0;
+    const f0 = Math.min(F - 1, Math.floor(tf));
+    const f1 = Math.min(F - 1, f0 + 1);
+    const af = tf - f0;
+    for (let b = 0; b < B2; b++) {
+      const tb = B2 > 1 ? (b / (B2 - 1)) * (B - 1) : 0;
+      const b0 = Math.min(B - 1, Math.floor(tb));
+      const b1 = Math.min(B - 1, b0 + 1);
+      const ab = tb - b0;
+      let cr = 0;
+      let cs = 0;
+      for (const [ff, wf] of [[f0, 1 - af], [f1, af]] as const)
+        for (const [bb, wb] of [[b0, 1 - ab], [b1, ab]] as const) {
+          const i = ff * B + bb;
+          const wt = wf * wb;
+          cr += ((cos[i]! - 127.5) / 127.5) * wt;
+          cs += ((sin[i]! - 127.5) / 127.5) * wt;
+        }
+      const h = Math.hypot(cr, cs);
+      const k = h > 1e-6 ? 127.5 / h : 0;
+      outC[f * B2 + b] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
+      outS[f * B2 + b] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
+    }
+  }
+  return { cos: outC, sin: outS };
+}
+
+export async function dumpPair(srcPcm: Samples, srcSr: number, c: Case): Promise<string> {
+  const enc: Encode = { mode: c.mode, sr: c.sr, bits: c.bits, fineness: c.fineness, fmax: c.fmax, start: 0, end: 0 };
+  const sr = c.sr > 0 ? c.sr : srcSr;
+  const tuned = resample(slice(srcPcm, srcSr, 0, 0), srcSr, sr, c.mode === "compact" ? c.fmax : 0);
+  const spec = await encode(tuned, sr, enc);
+  const png = await spectrumToPng(spec);
+  const viaKey = (c.via.endsWith("-anon") ? c.via.slice(0, -5) : c.via) as Case["via"];
+  const degraded = await degrade(png, viaKey);
+  const read = await imageToSpectrum(degraded, "untitled.png");
+  const { win, hop, frames, bins, bits, ref, exact } = read.spec.meta;
+  const encFrames = spec.meta.frames;
+  const encBins = spec.meta.bins;
+  const truth = stftPhase(tuned as Samples, spec.meta.win, spec.meta.hop, encFrames);
+  const aligned =
+    encFrames === frames && encBins === bins
+      ? truth
+      : resamplePhase(truth.cos, truth.sin, encFrames, encBins, frames, bins);
+  const head = new ArrayBuffer(40);
+  const dv = new DataView(head);
+  dv.setUint32(0, frames, true);
+  dv.setUint32(4, bins, true);
+  dv.setUint32(8, win, true);
+  dv.setUint32(12, hop, true);
+  dv.setUint32(16, sr, true);
+  dv.setUint32(20, bits, true);
+  dv.setUint32(24, exact ? 1 : 0, true);
+  dv.setFloat32(28, ref, true);
+  dv.setUint32(36, read.spec.phaseW ? 1 : 0, true);
+  // levels 统一存 uint16（exact 编码本身即 uint16，compact 由 uint8 升位，无损）
+  const lv = new Uint16Array(read.spec.levels.length);
+  for (let i = 0; i < lv.length; i++) lv[i] = read.spec.levels[i]!;
+  const parts: BlobPart[] = [head, lv];
+  for (const arr of [read.spec.phaseCos, read.spec.phaseSin, read.spec.phaseW]) {
+    if (!arr) return ""; // 无相位通道，无法成对
+    parts.push(Uint8Array.from(arr));
+  }
+  parts.push(aligned.cos as BlobPart, aligned.sin as BlobPart);
+  const buf = await new Blob(parts).arrayBuffer();
+  const u = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < u.length; i += 0x8000)
+    s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+export function atRate(pcm: Samples, sr: number, to: number): { pcm: Samples; sr: number } {
+  return { pcm: resample(pcm, sr, to, 0), sr: to };
+}
+
 function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
   let best = 0;
@@ -211,24 +432,21 @@ const VIA_SPEC: Record<
   jpeg75: { scale: 0.75, type: "image/jpeg" },
 };
 
-async function degrade(blob: Blob, via: Case["via"], name: string): Promise<Blob> {
+async function degrade(blob: Blob, via: Case["via"]): Promise<Blob> {
   if (via === "png") return blob;
-  const spec = VIA_SPEC[via];
-  const scale = spec?.scale ?? (via === "half" ? 0.5 : 1);
+  const spec = VIA_SPEC[via]!;
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none" });
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const w = Math.max(1, Math.round(bitmap.width * spec.scale));
+  const h = Math.max(1, Math.round(bitmap.height * spec.scale));
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
-  const type = spec?.type ?? (via === "jpeg" || via === "jpeg-anon" ? "image/jpeg" : "image/png");
-  const out = await new Promise<Blob | null>(done => canvas.toBlob(done, type, 0.72));
+  const out = await new Promise<Blob | null>(done => canvas.toBlob(done, spec.type, 0.72));
   canvas.width = 0;
   canvas.height = 0;
-  void name;
   return out ?? blob;
 }
 
@@ -392,10 +610,6 @@ export async function synthProbe(
   return `win=${win} hop=${hop} ${bits}bit  ${out.join("  ")}`;
 }
 
-export function atRate(pcm: Samples, sr: number, to: number): { pcm: Samples; sr: number } {
-  return { pcm: resample(pcm, sr, to, 0), sr: to };
-}
-
 export async function runCase(
   srcPcm: Samples,
   srcSr: number,
@@ -432,7 +646,7 @@ export async function runCase(
         ? "untitled.jpg"
         : "untitled.png"
       : downloadName(name, spec.meta);
-    const degraded = await degrade(png, viaKey, fileName);
+    const degraded = await degrade(png, viaKey);
     bytes = degraded.size;
     const read = await imageToSpectrum(degraded, fileName);
     console.error(`[diag] ${fileName} ${read.width}x${read.height} mode=${read.mode} guessed=${read.guessed} frames=${read.spec.meta.frames} bins=${read.spec.meta.bins} sr=${read.spec.meta.sr} dur=${(read.spec.meta.samples/read.spec.meta.sr).toFixed(2)}s`);
@@ -441,6 +655,7 @@ export async function runCase(
     readMode = read.mode;
     dims = `${read.width}x${read.height}`;
   }
+  if (NEURAL && back.phaseCos) neuralRefine(back);
   const quality = new URLSearchParams(location.search).get("synth") === "fine" ? "fine" : "fast";
   const y = await synthesise(back, undefined, undefined, quality);
 
@@ -541,12 +756,7 @@ export async function sigProbe(
   const png = await spectrumToPng(spec);
   const anon = via.endsWith("-anon");
   const viaKey = (anon ? via.slice(0, -5) : via) as Case["via"];
-  const isJpeg = viaKey.startsWith("jpeg");
-  const degraded = await degrade(
-    png,
-    viaKey,
-    isJpeg ? "untitled.jpg" : "untitled.png",
-  );
+  const degraded = await degrade(png, viaKey);
   return sigProbeBlob(new Uint8Array(await degraded.arrayBuffer()));
 }
 

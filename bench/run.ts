@@ -149,6 +149,7 @@ try {
 
   const rows: {
     file: string;
+    group: string;
     case: string;
     ms: number;
     bytes: number;
@@ -161,6 +162,33 @@ try {
   }[] = [];
 
   const TUNE = process.env.TUNE ? JSON.parse(process.env.TUNE) : null;
+  if (process.env.NEURAL) {
+    const wts = await Bun.file(process.env.NEURAL).json();
+    await ev(`Bench.setNeural(${JSON.stringify(wts)})`);
+    console.log("神经修正已启用:", process.env.NEURAL);
+  }
+
+  // DATA='["jpeg","s75"]'：转储训练对到 bench/.data/ 后直接退出，不跑基准
+  if (process.env.DATA) {
+    const { mkdirSync } = require("node:fs") as typeof import("node:fs");
+    mkdirSync(`${import.meta.dir}/.data`, { recursive: true });
+    for (const file of list) {
+      await ev(`return (window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)}));`);
+      const tag = file.replaceAll("/", "_").replace(/\.[^.]+$/, "");
+      for (const via of JSON.parse(process.env.DATA) as string[]) {
+        const b64 = (await ev(
+          `return await Bench.dumpPair(window.__src.pcm.subarray(0, Math.min(window.__src.pcm.length, ${MAX_SEC} * window.__src.sr)), window.__src.sr, ${JSON.stringify({ sr: 0, bits: 8, fineness: 1, fmax: 0, mode: "exact", via })})`,
+        )) as string;
+        if (!b64) {
+          console.log(`  跳过 ${tag}.${via}（读回无相位）`);
+          continue;
+        }
+        await Bun.write(`${import.meta.dir}/.data/${tag}.${via}.bin`, Buffer.from(b64, "base64"));
+        console.log(`  ${tag}.${via}.bin`);
+      }
+    }
+    ws.close();
+  } else
   for (const file of list) {
     const url = `/audio/${file}`;
     if (TUNE) await ev(`Bench.setTune(${JSON.stringify(TUNE)})`);
@@ -224,18 +252,6 @@ try {
           )) as string,
         );
   }
-  if (process.env.SYNTH) {
-    const sr = (await ev(`return window.__src.sr`)) as number;
-    await ev(`window.__p8 = Bench.atRate(window.__src.pcm, window.__src.sr, 8000)`);
-    for (const [win, hop] of (
-      JSON.parse(process.env.SYNTH) as [number, number][]
-    ) as [number, number][])
-      for (const q of [4, 8])
-        console.log(
-          "   ",
-          (await ev(`return await Bench.synthProbe(window.__p8.pcm, 8000, ${win}, ${hop}, ${q})`)) as string,
-        );
-  }
   if (process.env.PHASE) {
     const sr = (await ev(`return window.__src.sr`)) as number;
     for (const [win, hop] of [
@@ -254,7 +270,8 @@ try {
           (await ev(`return Bench.phaseProbe(window.__src.pcm, ${sr}, ${win}, ${hop}, ${g})`)) as string,
         );
   }
-  console.log("\nPNG 体检:", (await ev(`return await Bench.pngCheck([1,2,4,6,8])`)) as string[]);
+  if (!process.env.DATA)
+    console.log("\nPNG 体检:", (await ev(`return await Bench.pngCheck([1,2,4,6,8])`)) as string[]);
   if (process.env.SIG) {
     const sr2 = (await ev(`return window.__src.sr`)) as number;
     for (const via of JSON.parse(process.env.SIG) as string[])

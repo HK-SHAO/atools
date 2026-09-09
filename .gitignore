@@ -22,6 +22,8 @@ coverage
 # caches
 .eslintcache
 .cache
+bench/.data
+bench/ml/*.json
 *.tsbuildinfo
 .wrangler/
 
@@ -36,3 +38,4 @@ docs/audio-examples
 docs/ra2
 
 .workbuddy/
+.data/
