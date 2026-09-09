@@ -12,6 +12,7 @@
     "dev": "bun --hot src/index.ts",
     "start": "NODE_ENV=production bun src/index.ts",
     "build:web": "bun run build.ts",
+    "build:toy": "bun run build.ts --toy",
     "test": "bun test",
     "quality": "bun bench/quality.ts",
     "bench": "bun bench/run.ts",
