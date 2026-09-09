@@ -1,20 +1,44 @@
+const PORT = Number(process.env.BENCH_PORT ?? 4330);
 const built = await Bun.build({
   entrypoints: [`${import.meta.dir}/entry.ts`],
   target: "browser",
 });
 if (!built.success) throw new AggregateError(built.logs, "bench bundle 构建失败");
-await Bun.write(`${import.meta.dir}/bundle.js`, built.outputs[0]!);
+// 按端口分文件写 bundle，并行跑多实例时不互相覆盖
+await Bun.write(`${import.meta.dir}/bundle-${PORT}.js`, built.outputs[0]!);
+const { ensureCached } = await import("./cache");
 
 const CHROME =
   "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
-const PORT = Number(process.env.BENCH_PORT ?? 4330);
-const CDP = 9600 + Math.floor(Math.random() * 300);
+const CDP = PORT + 1000; // 并行跑多实例时从 BENCH_PORT 派生，避免随机碰撞
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const FILES = (process.env.FILES ?? "voice/greeting.mp3,voice/evolve-1.mp3,voice/hurt-1.mp3,voice/victory.mp3")
-  .split(",")
-  .filter(Boolean);
+const AUDIO_EXT = new Set([".mp3", ".m4a", ".ogg", ".wav"]);
+
+// 默认覆盖 docs/ 下全部音频（voice、ra2、audio-examples…），新加文件自动纳入；
+// FILES 环境变量可覆盖为子集。
+const FILES =
+  process.env.FILES ??
+  (() => {
+    const { readdirSync } = require("node:fs") as typeof import("node:fs");
+    const docs = `${import.meta.dir}/../docs`;
+    const out: string[] = [];
+    const walk = (rel: string): void => {
+      for (const e of readdirSync(`${docs}/${rel}`, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(`${rel}/${e.name}`);
+        else if (AUDIO_EXT.has(e.name.slice(e.name.lastIndexOf("."))))
+          out.push(`${rel}/${e.name}`);
+      }
+    };
+    for (const g of readdirSync(docs, { withFileTypes: true }))
+      if (g.isDirectory()) walk(g.name);
+    return out.sort().join(",");
+  })();
+const list = FILES.split(",").filter(Boolean);
+
+// 评测前确保 docs 音频的解码缓存齐备（m4a 等在无头浏览器里解码极慢）
+await ensureCached(list);
 
 const CASES = JSON.parse(
   process.env.CASES ??
@@ -25,6 +49,9 @@ const CASES = JSON.parse(
       { sr: 8000, bits: 8, fineness: 1, fmax: 0, mode: "compact", via: "png" },
       { sr: 16000, bits: 6, fineness: 1, fmax: 0, mode: "compact", via: "png" },
       { sr: 0, bits: 8, fineness: 1, fmax: 0, mode: "exact", via: "png" },
+      { sr: 0, bits: 8, fineness: 1, fmax: 0, mode: "exact", via: "jpeg" },
+      { sr: 0, bits: 8, fineness: 1, fmax: 0, mode: "exact", via: "s75" },
+      { sr: 0, bits: 8, fineness: 1, fmax: 0, mode: "exact", via: "s90" },
     ]),
 );
 
@@ -134,7 +161,7 @@ try {
   }[] = [];
 
   const TUNE = process.env.TUNE ? JSON.parse(process.env.TUNE) : null;
-  for (const file of FILES) {
+  for (const file of list) {
     const url = `/audio/${file}`;
     if (TUNE) await ev(`Bench.setTune(${JSON.stringify(TUNE)})`);
     await ev(`return (window.__src = await Bench.loadAudio(${JSON.stringify(url)}));`);
@@ -144,7 +171,7 @@ try {
     console.log(`\n── ${file}  ${info[0]}Hz  ${(info[1] / info[0]).toFixed(1)}s`);
     for (const c of CASES) {
       const row = (await ev(
-        `return await Bench.runCase(window.__src.pcm.subarray(0, Math.min(window.__src.pcm.length, ${MAX_SEC} * window.__src.sr)), window.__src.sr, ${JSON.stringify(file.split("/").pop())}, ${JSON.stringify(c)})`,
+        `return await Bench.runCase(window.__src.pcm.subarray(0, Math.min(window.__src.pcm.length, ${MAX_SEC} * window.__src.sr)), window.__src.sr, ${JSON.stringify(file.split("/").pop())}, ${JSON.stringify(c)}, ${JSON.stringify(file.split("/")[0] ?? "")})`,
       )) as (typeof rows)[number];
       rows.push(row);
       const m = row.m;
@@ -239,7 +266,7 @@ try {
         )) as string,
       );
   }
-  await Bun.write("/tmp/bench.json", JSON.stringify(rows, null, 2));
+  await Bun.write(process.env.OUT ?? "/tmp/bench.json", JSON.stringify(rows, null, 2));
   console.log("\nerrs:", errs.length ? errs.slice(0, 3).join(" | ") : "(none)");
   ws.close();
 } finally {

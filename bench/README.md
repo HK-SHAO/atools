@@ -12,7 +12,7 @@
 | `bun run bench` | 是 | **端到端评测台**：Chromium 无头跑完整链路（音频 → 图 → PNG/JPEG/缩放降级 → 读图 → 还原），覆盖图片容器层的损失。 |
 | `bun run smoke` | 是 | **界面冒烟**：起页面 → 点示例 → 质检 → 点频谱图试播，只报控制台错误与截图（`/tmp/smoke-*.png`）。需要 dev server 在 `http://127.0.0.1:3000`。 |
 
-另有单元测试 `bun test`（66 个），覆盖 FFT/相位/PNG/参数等纯逻辑。
+另有单元测试 `bun test`（93 个），覆盖 FFT/相位/PNG/参数等纯逻辑。
 
 ## 质量回归（quality.ts）
 
@@ -26,7 +26,7 @@
 ## 端到端评测台（run.ts + entry.ts）
 
 - 启动时**自动重打 bundle**（杜绝改了 src 忘了重编、测的是旧代码）。
-- 用例通过环境变量定制：
+- 默认覆盖 **docs/ 下全部音频**（voice、ra2、audio-examples…，启动时自动发现，新加文件自动纳入）；`FILES='voice/greeting.mp3'` 可覆盖为子集，其余用例参数同样通过环境变量定制：
 
   ```sh
   FILES='voice/greeting.mp3' \
@@ -40,7 +40,9 @@
 - 内置探针（环境变量开关）：
   - `SIG='["jpeg-anon","half-anon"]'` —— 像素签名诊断（B 通道分布、矢量半径分布、命中率），调 `recognizeExact` 阈值用。
   - `SYNTH` / `RECON` / `PHASE` / `GRAD` —— 反演器横评、量化/相位分离、PGHI 梯度体检（详见 entry.ts 各 probe 注释）。
-- 结果同时落盘 `/tmp/bench.json`。
+- `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（CDP 端口与 bundle 文件名都从它派生，互不冲突）。
+- **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
+- 消融与全语料基准数字见 `docs/algorithms.md`。
 
 ## 已标定的经验数字（2026-09，greeting.mp3 / 2.5s 合成）
 

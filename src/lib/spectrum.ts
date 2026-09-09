@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { FFT, hannWindow, mirrorSpectrum } from "./fft";
-import { SR_OPTIONS, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { FINENESS, SR_OPTIONS, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
@@ -123,10 +123,35 @@ export function fitEncode(
       };
     }
   }
-  const sr = 8000;
-  const secs = Math.floor((MAX_FRAMES * hopOf(e)) / sr);
+  for (let f = e.fineness; f >= 1; f--) {
+    const e2: Encode = {
+      ...e,
+      sr: 8000,
+      fmax: e.fmax >= 4000 ? 0 : e.fmax,
+      fineness: f as Encode["fineness"],
+    };
+    if (fits(e2, 8000, Math.ceil((srcSamples * 8000) / srcSr) + hopOf(e2)))
+      return {
+        enc: e2,
+        note: "音频较长，已调低采样率与分辨率；想更清晰可先剪短",
+      };
+  }
+  const bands = e.mode === "exact" ? BANDS : 1;
+  let bestF: Encode["fineness"] = e.fineness;
+  let bestSecs = 0;
+  for (let f = 0; f < FINENESS.length; f++) {
+    const hop = hopOf({ ...e, fineness: f as Encode["fineness"] });
+    const bins = rowsFor(FINENESS[f]!.win, 8000, 0);
+    const cap = Math.min(MAX_FRAMES, Math.floor(MAX_PIXELS / (bins * bands)));
+    const secs = Math.floor(((cap - 1) * hop) / 8000);
+    if (secs > bestSecs) {
+      bestSecs = secs;
+      bestF = f as Encode["fineness"];
+    }
+  }
+  const secs = Math.max(1, bestSecs);
   return {
-    enc: { ...e, sr, fmax: 0, end: e.start + secs },
+    enc: { ...e, sr: 8000, fmax: 0, fineness: bestF as Encode["fineness"], end: e.start + secs },
     note: `音频太长，只保留前 ${secs} 秒`,
   };
 }
@@ -485,6 +510,10 @@ async function invert(
   const padded = samples + win;
 
   const warm = TUNE.pghi ? phaseFromMagnitude(target, frames, bins, win, hop) : null;
+  const anchor: Anchor | null =
+    fine && spec.phaseCos && spec.phaseSin && spec.phaseW
+      ? { cos: spec.phaseCos, sin: spec.phaseSin, w: spec.phaseW }
+      : null;
   let next = 0;
   const y = await rtisiLa(target, frames, bins, win, hop, samples, {
     iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
@@ -503,10 +532,6 @@ async function invert(
 
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = y[i]!;
-  const anchor: Anchor | null =
-    fine && spec.phaseCos && spec.phaseSin && spec.phaseW
-      ? { cos: spec.phaseCos, sin: spec.phaseSin, w: spec.phaseW }
-      : null;
   if (fine || TUNE.rtisiGl > 0)
     await glRefine(
       x,

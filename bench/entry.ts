@@ -45,6 +45,7 @@ export interface Metrics {
 
 export interface Row {
   file: string;
+  group: string;
   case: string;
   ms: number;
   bytes: number;
@@ -232,6 +233,13 @@ async function degrade(blob: Blob, via: Case["via"], name: string): Promise<Blob
 }
 
 export async function loadAudio(url: string): Promise<{ pcm: Samples; sr: number }> {
+  // 优先读评测端预解码缓存（4 字节 sr 头 + f32 PCM），未命中再现场解码
+  const cached = await fetch(url.replace(/^\/audio\//, "/pcm/")).catch(() => null);
+  if (cached?.ok) {
+    const buf = await cached.arrayBuffer();
+    const sr = new DataView(buf).getUint32(0, true);
+    return { pcm: new Float32Array(buf, 4), sr };
+  }
   const bytes = await (await fetch(url)).arrayBuffer();
   return decodeAudioFile(bytes);
 }
@@ -248,6 +256,7 @@ export function setTune(
     phaseReliable: number;
     phaseDeadZone: number;
     anchorLambda: number;
+    fine: Partial<{ rtisiIters: number; rtisiBudget: number; glIters: number; glBudgetMs: number }>;
   }>,
 ): string {
   if (t.pghi !== undefined) TUNE.pghi = t.pghi;
@@ -260,6 +269,7 @@ export function setTune(
   if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;
   if (t.phaseDeadZone !== undefined) SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
   if (t.anchorLambda !== undefined) TUNE.anchorLambda = t.anchorLambda;
+  if (t.fine) Object.assign(TUNE.fine, t.fine);
   return JSON.stringify(TUNE);
 }
 
@@ -391,6 +401,7 @@ export async function runCase(
   srcSr: number,
   name: string,
   c: Case,
+  group = "",
 ): Promise<Row> {
   const t0 = performance.now();
   const enc: Encode = {
@@ -441,6 +452,7 @@ export async function runCase(
 
   return {
     file: name,
+    group,
     case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness]!.label}/${c.via}/${(back.meta.samples / back.meta.sr).toFixed(2)}s/${dims}`,
     ms: Math.round(performance.now() - t0),
     bytes,

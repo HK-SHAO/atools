@@ -6,7 +6,7 @@ out
 dist
 *.tgz
 *.zip
-bench/bundle.js
+bench/bundle*.js
 
 # coverage
 coverage
