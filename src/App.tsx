@@ -312,7 +312,6 @@ export function App() {
           <button type="button" className="act" onClick={demo}>
             演示音频
           </button>
-          <span className="dim">一张图存下一段声音</span>
           <span className="credit">
             {CREDIT_NAME} · created by{" "}
             <a href={CREDIT_AUTHOR.url} target="_blank" rel="noreferrer">
