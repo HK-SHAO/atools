@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeAudioFile } from "./lib/audio";
 import type { Samples } from "./lib/arrays";
-import DEMO_URL from "./assets/fade-demo.ogg";
+import DEMO_URL from "./assets/fade-demo.m4a";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "./lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
@@ -195,7 +195,7 @@ export function App() {
         const buf = await (await fetch(DEMO_URL)).arrayBuffer();
         const { pcm, sr } = await decodeAudioFile(buf);
         setMode("compact");
-        setEnc(e => reopen(e));
+        setEnc(e => ({ ...reopen(e), sr: 0 }));
         setSource({ pcm, sr, name: "fade（示例，前 12 秒）" });
       } catch (e) {
         console.error(e);
@@ -235,7 +235,7 @@ export function App() {
     >
       <div className="shell">
         <header className="head">
-          <h1>频谱 spectrum</h1>
+          <h1>频谱 SPECTRUM</h1>
           <p>声音 ↔ 图像</p>
         </header>
 

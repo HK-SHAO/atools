@@ -184,9 +184,9 @@ export function Workbench({
         采样率 {srLabel(meta.sr)}、{clock(duration)}、{kb(png.size)}
         {compact ? "" : "、可逆"}
         {loss ? `；${lossLine(loss, meta.exact)}` : ""}
+        {note ? `；${note}` : ""}
+        {hint ? `；${hint}` : ""}
       </p>
-      {note && <p className="facts dim">{note}</p>}
-      {hint && <p className="facts dim">{hint}</p>}
       {error && <p className="note is-error">{error}</p>}
       {stage && (
         <p className="note">

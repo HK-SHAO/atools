@@ -3,7 +3,3 @@ declare module "*.m4a" {
   export default url;
 }
 
-declare module "*.ogg" {
-  const url: string;
-  export default url;
-}
