@@ -249,7 +249,7 @@ export function App() {
           <section className="card">
             <div className="drop">
               <span className="drop-lead">拖进一段音频，或者一张图</span>
-              <span className="drop-sub">mp3 · wav · flac · m4a · ogg · amr ↔ png · jpg · webp</span>
+              <span className="drop-sub">mp3 · wav · flac · m4a · ogg · amr · 3gp · webm ↔ png · jpg · webp</span>
               <div className="drop-acts">
                 <label className="drop-act">
                   选文件

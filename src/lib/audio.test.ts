@@ -44,6 +44,12 @@ describe("sniffAudio（音频容器识别）", () => {
     expect(sniffAudio(bytes(0xff, 0xfb, 0x90, 0x00))).toContain("MP3");
   });
 
+  test("WebM/MKV（EBML 魔数）与 AAC ADTS 裸流", () => {
+    expect(sniffAudio(bytes(0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5))).toContain("WebM");
+    expect(sniffAudio(bytes(0xff, 0xf1, 0x50, 0x80))).toContain("AAC");
+    expect(sniffAudio(bytes(0xff, 0xf9, 0x50, 0x80))).toContain("AAC");
+  });
+
   test("认不出的返回空串", () => {
     expect(sniffAudio(bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13))).toBe("");
   });
@@ -119,5 +125,49 @@ describe("decodeAudioFile（M4A 兜底解码）", () => {
     expect(sr).toBe(44100);
     expect(pcm.length).toBe(66150);
     expect(peakOf(pcm)).toBeGreaterThan(0.5);
+  });
+});
+
+describe("decodeAudioFile（全格式兜底矩阵）", () => {
+  // Bun 无 Web Audio，原生路径恒失败 —— 下面每个夹具都只走 WASM 兜底引擎，
+  // 等价于「最坏浏览器」（原生全拒）下的解码链路。
+  async function load(name: string): Promise<ArrayBuffer> {
+    return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
+  }
+
+  const peakOf = (pcm: Samples): number => {
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i++) peak = Math.max(peak, Math.abs(pcm[i]!));
+    return peak;
+  };
+
+  const ok = (r: { pcm: Samples; sr: number }, sr: number, min = 0.3) => {
+    expect(r.sr).toBe(sr);
+    expect(r.pcm.length / r.sr).toBeGreaterThan(1.0);
+    expect(peakOf(r.pcm)).toBeGreaterThan(min);
+  };
+
+  test("mp3（mpg123 WASM）", async () => ok(await decodeAudioFile(await load("tone.mp3")), 44100));
+  test("wav（PCM 全量兜底）", async () => ok(await decodeAudioFile(await load("tone.wav")), 44100));
+  test("flac（libFLAC WASM）", async () => ok(await decodeAudioFile(await load("tone.flac")), 44100));
+  test("ogg vorbis", async () =>
+    ok(await decodeAudioFile(await load("tone-vorbis.ogg")), 44100));
+  test("ogg opus", async () => ok(await decodeAudioFile(await load("tone-opus.ogg")), 48000));
+  test("webm opus（EBML 容器）", async () =>
+    ok(await decodeAudioFile(await load("voice.webm")), 48000));
+  test("adts 裸流（.aac）", async () => ok(await decodeAudioFile(await load("tone.aac")), 44100));
+  test("3gp 容器内 AMR（mp4 demuxer 路由）", async () =>
+    ok(await decodeAudioFile(await load("call.3gp")), 8000, 0.05));
+
+  test("截断的 mp3 尽力解码、不抛错", async () => {
+    const { pcm, sr } = await decodeAudioFile((await load("tone.mp3")).slice(0, 3000));
+    expect(sr).toBe(44100);
+    expect(pcm.length).toBeGreaterThan(0);
+  });
+
+  test("彻底认不出的数据报错且带帮助文案", async () => {
+    const junk = new Uint8Array(1024);
+    for (let i = 0; i < junk.length; i++) junk[i] = (i * 37 + 11) & 0xff;
+    expect(decodeAudioFile(junk.buffer)).rejects.toThrow("SILK");
   });
 });
