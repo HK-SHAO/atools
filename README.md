@@ -6,13 +6,13 @@
 
 把音频变成一张可分享的频谱图；把频谱图，或随便哪张图片，还原成可播放的音频。图即是声音。
 
-Turn audio into a shareable spectrogram; turn a spectrogram — or any picture at all — back into playable audio. The picture *is* the sound.
+Turn audio into a shareable spectrogram; turn a spectrogram, or any picture, back into playable audio. The picture *is* the sound.
 
 ## 怎么用 / How to use
 
 拖入一段音频（mp3、wav、flac、m4a、ogg、amr）得到频谱图；把图拖回去就能出声。频谱图本身就是进度条：点、拖、方向键，落到哪听到哪。
 
-Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop the image back to hear it. The spectrogram is the progress bar — click, drag, or arrow keys, and it plays from wherever you land.
+Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop the image back to hear it. The spectrogram is the progress bar: click, drag, or use the arrow keys; playback starts wherever you land.
 
 ## 两种模式 / Two modes
 
@@ -44,6 +44,6 @@ bun run build    # 产物到 dist/ / build to dist/
 
 ## 深入 / Going deeper
 
-- [docs/format-spec.md](docs/format-spec.md) —— 图片格式契约 / image format contract
-- [docs/algorithms.md](docs/algorithms.md) —— 算法原理与实测 / algorithm notes and benchmarks
-- [AGENTS.md](AGENTS.md) —— 工程架构 / engineering architecture
+- [docs/format-spec.md](docs/format-spec.md)：图片格式契约 / image format contract
+- [docs/algorithms.md](docs/algorithms.md)：算法原理与实测 / algorithm notes and benchmarks
+- [AGENTS.md](AGENTS.md)：工程架构 / engineering architecture
