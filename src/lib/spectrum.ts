@@ -87,7 +87,7 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
 
   if (frames > MAX_FRAMES) throw new Error("音频太长，图放不下：剪短一点，或调低采样率");
   if (frames * bins * bands > MAX_PIXELS)
-    throw new Error("图太大了：把「精细度」或「采样率」调低一些");
+    throw new Error("图太大了：把「窗长」或「采样率」调低一些");
 
   return { win, hop, frames, bins, samples };
 }

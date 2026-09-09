@@ -176,7 +176,7 @@ export function Workbench({
       </div>
 
       <p className="facts">
-        {srLabel(meta.sr)} 采样 · {clock(duration)} · {kb(png.size)}
+        采样率 {srLabel(meta.sr)} · {clock(duration)} · {kb(png.size)}
         {compact ? "" : " · 可逆"}
       </p>
       {note && <p className="facts dim">{note}</p>}
@@ -196,7 +196,7 @@ export function Workbench({
         </button>
         {canRefine && (
           <button type="button" className="act" onClick={onRefine} disabled={busy}>
-            精修音质
+            精修相位
           </button>
         )}
       </div>
@@ -214,24 +214,21 @@ export function Workbench({
           onPick={v => set("mode", v)}
         />
         <Row<number>
-          label="采样"
+          label="采样率"
           value={enc.sr}
           options={SR_OPTIONS.map(sr => ({ value: sr, label: srLabel(sr) }))}
           onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
         />
         {compact && (
           <Row<number>
-            label="音质"
+            label="位深"
             value={enc.bits}
-            options={BITS_OPTIONS.map(b => ({
-              value: b,
-              label: b === 2 ? "最低" : b === 4 ? "低" : "高",
-            }))}
+            options={BITS_OPTIONS.map(b => ({ value: b, label: String(b) }))}
             onPick={v => set("bits", v)}
           />
         )}
         <Row<Encode["fineness"]>
-          label="精度"
+          label="窗长"
           value={enc.fineness}
           options={FINENESS.map((f, i) => ({
             value: i as Encode["fineness"],

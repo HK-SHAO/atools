@@ -139,10 +139,10 @@ export function App() {
         setSource({ pcm, sr: spec.meta.sr, name: file.name });
         if (guessed)
           setHint(
-            "这张图自带的信息被删掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
+            "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
           );
         else if (phaseReliability !== null && phaseReliability < 0.5)
-          setHint("图片被缩放过，声音只能靠估算，会有些失真");
+          setHint("图片被缩放过，相位信息已被抹平，只能按幅度重建，会有些失真");
         return;
       }
 
@@ -188,7 +188,7 @@ export function App() {
       );
       if (!alive()) return;
       setJob(j => (j ? { ...j, pcm } : j));
-      setHint("已精修完成，满意就点「存音频」");
+      setHint("相位已精修，满意就点「存音频」");
     } catch (e) {
       if (alive() && !(e instanceof Aborted))
         setError(e instanceof Error ? e.message : "精修失败");
@@ -307,7 +307,7 @@ export function App() {
             {source ? "换个示例" : "听个示例"}
           </button>
           <span className="dim">
-            单声道 · 一张图存下一段声音；要原音级还原，模式选「可逆」
+            单声道；一张图存下一段声音
           </span>
         </footer>
       </div>
