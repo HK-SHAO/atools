@@ -142,7 +142,7 @@ export function App() {
             "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
           );
         else if (phaseReliability !== null && phaseReliability < 0.5)
-          setHint("图片被缩放过，相位信息已被抹平，只能按幅度重建，会有些失真");
+          setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
         return;
       }
 

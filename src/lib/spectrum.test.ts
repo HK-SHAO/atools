@@ -205,6 +205,36 @@ describe("compact round trip", () => {
     expect(fine).toBeGreaterThanOrEqual(fast * 0.98);
   });
 
+  test("damaged phase works as an anchor: fine beats magnitude-only", async () => {
+    const sr = 8000;
+    const pcm = resample(signal(sr * 8, 44100), 44100, sr);
+    const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
+    jpegish(spec, 48);
+
+    // 模拟读端：逐 bin 归一化并存置信度权重；弱相位只作锚，不作真值
+    const n = spec.phaseCos!.length;
+    const w = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const cr = (spec.phaseCos![i]! - 127.5) / 127.5;
+      const cs = (spec.phaseSin![i]! - 127.5) / 127.5;
+      const h = Math.sqrt(cr * cr + cs * cs);
+      w[i] = Math.min(255, Math.round(h * 255));
+      const k = h > 1e-6 ? 1 / h : 0;
+      spec.phaseCos![i] = Math.max(0, Math.min(255, Math.round(cr * k * 127.5 + 127.5)));
+      spec.phaseSin![i] = Math.max(0, Math.min(255, Math.round(cs * k * 127.5 + 127.5)));
+    }
+    spec.phaseW = w;
+    spec.phaseWeak = true;
+
+    const fast = localCorrelation(pcm, await synthesise(spec), sr);
+    const fine = localCorrelation(
+      pcm,
+      await synthesise(spec, undefined, undefined, "fine"),
+      sr,
+    );
+    expect(fine).toBeGreaterThan(fast);
+  });
+
   test("stored phase stays the best estimator, even on lossy images", async () => {
     const sr = 8000;
     const pcm = resample(signal(sr * 8, 44100), 44100, sr);

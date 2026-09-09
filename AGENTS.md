@@ -9,6 +9,7 @@ bun install
 bun dev                  # 开发服务器 http://localhost:3000
 bun test                 # 全量测试（bun:test，勿用 jest/vitest）
 bun run build            # 生产构建 → dist/
+bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 ```
 

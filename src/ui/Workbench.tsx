@@ -133,7 +133,7 @@ export function Workbench({
   const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
-  const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin);
+  const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin && !spec.phaseWeak);
 
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
 

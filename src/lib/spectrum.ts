@@ -52,6 +52,12 @@ export interface Spectrum {
 
   phaseCos: Uint8Array | null;
   phaseSin: Uint8Array | null;
+
+  // 读图端才有：逐 bin 相位置信度（0-255，圆矢量长度）；weak = 低于强保留阈值、
+  // 只作锚定参考不作真值。
+  phaseW?: Uint8Array | null;
+  phaseWeak?: boolean;
+
   meta: Meta;
 }
 
@@ -381,6 +387,12 @@ function finish(x: Float64Array, win: number, samples: number): Samples {
   return out;
 }
 
+export interface Anchor {
+  cos: Uint8Array;
+  sin: Uint8Array;
+  w: Uint8Array;
+}
+
 async function glRefine(
   x: Float64Array,
   target: Float64Array,
@@ -389,6 +401,7 @@ async function glRefine(
   alive?: () => boolean,
   onProgress?: (p: number) => void,
   budgetMs: number = GL_BUDGET_MS,
+  anchor?: Anchor | null,
 ): Promise<void> {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
@@ -418,8 +431,21 @@ async function glRefine(
         const cr = core.re[b]!;
         const ci = core.im[b]!;
         const d = Math.sqrt(cr * cr + ci * ci) || 1e-30;
-        const pr = (cr / d) * m;
-        const pi = (ci / d) * m;
+        let pr = (cr / d) * m;
+        let pi = (ci / d) * m;
+
+        // 锚定投影：向存储相位凸混合，权 = 逐 bin 置信度 × 全局强度。
+        // 等价于最小化 ‖|STFT x|−A‖² + λΣw·(1−cos∠(x,φ_ref)) 的交替步。
+        if (anchor && b < bins) {
+          const wv = (anchor.w[base + b]! / 255) * TUNE.anchorLambda;
+          if (wv > 0.01) {
+            const ar = ((anchor.cos[base + b]! - 127.5) / 127.5) * m;
+            const ai = ((anchor.sin[base + b]! - 127.5) / 127.5) * m;
+            const ah = Math.sqrt(ar * ar + ai * ai) || 1e-30;
+            pr += wv * ((ar / ah) * m - pr);
+            pi += wv * ((ai / ah) * m - pi);
+          }
+        }
 
         let nr = pr;
         let ni = pi;
@@ -477,6 +503,10 @@ async function invert(
 
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = y[i]!;
+  const anchor: Anchor | null =
+    fine && spec.phaseCos && spec.phaseSin && spec.phaseW
+      ? { cos: spec.phaseCos, sin: spec.phaseSin, w: spec.phaseW }
+      : null;
   if (fine || TUNE.rtisiGl > 0)
     await glRefine(
       x,
@@ -486,6 +516,7 @@ async function invert(
       alive,
       onProgress,
       fine ? TUNE.fine.glBudgetMs : undefined,
+      anchor,
     );
   return finish(x, win, samples);
 }
@@ -499,7 +530,9 @@ export async function synthesise(
   quality: Quality = "fast",
 ): Promise<Samples> {
   const { meta, phaseCos, phaseSin } = spec;
-  if (meta.exact && phaseCos && phaseSin) return synthesiseExact(spec, alive, onProgress);
+  // 强相位直逆（最快最准）；精修档一律走可锚定的迭代路径（弱相位默认快速幅度重建）。
+  if (meta.exact && phaseCos && phaseSin && !spec.phaseWeak && quality !== "fine")
+    return synthesiseExact(spec, alive, onProgress);
   return invert(spec, alive, onProgress, quality === "fine");
 }
 

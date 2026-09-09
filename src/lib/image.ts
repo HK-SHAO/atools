@@ -196,9 +196,10 @@ export function samplePhase(
   rowCount: number,
   frames: number,
   bins: number,
-): { cos: Uint8Array; sin: Uint8Array; reliability: number } {
+): { cos: Uint8Array; sin: Uint8Array; w: Uint8Array; reliability: number } {
   const cos = new Uint8Array(frames * bins);
   const sin = new Uint8Array(frames * bins);
+  const w = new Uint8Array(frames * bins);
   const sx = width / frames;
   const sy = rowCount / bins;
   let sumLen = 0;
@@ -226,12 +227,13 @@ export function samplePhase(
       const h = Math.sqrt(cr * cr + cs * cs);
       sumLen += h;
       cells++;
+      w[f * bins + b] = Math.min(255, Math.round((h / 127.5) * 255));
       const k = h > 1e-6 ? 127.5 / h : 0;
       cos[f * bins + b] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
       sin[f * bins + b] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
     }
   }
-  return { cos, sin, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
+  return { cos, sin, w, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
 }
 
 function rescaled(meta: Meta, width: number, maxHop: number): Meta {
@@ -255,7 +257,11 @@ export interface Decoded {
   guessed: boolean;
 }
 
-export const READ_TUNE = { phaseReliable: 0.5, phaseReliableJpeg: 0.3 };
+export const READ_TUNE = {
+  phaseReliable: 0.5,
+  phaseReliableJpeg: 0.3,
+  phaseAnchor: 0.15,
+};
 
 function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
   for (let rows = STUB_ROWS; rows >= 2; rows--) {
@@ -410,13 +416,20 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         const ph = samplePhase(pixels, w, bandRows, bandRows, frames0, bins0);
         const scaled = w < stub.width * 0.95;
         const th = scaled ? READ_TUNE.phaseReliable : READ_TUNE.phaseReliableJpeg;
-        const keep = ph.reliability >= th;
+        const strong = ph.reliability >= th;
+        // 缩放混合对相位的损伤是系统性的（方向有偏），迭代纠不回来；JPEG 损伤近似随机。
+        // 故缩放过狠（<0.6×）时相位只能整体丢弃。
+        const weak =
+          !strong && w >= stub.width * 0.6 && ph.reliability >= READ_TUNE.phaseAnchor;
+        const keep = strong || weak;
         return {
           spec: {
             meta: meta0,
             levels,
             phaseCos: keep ? ph.cos : null,
             phaseSin: keep ? ph.sin : null,
+            phaseW: keep ? ph.w : null,
+            phaseWeak: weak,
           },
           mode: "degraded",
           container,
@@ -463,7 +476,10 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
           : { ...rs, bins: binsFit, win: winFit, exact: true };
       const levels = sampleLevels(pixels, w, 0, bandRows, next.frames, next.bins);
       const ph = samplePhase(pixels, w, bandRows, bandRows, next.frames, next.bins);
-      const keep = ph.reliability >= READ_TUNE.phaseReliable;
+      const strong = ph.reliability >= READ_TUNE.phaseReliable;
+      const weak =
+        !strong && w >= m0.frames * 0.6 && ph.reliability >= READ_TUNE.phaseAnchor;
+      const keep = strong || weak;
       const mode: ReadMode = intact ? "exact" : "degraded";
       return {
         spec: {
@@ -471,6 +487,8 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
           levels,
           phaseCos: keep ? ph.cos : null,
           phaseSin: keep ? ph.sin : null,
+          phaseW: keep ? ph.w : null,
+          phaseWeak: weak,
         },
         mode,
         container,

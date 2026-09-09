@@ -47,7 +47,7 @@ const proc = Bun.spawn(
     "--autoplay-policy=no-user-gesture-required",
     "--window-size=1200,900",
     `--user-data-dir=/tmp/cdp-bench-${Date.now()}`,
-    `http://127.0.0.1:${PORT}/`,
+    `http://127.0.0.1:${PORT}/${process.env.SYNTH_MODE === "fine" ? "?synth=fine" : ""}`,
   ],
   { stdout: "ignore", stderr: "ignore" },
 );

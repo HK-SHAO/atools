@@ -23,6 +23,7 @@ coverage
 .eslintcache
 .cache
 *.tsbuildinfo
+.wrangler/
 
 # editors / OS
 .idea

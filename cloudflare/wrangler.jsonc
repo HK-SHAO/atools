@@ -1,0 +1,18 @@
+/**
+ * 纯静态 assets 部署：无 Worker 源码、无 main、无 bindings。
+ * assets.directory 指向根目录 `bun run build:web` 产出的 ../dist，相对本文件解析。
+ * 模式参考 shaofeng 仓库 cloudflare workspace（commit 3138ea7）。
+ */
+{
+	"name": "atools",
+	"compatibility_date": "2026-09-09",
+	"assets": {
+		"directory": "../dist",
+		"not_found_handling": "single-page-application"
+	},
+	"observability": {
+		"enabled": true
+	},
+	// 部署产物本无 .map；若未来开 sourcemap，true 会把源码公开上传——显式关闭
+	"upload_source_maps": false
+}

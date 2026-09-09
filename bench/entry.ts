@@ -247,6 +247,7 @@ export function setTune(
     rtisiGl: number;
     phaseReliable: number;
     phaseDeadZone: number;
+    anchorLambda: number;
   }>,
 ): string {
   if (t.pghi !== undefined) TUNE.pghi = t.pghi;
@@ -258,6 +259,7 @@ export function setTune(
   if (t.rtisiGl !== undefined) TUNE.rtisiGl = t.rtisiGl;
   if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;
   if (t.phaseDeadZone !== undefined) SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
+  if (t.anchorLambda !== undefined) TUNE.anchorLambda = t.anchorLambda;
   return JSON.stringify(TUNE);
 }
 
@@ -428,7 +430,8 @@ export async function runCase(
     readMode = read.mode;
     dims = `${read.width}x${read.height}`;
   }
-  const y = await synthesise(back);
+  const quality = new URLSearchParams(location.search).get("synth") === "fine" ? "fine" : "fast";
+  const y = await synthesise(back, undefined, undefined, quality);
 
   const ref = tuned.subarray(0, Math.min(tuned.length, y.length)) as Samples;
   const a = align(ref, y, Math.min(2048, Math.floor(ref.length / 4)));
