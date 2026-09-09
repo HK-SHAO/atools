@@ -145,11 +145,10 @@
 
   .spec-head {
     position: absolute;
-    top: 0;
-    bottom: 0;
+    top: -2;
+    bottom: -2;
     left: 0;
     width: calc(0.15 * var(--u));
-    border-radius: var(--r-pill);
     background: #fffdf7;
     box-shadow: 0 0 0 1px rgba(29, 23, 16, 0.5);
     opacity: 0;
@@ -403,38 +402,6 @@
     justify-content: center;
     gap: calc(0.25 * var(--u));
     margin-top: calc(0.5 * var(--u));
-  }
-
-  .drop-act.is-rec {
-    border-color: rgba(150, 65, 31, 0.5);
-    color: #96411f;
-  }
-
-  .rec-dot {
-    width: calc(0.5 * var(--u));
-    height: calc(0.5 * var(--u));
-    border-radius: 50%;
-    background: #c0392b;
-    animation: rec-pulse 1s ease-in-out infinite;
-  }
-
-  @keyframes rec-pulse {
-    0%,
-    100% {
-      opacity: 0.3;
-      transform: scale(0.8);
-    }
-    50% {
-      opacity: 1;
-      transform: scale(1.1);
-    }
-  }
-
-  .drop-err {
-    margin: calc(0.5 * var(--u)) 0 0;
-    font-size: var(--fs-lo);
-    letter-spacing: 0.04em;
-    color: #96411f;
   }
 
   .note {

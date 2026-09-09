@@ -6,8 +6,6 @@ import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
 import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
 import { useContainerScale } from "./ui/useContainerScale";
-import { useMic, type CapturedSamples } from "./ui/useMic";
-import { clock } from "./ui/usePlayback";
 import { Workbench } from "./ui/Workbench";
 
 interface Source {
@@ -162,15 +160,6 @@ export function App() {
     }
   }, []);
 
-  const loadSamples = useCallback((s: CapturedSamples) => {
-    setError(null);
-    setMode("compact");
-    setEnc(e => reopen(e));
-    setSource({ pcm: s.pcm, sr: s.sr, name: s.name });
-  }, []);
-
-  const mic = useMic(loadSamples);
-
   const refine = useCallback(async () => {
     if (!job) return;
     const my = ++genRef.current;
@@ -275,18 +264,7 @@ export function App() {
                     }}
                   />
                 </label>
-                {mic.recording ? (
-                  <button type="button" className="drop-act is-rec" onClick={mic.stop}>
-                    <span className="rec-dot" aria-hidden="true" />
-                    停止 {clock(mic.seconds)}
-                  </button>
-                ) : (
-                  <button type="button" className="drop-act" onClick={mic.start}>
-                    录制
-                  </button>
-                )}
               </div>
-              {mic.error && <p className="drop-err">{mic.error}</p>}
             </div>
           </section>
         )}
