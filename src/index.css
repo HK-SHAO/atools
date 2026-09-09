@@ -437,7 +437,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: calc(0.25 * var(--u)) calc(0.75 * var(--u));
+    gap: calc(.25 * var(--u));
     font-size: var(--fs-lo);
     letter-spacing: 0.04em;
     color: var(--soft);

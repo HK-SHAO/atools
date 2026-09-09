@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeAudioFile } from "./lib/audio";
 import type { Samples } from "./lib/arrays";
-import DEMO_URL from "./assets/fade-demo.m4a";
+import DEMO_URL from "./assets/fade-demo.ogg";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "./lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
@@ -251,10 +251,6 @@ export function App() {
             onEnc={setEnc}
             onTrim={trim}
             onRefine={refine}
-            onReset={() => {
-              setSource(null);
-              setJob(null);
-            }}
             stage={stage}
             hint={hint}
             error={error}
@@ -299,12 +295,22 @@ export function App() {
         )}
 
         <footer className="foot">
+          {source && (
+            <button
+              type="button"
+              className="act"
+              onClick={() => {
+                setSource(null);
+                setJob(null);
+              }}
+            >
+              清空
+            </button>
+          )}
           <button type="button" className="act" onClick={demo}>
-            {source ? "换个示例" : "听个示例"}
+            演示音频
           </button>
-          <span className="dim">
-            单声道；一张图存下一段声音
-          </span>
+          <span className="dim">单声道；一张图存下一段声音</span>
         </footer>
       </div>
     </div>

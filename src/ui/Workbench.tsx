@@ -32,7 +32,6 @@ interface Props {
   onEnc: (e: Encode) => void;
   onTrim: () => void;
   onRefine: () => void;
-  onReset: () => void;
   stage: { label: string; value: number } | null;
   hint: string | null;
   error: string | null;
@@ -80,7 +79,6 @@ export function Workbench({
   onEnc,
   onTrim,
   onRefine,
-  onReset,
   stage,
   hint,
   error,
@@ -203,9 +201,6 @@ export function Workbench({
         </button>
         <button type="button" className="act" onClick={saveWav}>
           存音频
-        </button>
-        <button type="button" className="act" onClick={onReset}>
-          换一个
         </button>
         <button type="button" className="act" onClick={check} disabled={checking || busy}>
           {checking ? "质检中" : "质检"}
