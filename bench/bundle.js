@@ -243,11 +243,7 @@ function chunk(type, data) {
   return out;
 }
 function withMeta(png, meta) {
-  const key = latin1(KEYWORD);
-  const body = latin1(meta);
-  const payload = new Uint8Array(key.length + 1 + body.length);
-  payload.set(key, 0);
-  payload.set(body, key.length + 1);
+  const payload = textPayload(meta);
   const at = 8 + 12 + new DataView(png.buffer, png.byteOffset, png.byteLength).getUint32(8);
   const out = new Uint8Array(png.length + payload.length + 12);
   out.set(png.subarray(0, at), 0);

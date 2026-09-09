@@ -56,7 +56,6 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const genRef = useRef(0);
 
-  // 素材或参数一变就重跑一遍：裁剪 → 重采样 → 成图 → 打包。
   useEffect(() => {
     if (!source) {
       setJob(null);
@@ -163,7 +162,6 @@ export function App() {
     }
   }, []);
 
-  // 麦克风直接给到 PCM，跳过文件解码链路。
   const loadSamples = useCallback((s: CapturedSamples) => {
     setError(null);
     setMode("compact");

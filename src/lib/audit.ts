@@ -93,13 +93,3 @@ export async function audit(
   }
   return out;
 }
-
-export function verdict(rows: LossRow[], exact: boolean): string {
-  const own = rows[0];
-  if (!own) return "";
-  if (exact && own.level === 0 && own.corr > 0.999) return "可逆模式：往返完全一致，零损失";
-  const parts: string[] = [];
-  parts.push(`原图 相关 ${own.corr.toFixed(2)} · ${own.snr.toFixed(0)}dB`);
-  for (const r of rows.slice(1)) parts.push(`${r.label} ${r.corr.toFixed(2)}`);
-  return parts.join("　");
-}

@@ -388,7 +388,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         idx.width,
         idx.height,
         false,
-        8, // 层级已还原成 0..255，按 8 位刻度解读
+        8,
       );
       const levels = new Uint8Array(gmeta.frames * gmeta.bins);
       const sx = idx.width / gmeta.frames;

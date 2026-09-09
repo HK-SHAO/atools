@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import { audit, type LossRow } from "../lib/audit";
 import { downloadName, spectrumToPng, type ReadMode } from "../lib/image";
@@ -90,8 +90,12 @@ export function Workbench({
   const [loss, setLoss] = useState<LossRow[] | null>(null);
   const [checking, setChecking] = useState(false);
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
+  const genRef = useRef(0);
 
-  useEffect(() => setLoss(null), [spec]);
+  useEffect(() => {
+    genRef.current++;
+    setLoss(null);
+  }, [spec]);
   useEffect(() => setRange(null), [enc.start, enc.end]);
 
   const commitRange = () => {

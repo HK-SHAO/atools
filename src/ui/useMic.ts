@@ -142,7 +142,7 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
 
   const start = useCallback(async () => {
     setError(null);
-    if (recording) return; // 防重入：采集中的再点一次直接忽略
+    if (recording) return;
     if (!navigator.mediaDevices?.getUserMedia || !audioCtor()) {
       setError("这个浏览器不支持录音");
       return;
@@ -226,7 +226,6 @@ export function useMic(onCaptured: (s: CapturedSamples) => void) {
       chunksRef.current = [];
       totalRef.current = 0;
       stopGraph();
-      setRecording(false);
     },
     [stopGraph],
   );

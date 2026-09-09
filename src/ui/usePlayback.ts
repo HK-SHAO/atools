@@ -169,26 +169,14 @@ export function usePlayback(pcm: Samples, sr: number) {
 
   useEffect(
     () => () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = 0;
-      const node = nodeRef.current;
-      nodeRef.current = null;
-      if (node) {
-        node.onended = null;
-        try {
-          node.stop();
-        } catch {
-
-        }
-        node.disconnect();
-      }
+      halt();
       const ctx = ctxRef.current;
       ctxRef.current = null;
       bufRef.current = null;
       bufPcmRef.current = null;
       void ctx?.close();
     },
-    [],
+    [halt],
   );
 
   const nudge = useCallback(

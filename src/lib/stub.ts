@@ -41,14 +41,14 @@ export function stubBits(width: number, sr: number, win: number, exact: boolean)
   const put = (v: number, n: number) => {
     for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1);
   };
-  put(0b1010, 4); // 前导：亮暗亮暗四游程（与深色锚异值，不粘连）→ 同步 + 比例尺
+  put(0b1010, 4);
   put(MAGIC, 4);
   put(pre, 2);
   put(width, wbits);
   put(si, 4);
   put(wi, 2);
   put(exact ? 1 : 0, 1);
-  put(crc8(bits.slice(4)), 8); // CRC 覆盖 magic..exact
+  put(crc8(bits.slice(4)), 8);
   return bits;
 }
 
@@ -102,7 +102,7 @@ export function drawStub(
 
 export function decodeStub(profile: ArrayLike<number>): StubInfo | null {
   const n = profile.length;
-  if (n < 46) return null; // 最小配置（2px 位宽、8bit 宽度）也要 ~68px，放宽到 46 防御
+  if (n < 46) return null;
   let lo = Infinity;
   let hi = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -111,7 +111,7 @@ export function decodeStub(profile: ArrayLike<number>): StubInfo | null {
     if (v > hi) hi = v;
   }
   const th = (lo + hi) / 2;
-  if (hi - lo < 120) return null; // 对比度不足，不像票根
+  if (hi - lo < 120) return null;
 
   const runs: Array<[number, number]> = [];
   let cur = profile[0]! >= th ? 1 : 0;
@@ -131,7 +131,7 @@ export function decodeStub(profile: ArrayLike<number>): StubInfo | null {
     if (runs[r]![0] !== 1 || runs[r + 1]![0] !== 0 || runs[r + 2]![0] !== 1 || runs[r + 3]![0] !== 0)
       continue;
     const total = runs[r]![1] + runs[r + 1]![1] + runs[r + 2]![1] + runs[r + 3]![1];
-    const unit = total / 4; // 1 bit 的像素宽（每个前导游程恰好 1 bit）
+    const unit = total / 4;
     if (unit < 0.3) continue;
     if (
       Math.round(runs[r]![1] / unit) !== 1 ||
@@ -157,7 +157,7 @@ export function decodeStub(profile: ArrayLike<number>): StubInfo | null {
             bad = true;
             break;
           }
-          totalBits = 6 + wN + 15; // + 采样率4 + 窗2 + 可逆1 + CRC8
+          totalBits = 6 + wN + 15;
         }
         if (totalBits > 0 && bits.length >= totalBits) break;
       }
