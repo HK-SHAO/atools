@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decodeAudioFile, sniffAudio } from "./audio";
+import type { Samples } from "./arrays";
 
 const bytes = (...xs: number[]): Uint8Array => Uint8Array.from(xs);
 const ascii = (s: string): Uint8Array => {
@@ -84,5 +85,39 @@ describe("decodeAudioFile（AMR 专用解码）", () => {
     const { pcm, sr } = await decodeAudioFile(bad.buffer);
     expect(sr).toBe(8000);
     expect(pcm.length).toBeGreaterThan(0);
+  });
+});
+
+describe("decodeAudioFile（M4A 兜底解码）", () => {
+  // Bun 无 Web Audio，原生路径恒失败 —— 走到的都是 WASM 兜底引擎（FAAD2 / ALAC）。
+  // 浏览器里的原生路径与兜底切换由评测台端到端覆盖。
+  async function load(name: string): Promise<ArrayBuffer> {
+    return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
+  }
+
+  const peakOf = (pcm: Samples): number => {
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i++) peak = Math.max(peak, Math.abs(pcm[i]!));
+    return peak;
+  };
+
+  test("AAC-LC m4a", async () => {
+    const { pcm, sr } = await decodeAudioFile(await load("aac-lc.m4a"));
+    expect(sr).toBe(44100);
+    expect(pcm.length / sr).toBeGreaterThan(1.4);
+    expect(peakOf(pcm)).toBeGreaterThan(0.5);
+  });
+
+  test("HE-AAC (v1) m4a", async () => {
+    const { pcm, sr } = await decodeAudioFile(await load("he-aac.m4a"));
+    expect(sr).toBe(44100);
+    expect(peakOf(pcm)).toBeGreaterThan(0.5);
+  });
+
+  test("ALAC m4a（安卓 Chrome 原生解不出，兜底必须接管）", async () => {
+    const { pcm, sr } = await decodeAudioFile(await load("alac.m4a"));
+    expect(sr).toBe(44100);
+    expect(pcm.length).toBe(66150);
+    expect(peakOf(pcm)).toBeGreaterThan(0.5);
   });
 });

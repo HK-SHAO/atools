@@ -35,57 +35,71 @@ function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffe
   });
 }
 
-async function decodeAmr(bytes: Uint8Array): Promise<Decoded> {
-  const decode = (await import("@audio/decode-amr")).default;
+function mixdown(channels: Float32Array[]): Samples {
+  const n = channels[0]!.length;
+  if (channels.length === 1) return Float32Array.from(channels[0]!);
+  const pcm = new Float32Array(n);
+  for (const ch of channels) for (let i = 0; i < n; i++) pcm[i] = pcm[i]! + ch[i]!;
+  for (let i = 0; i < n; i++) pcm[i] = pcm[i]! / channels.length;
+  return pcm;
+}
+
+const WASM_DECODERS = {
+  "@audio/decode-amr": () => import("@audio/decode-amr"),
+  "@audio/decode-aac": () => import("@audio/decode-aac"),
+};
+
+async function decodeWasm(pkg: keyof typeof WASM_DECODERS, bytes: Uint8Array): Promise<Decoded> {
+  const decode = (await WASM_DECODERS[pkg]()).default;
   const { channelData, sampleRate } = await decode(bytes);
-  const pcm = channelData[0];
-  if (!pcm || pcm.length === 0) throw new Error("空 AMR");
-  return { pcm: Float32Array.from(pcm), sr: sampleRate };
+  if (!channelData[0] || channelData[0].length === 0) throw new Error("空流");
+  return { pcm: mixdown(channelData), sr: sampleRate };
+}
+
+async function decodeNative(data: ArrayBuffer): Promise<Decoded | null> {
+  let ctx: AudioContext | null = null;
+  try {
+    const Ctor =
+      window.AudioContext ??
+      (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    ctx = new Ctor!;
+    const buffer = await decodeRaw(ctx, data.slice(0));
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+    if (channels[0]!.length === 0) throw new Error("空流");
+    return { pcm: mixdown(channels), sr: buffer.sampleRate };
+  } catch {
+    return null;
+  } finally {
+    void ctx?.close();
+  }
 }
 
 export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
-  const head = sniffAudio(new Uint8Array(data));
+  if (data.byteLength === 0) throw new Error("这是个空文件");
+  const bytes = new Uint8Array(data);
+  const head = sniffAudio(bytes);
 
   if (head.startsWith("AMR")) {
     try {
-      return await decodeAmr(new Uint8Array(data));
+      return await decodeWasm("@audio/decode-amr", bytes);
     } catch {
       throw new Error(`解不出这段 AMR 音频。${DECODE_HELP}`);
     }
   }
 
-  const Ctor =
-    window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) throw new Error("这个浏览器不支持 Web Audio");
+  const native = await decodeNative(data);
+  if (native) return native;
 
-  const ctx = new Ctor();
-  let buffer: AudioBuffer;
-  try {
-    buffer = await decodeRaw(ctx, data.slice(0));
-  } catch {
-    if (head.startsWith("SILK") || head.startsWith("3GP"))
-      throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
-    throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
-  } finally {
-    void ctx.close();
-  }
-
-  const tracks = buffer.numberOfChannels;
-  const n = buffer.length;
-  if (n === 0) throw new Error("这段音频是空的");
-  const pcm = new Float32Array(n);
-
-  if (tracks === 1) {
-    pcm.set(buffer.getChannelData(0));
-  } else {
-    for (let c = 0; c < tracks; c++) {
-      const src = buffer.getChannelData(c);
-      for (let i = 0; i < n; i++) pcm[i] = pcm[i]! + src[i]!;
+  if (head.startsWith("M4A")) {
+    try {
+      return await decodeWasm("@audio/decode-aac", bytes);
+    } catch {
+      throw new Error(`解不出这段 M4A/MP4，编码不常见。${DECODE_HELP}`);
     }
-    for (let i = 0; i < n; i++) pcm[i] = pcm[i]! / tracks;
   }
 
-  return { pcm, sr: buffer.sampleRate };
+  throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
 }
 
 export function demoTrack(sr: number): Samples {
