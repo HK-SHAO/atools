@@ -33,5 +33,6 @@ coverage
 # 大体积音频样本（评测台素材，不入库）
 docs/voice
 docs/audio-examples
+docs/ra2
 
 .workbuddy/

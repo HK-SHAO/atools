@@ -1,6 +1,6 @@
 # atools · 频谱 Spectrum
 
-**[▶ 在线试用 / Try online](https://www.bilibili.com/toy/atools/index.html)**
+**[▶ 在线试用 / Try online](https://atools.shao.fun)**
 
 ![频谱 · 界面截图 / Screenshot](docs/screenshot.png)
 
@@ -36,7 +36,7 @@ Reading adapts to what survived in the image: intact phase → near-lossless; ou
 ## 开发 / Development
 
 ```bash
-bun install
+bun i
 bun dev          # http://localhost:3000
 bun test         # 算法与格式测试 / tests
 bun run build    # 产物到 dist/ / build to dist/
