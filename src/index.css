@@ -29,11 +29,14 @@
     --glass: rgba(255, 252, 245, 0.66);
     --glass-line: rgba(255, 255, 255, 0.6);
 
-    --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.625 * var(--u)) rgba(61, 52, 39, 0.06);
-    --shadow-card: 0 calc(0.5 * var(--u)) calc(1.375 * var(--u)) rgba(61, 52, 39, 0.07);
+    --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.5 * var(--u)) rgba(61, 52, 39, 0.06);
+    --shadow-card: 0 calc(0.5 * var(--u)) calc(1.5 * var(--u)) rgba(61, 52, 39, 0.07);
     --blur: blur(calc(0.75 * var(--u))) saturate(1.2);
 
-    --r-sm: calc(0.375 * var(--u));
+    --fs-lead: calc(0.9375 * var(--u));
+    --fs-hi: calc(0.75 * var(--u));
+    --fs-lo: calc(0.6875 * var(--u));
+
     --r-md: calc(0.75 * var(--u));
     --r-lg: calc(1 * var(--u));
     --r-pill: calc(62.5 * var(--u));
@@ -97,14 +100,14 @@
 
   .head h1 {
     margin: 0;
-    font-size: calc(1 * var(--u));
+    font-size: var(--fs-lead);
     font-weight: 600;
     letter-spacing: 0.22em;
   }
 
   .head p {
     margin: 0;
-    font-size: calc(0.625 * var(--u));
+    font-size: var(--fs-lo);
     letter-spacing: 0.1em;
     color: var(--soft);
   }
@@ -112,8 +115,8 @@
   .card {
     display: flex;
     flex-direction: column;
-    gap: calc(0.625 * var(--u));
-    padding: calc(0.875 * var(--u));
+    gap: calc(0.5 * var(--u));
+    padding: calc(1 * var(--u));
     border: 1px solid var(--glass-line);
     border-radius: var(--r-lg);
     background: var(--glass);
@@ -204,15 +207,15 @@
 
   .time {
     margin: 0;
-    font-size: calc(0.75 * var(--u));
+    font-size: var(--fs-hi);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em;
   }
 
   .facts {
     margin: 0;
-    font-size: calc(0.625 * var(--u));
-    letter-spacing: 0.03em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
     color: var(--soft);
   }
 
@@ -221,16 +224,16 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: calc(0.1875 * var(--u)) calc(0.625 * var(--u));
+    padding: calc(0.25 * var(--u)) calc(0.5 * var(--u));
     border: 1px solid rgba(61, 52, 39, 0.16);
     border-radius: var(--r-pill);
     background: rgba(255, 252, 245, 0.72);
     box-shadow: var(--shadow-ctl);
     color: var(--ink);
     font-family: var(--font);
-    font-size: calc(0.6875 * var(--u));
+    font-size: var(--fs-lo);
     font-variant-numeric: tabular-nums;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     line-height: 1.5;
     white-space: nowrap;
     cursor: pointer;
@@ -263,8 +266,8 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: calc(0.375 * var(--u));
-    padding-top: calc(0.625 * var(--u));
+    gap: calc(0.25 * var(--u));
+    padding-top: calc(0.5 * var(--u));
     border-top: 1px solid var(--line);
   }
 
@@ -280,22 +283,22 @@
     display: flex;
     flex-direction: column;
     gap: calc(0.125 * var(--u));
-    padding-top: calc(0.625 * var(--u));
+    padding-top: calc(0.5 * var(--u));
     border-top: 1px solid var(--line);
   }
 
   .prow {
     display: flex;
     align-items: center;
-    gap: calc(0.625 * var(--u));
+    gap: calc(0.5 * var(--u));
     min-width: 0;
   }
 
   .plabel {
     flex: none;
     width: calc(2.5 * var(--u));
-    font-size: calc(0.625 * var(--u));
-    letter-spacing: 0.08em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.1em;
     color: var(--soft);
   }
 
@@ -303,7 +306,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: calc(0.3125 * var(--u));
+    gap: calc(0.25 * var(--u));
     min-width: 0;
   }
 
@@ -327,8 +330,8 @@
     border: 1px solid rgba(61, 52, 39, 0.16);
     border-radius: var(--r-pill);
     background: rgba(255, 252, 245, 0.72);
-    font-size: calc(0.625 * var(--u));
-    letter-spacing: 0.05em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
     color: var(--soft);
   }
 
@@ -339,7 +342,7 @@
     background: none;
     color: var(--ink);
     font-family: var(--font);
-    font-size: calc(0.6875 * var(--u));
+    font-size: var(--fs-lo);
     font-variant-numeric: tabular-nums;
   }
 
@@ -349,7 +352,7 @@
   }
 
   .tick {
-    font-size: calc(0.6875 * var(--u));
+    font-size: var(--fs-lo);
     letter-spacing: 0.1em;
   }
 
@@ -367,26 +370,26 @@
   }
 
   .drop-lead {
-    font-size: calc(0.9375 * var(--u));
+    font-size: var(--fs-lead);
     letter-spacing: 0.04em;
   }
 
   .drop-sub {
-    font-size: calc(0.6875 * var(--u));
-    letter-spacing: 0.06em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
     color: var(--soft);
   }
 
   .drop-act {
-    margin-top: calc(0.625 * var(--u));
-    padding: calc(0.3125 * var(--u)) calc(1.125 * var(--u));
+    margin-top: calc(0.5 * var(--u));
+    padding: calc(0.25 * var(--u)) calc(1 * var(--u));
     border: 1px solid rgba(61, 52, 39, 0.22);
     border-radius: var(--r-pill);
     background: rgba(255, 252, 245, 0.78);
     box-shadow: var(--shadow-ctl);
     color: var(--ink);
-    font-size: calc(0.75 * var(--u));
-    letter-spacing: 0.14em;
+    font-size: var(--fs-hi);
+    letter-spacing: 0.1em;
   }
 
   .app.is-dragging .drop {
@@ -398,8 +401,8 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: calc(0.375 * var(--u));
-    margin-top: calc(0.625 * var(--u));
+    gap: calc(0.25 * var(--u));
+    margin-top: calc(0.5 * var(--u));
   }
 
   .drop-act.is-rec {
@@ -429,18 +432,18 @@
 
   .drop-err {
     margin: calc(0.5 * var(--u)) 0 0;
-    font-size: calc(0.6875 * var(--u));
-    letter-spacing: 0.06em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
     color: #96411f;
   }
 
   .note {
     display: flex;
     align-items: center;
-    gap: calc(0.625 * var(--u));
+    gap: calc(0.5 * var(--u));
     margin: 0;
-    font-size: calc(0.6875 * var(--u));
-    letter-spacing: 0.08em;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
     color: var(--soft);
   }
 
@@ -468,7 +471,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: calc(0.25 * var(--u)) calc(0.75 * var(--u));
-    font-size: calc(0.625 * var(--u));
+    font-size: var(--fs-lo);
     letter-spacing: 0.04em;
     color: var(--soft);
   }
