@@ -33,7 +33,9 @@ interface Props {
   onTrim: () => void;
   onRefine: () => void;
   onReset: () => void;
-  busy: boolean;
+  stage: { label: string; value: number } | null;
+  hint: string | null;
+  error: string | null;
 }
 
 function save(blob: Blob, filename: string): void {
@@ -62,9 +64,9 @@ const kb = (n: number): string =>
 
 function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
-  if (exact && own.level === 0 && own.corr > 0.999) return "自检 · 存出再读回，完全一致";
+  if (exact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
   const cell = (r: LossRow): string => `${r.label} 还原度 ${Math.round(r.corr * 100)}%`;
-  return `自检 · ${rows.map(cell).join("，")}`;
+  return `自检：${rows.map(cell).join("，")}`;
 }
 
 export function Workbench({
@@ -79,8 +81,11 @@ export function Workbench({
   onTrim,
   onRefine,
   onReset,
-  busy,
+  stage,
+  hint,
+  error,
 }: Props) {
+  const busy = stage !== null;
   const { meta } = spec;
   const sheet = useMemo(() => buildSheet(spec, SHEET_ROWS), [spec]);
   const { playing, duration, toggle, seek, scrub, commit, nudge, headRef, timeRef } = usePlayback(
@@ -176,10 +181,20 @@ export function Workbench({
       </div>
 
       <p className="facts">
-        采样率 {srLabel(meta.sr)} · {clock(duration)} · {kb(png.size)}
-        {compact ? "" : " · 可逆"}
+        采样率 {srLabel(meta.sr)}、{clock(duration)}、{kb(png.size)}
+        {compact ? "" : "、可逆"}
       </p>
       {note && <p className="facts dim">{note}</p>}
+      {hint && <p className="facts dim">{hint}</p>}
+      {error && <p className="note is-error">{error}</p>}
+      {stage && (
+        <p className="note">
+          {stage.label}
+          <span className="note-bar">
+            <span style={{ width: `${Math.round(stage.value * 100)}%` }} />
+          </span>
+        </p>
+      )}
 
       <div className="acts">
         <button type="button" className="act" onClick={savePng}>

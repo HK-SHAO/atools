@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { decodeAudioFile } from "./lib/audio";
 import type { Samples } from "./lib/arrays";
-import DEMO_URL from "./assets/fade-demo.m4a";
+import DEMO_URL from "./assets/fade-demo.ogg";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "./lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
@@ -193,7 +193,7 @@ export function App() {
         const { pcm, sr } = await decodeAudioFile(buf);
         setMode("compact");
         setEnc(e => reopen(e));
-        setSource({ pcm, sr, name: "fade-demo" });
+        setSource({ pcm, sr, name: "fade（示例，前 12 秒）" });
       } catch (e) {
         setError(e instanceof Error ? e.message : "示例加载失败");
       }
@@ -251,13 +251,15 @@ export function App() {
               setSource(null);
               setJob(null);
             }}
-            busy={stage !== null}
+            stage={stage}
+            hint={hint}
+            error={error}
           />
         ) : (
           <section className="card">
             <div className="drop">
               <span className="drop-lead">拖进一段音频，或者一张图</span>
-              <span className="drop-sub">mp3 · wav · flac · m4a · ogg · amr ↔ png · jpg · webp</span>
+              <span className="drop-sub">mp3、wav、flac、m4a、ogg、amr ↔ png、jpg、webp</span>
               <div className="drop-acts">
                 <label className="drop-act">
                   选文件
@@ -277,16 +279,20 @@ export function App() {
           </section>
         )}
 
-        {stage && (
-          <p className="note">
-            {stage.label}
-            <span className="note-bar">
-              <span style={{ width: `${Math.round(stage.value * 100)}%` }} />
-            </span>
-          </p>
+        {!(job && source) && (
+          <>
+            {stage && (
+              <p className="note">
+                {stage.label}
+                <span className="note-bar">
+                  <span style={{ width: `${Math.round(stage.value * 100)}%` }} />
+                </span>
+              </p>
+            )}
+            {hint && <p className="note">{hint}</p>}
+            {error && <p className="note is-error">{error}</p>}
+          </>
         )}
-        {hint && <p className="note">{hint}</p>}
-        {error && <p className="note is-error">{error}</p>}
 
         <footer className="foot">
           <button type="button" className="act" onClick={demo}>
