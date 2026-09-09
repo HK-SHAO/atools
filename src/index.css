@@ -28,10 +28,12 @@
     --soft: #8a7d68;
     --line: rgba(61, 52, 39, 0.13);
     --glass: rgba(255, 252, 245, 0.66);
+    --glass-hover: rgba(255, 252, 245, 0.85);
     --glass-line: rgba(255, 255, 255, 0.6);
 
     --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.5 * var(--u)) rgba(61, 52, 39, 0.06);
     --shadow-card: 0 calc(0.5 * var(--u)) calc(1.5 * var(--u)) rgba(61, 52, 39, 0.07);
+    --shadow-hover: 0 calc(0.25 * var(--u)) calc(1 * var(--u)) rgba(61, 52, 39, 0.16);
     --blur: blur(calc(0.75 * var(--u))) saturate(1.2);
 
     --fs-lead: calc(0.9375 * var(--u));
@@ -187,11 +189,7 @@
     box-shadow: var(--shadow-ctl);
     color: var(--ink);
     cursor: pointer;
-    transition: transform 0.1s ease, box-shadow 0.16s ease;
-  }
-
-  .icon-btn:active {
-    transform: scale(0.96);
+    transition: transform 0.1s ease, box-shadow 0.16s ease, background 0.16s ease;
   }
 
   .icon-btn:focus-visible {
@@ -229,9 +227,11 @@
     align-items: center;
     justify-content: center;
     padding: calc(0.25 * var(--u)) calc(0.5 * var(--u));
-    border: 1px solid rgba(61, 52, 39, 0.16);
+    border: 1px solid var(--glass-line);
     border-radius: var(--r-pill);
-    background: rgba(255, 252, 245, 0.72);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
     box-shadow: var(--shadow-ctl);
     color: var(--ink);
     font-family: var(--font);
@@ -244,14 +244,8 @@
     transition:
       transform 0.1s ease,
       box-shadow 0.16s ease,
-      border-color 0.16s ease,
       background 0.16s ease,
       color 0.16s ease;
-  }
-
-  .act:active,
-  .chip:active {
-    transform: scale(0.97);
   }
 
   .act:focus-visible,
@@ -317,9 +311,6 @@
 
   .chip.is-on {
     border-color: var(--ink);
-    background: var(--ink);
-    box-shadow: none;
-    color: var(--paper);
   }
 
   .num {
@@ -327,12 +318,19 @@
     align-items: center;
     gap: calc(0.25 * var(--u));
     padding: calc(0.125 * var(--u)) calc(0.5 * var(--u));
-    border: 1px solid rgba(61, 52, 39, 0.16);
+    border: 1px solid var(--glass-line);
     border-radius: var(--r-pill);
-    background: rgba(255, 252, 245, 0.72);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
     font-size: var(--fs-lo);
     letter-spacing: 0.04em;
     color: var(--soft);
+    transition: background 0.16s ease;
+  }
+
+  .num:focus-within {
+    background: var(--glass-hover);
   }
 
   .num input {
@@ -383,13 +381,22 @@
   .drop-act {
     margin-top: calc(0.5 * var(--u));
     padding: calc(0.25 * var(--u)) calc(1 * var(--u));
-    border: 1px solid rgba(61, 52, 39, 0.22);
+    border: 1px solid var(--glass-line);
     border-radius: var(--r-pill);
-    background: rgba(255, 252, 245, 0.78);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+    -webkit-backdrop-filter: var(--blur);
     box-shadow: var(--shadow-ctl);
     color: var(--ink);
     font-size: var(--fs-hi);
     letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.16s ease, background 0.16s ease;
+  }
+
+  .drop-act:focus-within {
+    background: var(--glass-hover);
+    box-shadow: var(--shadow-hover);
   }
 
   .app.is-dragging .drop {
@@ -478,17 +485,13 @@
 }
 
 @media (hover: hover) {
-  .icon-btn:hover {
-    box-shadow: var(--shadow-card);
-  }
-
-  .act:hover:not(:disabled) {
-    border-color: rgba(61, 52, 39, 0.3);
-    box-shadow: var(--shadow-card);
-  }
-
-  .chip:hover:not(.is-on):not(:disabled) {
-    border-color: rgba(61, 52, 39, 0.34);
+  .icon-btn:hover,
+  .act:hover:not(:disabled),
+  .chip:hover:not(.is-on):not(:disabled),
+  .drop-act:hover {
+    background: var(--glass-hover);
+    box-shadow: var(--shadow-hover);
+    transform: scale(1.04);
   }
 
   .drop:hover {
@@ -499,6 +502,15 @@
   .drop:has(input:focus-visible) {
     border-color: rgba(61, 52, 39, 0.3);
   }
+}
+
+.icon-btn:active,
+.act:active:not(:disabled),
+.chip:active:not(.is-on):not(:disabled),
+.drop-act:active {
+  transform: scale(1);
+  box-shadow: var(--shadow-ctl);
+  background: var(--glass);
 }
 
 @supports (corner-shape: squircle) {

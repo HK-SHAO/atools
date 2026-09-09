@@ -207,7 +207,7 @@ export function Workbench({
         </button>
         {canRefine && (
           <button type="button" className="act" onClick={onRefine} disabled={busy}>
-            精修相位
+            重建相位
           </button>
         )}
       </div>
@@ -223,7 +223,7 @@ export function Workbench({
           onPick={v => set("mode", v)}
         />
         <Row<number>
-          label="采样率"
+          label="采样"
           value={enc.sr}
           options={SR_OPTIONS.map(sr => ({ value: sr, label: srLabel(sr) }))}
           onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
