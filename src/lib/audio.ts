@@ -78,12 +78,15 @@ async function decodeWasm(engine: Engine, bytes: Uint8Array): Promise<Decoded> {
 }
 
 async function decodeNative(data: ArrayBuffer): Promise<Decoded | null> {
+  const Ctor =
+    typeof window === "undefined"
+      ? undefined
+      : (window.AudioContext ??
+        (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
+  if (!Ctor) return null; // 非浏览器环境（Bun 测试），直接走 WASM
   let ctx: AudioContext | null = null;
   try {
-    const Ctor =
-      window.AudioContext ??
-      (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    ctx = new Ctor!;
+    ctx = new Ctor();
     const buffer = await decodeRaw(ctx, data.slice(0));
     const channels: Float32Array[] = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
