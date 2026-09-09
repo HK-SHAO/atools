@@ -50,6 +50,17 @@ describe("sniffAudio（音频容器识别）", () => {
     expect(sniffAudio(bytes(0xff, 0xf9, 0x50, 0x80))).toContain("AAC");
   });
 
+  test("Ogg 容器按首包魔数区分 Opus / Vorbis", () => {
+    const ogg = new Uint8Array(40);
+    ogg.set(ascii("OggS"));
+    ogg.set(ascii("OpusHead"), 28);
+    expect(sniffAudio(ogg)).toBe("OGG/Opus");
+    const vor = new Uint8Array(40);
+    vor.set(ascii("OggS"));
+    vor.set(ascii("\x01vorbis"), 28);
+    expect(sniffAudio(vor)).toBe("OGG");
+  });
+
   test("认不出的返回空串", () => {
     expect(sniffAudio(bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13))).toBe("");
   });
@@ -153,11 +164,7 @@ describe("decodeAudioFile（全格式兜底矩阵）", () => {
   test("ogg vorbis", async () =>
     ok(await decodeAudioFile(await load("tone-vorbis.ogg")), 44100));
   test("ogg opus", async () => ok(await decodeAudioFile(await load("tone-opus.ogg")), 48000));
-  test("webm opus（EBML 容器）", async () =>
-    ok(await decodeAudioFile(await load("voice.webm")), 48000));
   test("adts 裸流（.aac）", async () => ok(await decodeAudioFile(await load("tone.aac")), 44100));
-  test("3gp 容器内 AMR（mp4 demuxer 路由）", async () =>
-    ok(await decodeAudioFile(await load("call.3gp")), 8000, 0.05));
 
   test("截断的 mp3 尽力解码、不抛错", async () => {
     const { pcm, sr } = await decodeAudioFile((await load("tone.mp3")).slice(0, 3000));

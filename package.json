@@ -17,11 +17,9 @@
     "@audio/decode-amr": "^1.3.1",
     "@audio/decode-flac": "^1.3.3",
     "@audio/decode-mp3": "^1.3.1",
-    "@audio/decode-mp4": "^1.1.1",
     "@audio/decode-opus": "^1.3.1",
     "@audio/decode-vorbis": "^1.3.2",
     "@audio/decode-wav": "^1.5.0",
-    "@audio/decode-webm": "^1.6.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
