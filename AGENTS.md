@@ -1,106 +1,41 @@
+# AGENTS.md
 
-Default to using Bun instead of Node.js.
+音频 ↔ 频谱图双向转换工具。Bun + React，无后端、无数据库、零运行时依赖（仅 react/react-dom）。
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
+## 命令
 
-## APIs
-
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
-
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
+```bash
+bun install
+bun dev                  # 开发服务器 http://localhost:3000
+bun test                 # 全量测试（bun:test，勿用 jest/vitest）
+bun run build            # 生产构建 → dist/
+bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 ```
 
-## Frontend
+包管理一律 Bun（`bun install` / `bunx`），不引入 npm/yarn 配置。
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+## 架构
 
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
+```
+src/lib/    算法层（纯函数，无 DOM 依赖，可被 Bun 直接测试）
+src/ui/     React 组件与 hooks
+src/App.tsx 流水线编排：载入 → 裁剪 → 重采样 → 编码/读图 → 合成
+bench/      无头 Chromium + CDP 驱动真实页面的评测台（run.ts 每次重打 bundle.js）
+docs/       format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）
 ```
 
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
+数据流：`pcm → encode() → Spectrum{levels, phaseCos/Sin, Meta} → PNG/容器 → 读图 → Spectrum → synthesise() → pcm`。`Meta` 是唯一权威参数（sr/win/hop/frames/bins/samples/bits/ref/exact），随 tEXt、文件名、条码票根三路冗余传递。
 
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
+关键模块职责：
+- `spectrum.ts` STFT 编解码与重建调度（fast/fine 两档）
+- `phase.ts` + `rtisi.ts` 相位重建（PGHI 暖启 → RTISI-LA → GL 打磨）
+- `image.ts` 容器嗅探、认图分级（可逆/紧凑/降级/通用）、缩放适配
+- `stub.ts` 底部条码票根（meta 丢失后的参数权威通道）
 
-With the following `frontend.tsx`:
+## 约定
 
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+- **零注释**：代码自解释；设计依据写进 docs/，不写在代码里
+- **格式契约在 docs/format-spec.md**：tEXt 数组、文件名文法、票根位流一经发布即冻结；改格式必须升 `FORMAT_VERSION`
+- **CSS 走令牌**：尺寸 = `calc(n × var(--u))`，字号只用 `--fs-lead/--fs-hi/--fs-lo`，间距 1/4 步进；不引入 CSS 框架
+- **不用 alert/confirm**，错误与提示走 App 的 error/hint 通道
+- 长任务一律支持 `Aborted` 中止 + genRef 竞态守卫；ImageBitmap/AudioContext/canvas 用完即释放

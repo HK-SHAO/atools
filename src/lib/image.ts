@@ -1,12 +1,11 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
-import { gray16Png, indexedPng, readGray16, readIndexedRamp, readMeta, withMeta } from "./png";
+import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, DEFAULT_SR, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
 export const FORMAT_VERSION = 4;
-const MIN_VERSION = 3;
 
 export function metaToText(meta: Meta): string {
   return JSON.stringify([
@@ -28,7 +27,7 @@ export function textToMeta(text: string): Meta | null {
     const v: unknown = JSON.parse(text);
     if (!Array.isArray(v)) return null;
     const ver = v[0];
-    if (typeof ver !== "number" || !Number.isInteger(ver) || ver < MIN_VERSION) return null;
+    if (ver !== FORMAT_VERSION) return null;
     if (v.length < 10) return null;
     const n = (v as unknown[]).slice(1, 10).map(Number);
     if (n.some((x, i) => (i === 7 ? !Number.isFinite(x) : !Number.isInteger(x)))) return null;
@@ -55,16 +54,13 @@ export function textToMeta(text: string): Meta | null {
 
 export function metaFromName(name: string): Meta | null {
   const m =
-    /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)(?:_B(\d+))?\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(
+    /_SR(\d+)_N(\d+)_H(\d+)_F(\d+)_L(\d+)_B(\d+)\.(?:png|jpe?g|jpe|webp|avif|bmp|gif)$/i.exec(
       name,
     );
   if (!m) return null;
-  const [sr, win, hop, frames, samples, bits] = [1, 2, 3, 4, 5, 6].map(i =>
-    m[i] === undefined ? Number.NaN : Number(m[i]),
-  );
-  if (![sr, win, hop, frames, samples].every(x => Number.isFinite(x!) && x! > 0)) return null;
+  const [sr, win, hop, frames, samples, bits] = [1, 2, 3, 4, 5, 6].map(i => Number(m[i]));
+  if (![sr, win, hop, frames, samples, bits].every(x => Number.isFinite(x!) && x! >= 0)) return null;
   if ((win! & (win! - 1)) !== 0) return null;
-  const b = Number.isFinite(bits) ? bits! : 0;
   return {
     sr: sr!,
     win: win!,
@@ -72,9 +68,9 @@ export function metaFromName(name: string): Meta | null {
     frames: frames!,
     bins: win! / 2 + 1,
     samples: samples!,
-    bits: b,
+    bits: bits!,
     ref: 0,
-    exact: b === 0,
+    exact: bits! === 0,
   };
 }
 
@@ -247,24 +243,6 @@ function rescaled(meta: Meta, width: number, maxHop: number): Meta {
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 
-export async function readCompact16(bytes: Uint8Array, meta: Meta): Promise<Spectrum> {
-  const g = await readGray16(bytes);
-  const levels = new Uint16Array(meta.frames * meta.bins);
-  if (g) {
-    const sx = g.width / meta.frames;
-    const sy = g.height / meta.bins;
-    for (let f = 0; f < meta.frames; f++) {
-      const col = Math.min(g.width - 1, Math.floor((f + 0.5) * sx));
-      for (let b = 0; b < meta.bins; b++) {
-        const row = Math.min(g.height - 1, Math.floor((b + 0.5) * sy));
-        const imgRow = g.height - 1 - row;
-        levels[f * meta.bins + b] = g.data[imgRow * g.width + col]!;
-      }
-    }
-  }
-  return { meta, levels, phaseCos: null, phaseSin: null };
-}
-
 export type ReadMode = "exact" | "compact" | "degraded" | "foreign";
 
 export interface Decoded {
@@ -303,30 +281,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
 
   if (meta === null) {
-    const g16 = await readGray16(bytes);
-    if (g16 && g16.width * g16.height <= MAX_SOURCE_PIXELS) {
-      const gmeta = metaFromGeometry(g16.width, g16.height, false, 16);
-      const levels = new Uint8Array(gmeta.frames * gmeta.bins);
-      const sx = g16.width / gmeta.frames;
-      const sy = g16.height / gmeta.bins;
-      for (let f = 0; f < gmeta.frames; f++) {
-        const col = Math.min(g16.width - 1, Math.floor((f + 0.5) * sx));
-        for (let b = 0; b < gmeta.bins; b++) {
-          const row = Math.min(g16.height - 1, Math.floor((b + 0.5) * sy));
-          levels[f * gmeta.bins + b] =
-            Math.min(255, (g16.data[row * g16.width + col]! * 255) / 65535) | 0;
-        }
-      }
-      return {
-        spec: { meta: gmeta, levels, phaseCos: null, phaseSin: null },
-        mode: "compact",
-        container,
-        width: g16.width,
-        height: g16.height,
-        phaseReliability: null,
-        guessed: true,
-      };
-    }
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
       let stub: StubInfo | null = null;
@@ -498,18 +452,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     const bandRows = exact ? Math.max(1, Math.floor(h / BANDS)) : h;
     const intact = m0 !== null && w === m0.frames && bandRows === m0.bins;
 
-    if (m0 !== null && !m0.exact && m0.bits >= 16 && w === m0.frames && h === m0.bins) {
-      return {
-        spec: await readCompact16(bytes, m0),
-        mode: "compact",
-        container,
-        width: w,
-        height: h,
-        phaseReliability: null,
-        guessed: false,
-      };
-    }
-
     if (exact && m0) {
       const binsFit0 = Math.min(m0.bins, bandRows);
       const winFit = winFromBins(binsFit0);
@@ -625,20 +567,6 @@ async function exactPng(spec: Spectrum): Promise<Blob> {
 
 async function compactPng(spec: Spectrum): Promise<Blob> {
   const { meta, levels } = spec;
-  if (meta.bits >= 16) {
-    const { frames, bins } = meta;
-    const g16 = new Uint16Array(frames * bins);
-    for (let row = 0; row < bins; row++) {
-      const b = bins - 1 - row;
-      for (let f = 0; f < frames; f++) {
-        const v = levels[f * bins + b]!;
-        g16[row * frames + f] = v > 255 ? v : ((v * 65535) / 255) | 0;
-      }
-    }
-    const bytes = await gray16Png(g16, frames, bins, metaToText(meta));
-    return new Blob([bytes], { type: "image/png" });
-  }
-
   const steps = stepsOf(meta.bits);
   const depth = steps <= 1 ? 1 : steps <= 3 ? 2 : steps <= 15 ? 4 : 8;
   const count = 1 << depth;

@@ -305,10 +305,8 @@ describe("exact (2-band) mode", () => {
     expect(clicks(back)).toBe(0);
   });
 
-  test("legacy filenames without _B are still read as reversible", () => {
-    const back = metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg");
-    expect(back?.exact).toBe(true);
-    expect(back?.bits).toBe(0);
+  test("filenames without _B are rejected", () => {
+    expect(metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg")).toBeNull();
   });
 });
 
@@ -494,23 +492,11 @@ describe("metadata", () => {
     expect(back).toEqual(meta);
   });
 
-  test("reads older versions via the frozen prefix (backward compat)", () => {
-    const v3 = JSON.stringify([3, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0]);
-    expect(textToMeta(v3)).toEqual(meta);
-    const v3color = JSON.parse(v3) as number[];
-    v3color.push(0);
-    expect(textToMeta(JSON.stringify(v3color))).toEqual(meta);
-  });
-
-  test("reads future versions via the frozen prefix (forward compat)", () => {
-    const future = [99, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, meta.exact ? 1 : 0, 1, "ext", 42];
-    expect(textToMeta(JSON.stringify(future))).toEqual(meta);
-  });
-
   test("rejects pre-contract and junk versions", () => {
     expect(textToMeta(JSON.stringify([2, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, 0]))).toBeNull();
     expect(textToMeta("[2,1,2,3]")).toBeNull();
     expect(textToMeta("[3,0,256,128,1,129,1,4,0,0]")).toBeNull();
+    expect(textToMeta(JSON.stringify([99, meta.sr, meta.win, meta.hop, meta.frames, meta.bins, meta.samples, meta.bits, meta.ref, 0]))).toBeNull();
   });
 
   test("the filename carries the same numbers", () => {
@@ -520,12 +506,6 @@ describe("metadata", () => {
     expect(back?.win).toBe(meta.win);
     expect(back?.bits).toBe(meta.bits);
     expect(back?.exact).toBe(false);
-  });
-
-  test("legacy names without _B are read as reversible", () => {
-    const back = metaFromName("x_SR44100_N1024_H256_F172_L44100.jpg");
-    expect(back?.bits).toBe(0);
-    expect(back?.exact).toBe(true);
   });
 
   test("rejects tampered metas with fractional fields", () => {

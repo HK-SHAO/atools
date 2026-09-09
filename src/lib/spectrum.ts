@@ -165,10 +165,6 @@ const levelToMagDb = (level: number): number => DB_MIN + (level / 255) * DB_SPAN
 export function levelToDb(level: number, meta: Meta): number {
   if (meta.exact) return levelToMagDb(level);
   const bits = Math.max(1, meta.bits);
-  if (bits >= 16) {
-    const span = dbSpanOf(bits);
-    return meta.ref - span + (level / 65535) * span;
-  }
   const steps = stepsOf(bits);
   const q = Math.round((level * steps) / 255);
   return meta.ref - dbSpanOf(bits) + (q / steps) * dbSpanOf(bits);

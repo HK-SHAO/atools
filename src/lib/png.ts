@@ -185,38 +185,6 @@ export async function indexedPng(
   ]);
 }
 
-export async function gray16Png(
-  data: Uint16Array,
-  width: number,
-  height: number,
-  meta: string,
-): Promise<Bytes> {
-  const raw = new Uint8Array((width * 2 + 1) * height);
-  for (let y = 0; y < height; y++) {
-    const row = y * (width * 2 + 1);
-    for (let x = 0; x < width; x++) {
-      const v = data[y * width + x]!;
-      raw[row + 1 + x * 2] = (v >>> 8) & 0xff;
-      raw[row + 2 + x * 2] = v & 0xff;
-    }
-  }
-
-  const deflated = await zlib(raw);
-  return assemble([
-    Uint8Array.from(SIGNATURE),
-    chunk("IHDR", ihdr(width, height, 16, 0)),
-    chunk("tEXt", textPayload(meta)),
-    chunk("IDAT", deflated),
-    chunk("IEND", new Uint8Array(0)),
-  ]);
-}
-
-export interface Gray16 {
-  width: number;
-  height: number;
-  data: Uint16Array;
-}
-
 interface PngInfo {
   width: number;
   height: number;
@@ -303,20 +271,6 @@ function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): 
     }
   }
   return out;
-}
-
-export async function readGray16(bytes: Uint8Array): Promise<Gray16 | null> {
-  const info = parsePng(bytes);
-  if (!info || info.colorType !== 0 || info.bitDepth !== 16 || info.interlace !== 0) return null;
-  const raw = await inflate(info.idat);
-  if (!raw) return null;
-  const flat = unfilter(raw, info.width, info.height, 2);
-  if (!flat) return null;
-  const { width, height } = info;
-  const data = new Uint16Array(width * height);
-  for (let i = 0; i < width * height; i++)
-    data[i] = ((flat[i * 2]! << 8) | flat[i * 2 + 1]!) >>> 0;
-  return { width, height, data };
 }
 
 export interface IndexedRamp {
