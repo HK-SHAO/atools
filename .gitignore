@@ -1,25 +1,22 @@
-# dependencies (bun install)
+# dependencies
 node_modules
 
-# output
+# build output
 out
 dist
 *.tgz
+*.zip
+bench/bundle.js
 
-# code coverage
+# coverage
 coverage
 *.lcov
 
 # logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+*.log
 
-# dotenv environment variable files
+# env
 .env
-.env.development.local
-.env.test.local
-.env.production.local
 .env.local
 
 # caches
@@ -27,11 +24,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 
-# IntelliJ based IDEs
+# editors / OS
 .idea
-
-# Finder (MacOS) folder config
+.vscode
 .DS_Store
 
-docs/
-*.zip
+# 大体积音频样本（评测台素材，不入库）
+docs/voice
+docs/audio-examples

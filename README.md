@@ -10,7 +10,7 @@ bun test         # 算法 / 格式测试
 bun run build    # 产物到 dist/
 ```
 
-把音频或本工具导出的图拖进页面即可。频谱图本身就是进度条 —— 点或拖到任意位置跳转，左右方向键微调。
+把音频或本工具导出的图拖进页面即可（支持 amr、m4a、mp3、wav、ogg、flac）。频谱图本身就是进度条 —— 点或拖到任意位置跳转，左右方向键微调。
 
 ## 两种模式
 
@@ -68,7 +68,7 @@ src/
     stub.ts                    条码票根编解码
     png.ts                     PNG 编解码（索引色）、tEXt 元数据
     wav.ts                     16-bit PCM 单声道 WAV
-    audio.ts                   浏览器音频解码（多声道降混单声道） + 示例
+    audio.ts                   音频解码（amr 走 WASM 专用解码器，其余走浏览器）+ 示例
     image.ts                   频谱 ↔ 图片、认图、缩放适配
     audit.ts                   质检（往返质量矩阵）
     metric.ts                  对齐、相关、LSD

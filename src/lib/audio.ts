@@ -25,7 +25,7 @@ export function sniffAudio(b: Uint8Array): string {
 }
 
 const DECODE_HELP =
-  "支持 m4a、mp3、wav、ogg、flac。若来自微信或通话录音，请先用录音 App 另存为这些格式";
+  "支持 amr、m4a、mp3、wav、ogg、flac。SILK 微信语音与 3GP 通话录音请先转存为上述格式";
 
 function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise((ok, no) => {
@@ -35,18 +35,35 @@ function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffe
   });
 }
 
+async function decodeAmr(bytes: Uint8Array): Promise<Decoded> {
+  const decode = (await import("@audio/decode-amr")).default;
+  const { channelData, sampleRate } = await decode(bytes);
+  const pcm = channelData[0];
+  if (!pcm || pcm.length === 0) throw new Error("空 AMR");
+  return { pcm: Float32Array.from(pcm), sr: sampleRate };
+}
+
 export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
+  const head = sniffAudio(new Uint8Array(data));
+
+  if (head.startsWith("AMR")) {
+    try {
+      return await decodeAmr(new Uint8Array(data));
+    } catch {
+      throw new Error(`解不出这段 AMR 音频。${DECODE_HELP}`);
+    }
+  }
+
   const Ctor =
     window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) throw new Error("这个浏览器不支持 Web Audio");
 
-  const head = sniffAudio(new Uint8Array(data));
   const ctx = new Ctor();
   let buffer: AudioBuffer;
   try {
     buffer = await decodeRaw(ctx, data.slice(0));
   } catch {
-    if (head.startsWith("AMR") || head.startsWith("SILK") || head.startsWith("3GP"))
+    if (head.startsWith("SILK") || head.startsWith("3GP"))
       throw new Error(`解不出：这是${head}，浏览器不带这个解码器。${DECODE_HELP}`);
     throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
   } finally {

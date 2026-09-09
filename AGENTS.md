@@ -1,6 +1,6 @@
 # AGENTS.md
 
-音频 ↔ 频谱图双向转换工具。Bun + React，无后端、无数据库、零运行时依赖（仅 react/react-dom）。
+音频 ↔ 频谱图双向转换工具。Bun + React，无后端、无数据库。运行时依赖仅 react/react-dom 与 @audio/decode-amr（AMR 专用解码，动态 import 单独分包，按需加载）。
 
 ## 命令
 
