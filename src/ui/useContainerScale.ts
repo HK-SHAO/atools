@@ -43,11 +43,7 @@ export function useContainerScale(ref: RefObject<HTMLElement | null>): void {
       return () => window.removeEventListener("resize", measure);
     }
 
-    const observer = new ResizeObserver(entries => {
-      const box = entries[0]?.contentRect;
-      if (box) apply(box.width, box.height);
-      else measure();
-    });
+    const observer = new ResizeObserver(() => measure());
     observer.observe(el);
     return () => observer.disconnect();
   }, [ref]);
