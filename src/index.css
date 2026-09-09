@@ -455,6 +455,17 @@
     margin-left: auto;
   }
 
+  .head-link {
+    margin-left: auto;
+    font-size: var(--fs-lo);
+    letter-spacing: 0.04em;
+    color: var(--soft);
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+  }
+
   .credit a {
     color: inherit;
     text-decoration: underline;
@@ -463,6 +474,7 @@
     transition: color 0.15s;
   }
 
+  .head-link:hover,
   .credit a:hover {
     color: var(--ink);
   }

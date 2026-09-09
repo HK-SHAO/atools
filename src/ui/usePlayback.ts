@@ -163,6 +163,7 @@ export function usePlayback(pcm: Samples, sr: number) {
     posRef.current = 0;
     startedRef.current = -1;
     liveRef.current = false;
+    setPlaying(false);
     paint(0);
   }, [pcm, sr, halt, paint]);
 

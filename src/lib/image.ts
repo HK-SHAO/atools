@@ -125,26 +125,48 @@ export function metaFromGeometry(frames: number, bins: number, exact: boolean, b
   };
 }
 
+// 真图结构律：相位带像素落在半径 ≈127.5 的圆上（圆心 127.5,127.5，B=0），
+// 电平带像素满足 (RAMP[3L], L, RAMP[3L+2])。JPEG 混叠只会把相位半径往内拉，
+// 黑图 (0,0,0) 落在半径 ≈180 处，两条律都过不了。
+const PHASE_R2_LO = 96 * 96;
+const PHASE_R2_HI = 160 * 160;
+const RAMP_TOL = 32;
+
 export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
   if (w < 4 || h < 8) return false;
   const rows = Math.floor(h / 2);
   const stepX = Math.max(1, Math.floor(w / 48));
   const stepY = Math.max(1, Math.floor(rows / 24));
-  let ok = 0;
-  let total = 0;
+  let okPhase = 0;
+  let totalPhase = 0;
+  let okRamp = 0;
+  let totalRamp = 0;
   for (let y = 0; y < rows; y += stepY) {
     for (let x = 0; x < w; x += stepX) {
+      const top = (y * w + x) * 4;
+      const g = pixels[top + 1]!;
+      totalRamp++;
+      if (
+        Math.abs(pixels[top]! - RAMP[g * 3]!) <= RAMP_TOL &&
+        Math.abs(pixels[top + 2]! - RAMP[g * 3 + 2]!) <= RAMP_TOL
+      )
+        okRamp++;
+
       const p = ((rows + y) * w + x) * 4;
-      total++;
+      totalPhase++;
       if (pixels[p + 2]! > 48) continue;
       const cr = pixels[p]! - 127.5;
       const cs = pixels[p + 1]! - 127.5;
       const rad2 = cr * cr + cs * cs;
-      if (rad2 < 400 || rad2 > 40000) continue;
-      ok++;
+      if (rad2 < PHASE_R2_LO || rad2 > PHASE_R2_HI) continue;
+      okPhase++;
     }
   }
-  return ok >= 12 && ok / Math.max(1, total) >= 0.55;
+  return (
+    okPhase >= 12 &&
+    okPhase / Math.max(1, totalPhase) >= 0.55 &&
+    okRamp / Math.max(1, totalRamp) >= 0.55
+  );
 }
 
 function surface(width: number, height: number) {

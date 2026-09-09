@@ -375,6 +375,17 @@ describe("shape", () => {
     expect(huge.enc.end - huge.enc.start).toBeLessThanOrEqual((20000 * hopOf(huge.enc)) / 8000);
   });
 
+  test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
+    const e: Encode = { ...VOICE, mode: "exact", sr: 8000, fineness: 2 };
+    const samples = 8000 * 256;
+    const fit = fitEncode(e, 8000, samples);
+    expect(fit.note).not.toBeNull();
+    const sr = fit.enc.sr > 0 ? fit.enc.sr : 8000;
+    const tuned = shapeFor(fit.enc, sr, Math.ceil((samples * sr) / 8000));
+    expect(tuned.frames).toBeLessThanOrEqual(20000);
+    expect(tuned.frames * tuned.bins * BANDS).toBeLessThanOrEqual(8_000_000);
+  });
+
   test("budget holds for sane lengths", () => {
     for (const seconds of [0.2, 1, 5, 30]) {
       const s = shapeFor(VOICE, 8000, 8000 * seconds);
@@ -587,6 +598,21 @@ describe("reads our images with no metadata at all", () => {
       fake[i + 3] = 255;
     }
     expect(recognizeExact(fake, width, height)).toBe(false);
+  });
+
+  test("black images and doodles are not mistaken for exact", () => {
+    const img = new Uint8ClampedArray(64 * 32 * 4) as unknown as import("./arrays").Pixels;
+    for (let i = 0; i < img.length; i += 4) img[i + 3] = 255;
+    expect(recognizeExact(img, 64, 32)).toBe(false);
+
+    for (let x = 8; x < 40; x++)
+      for (let y = 6; y < 26; y++) {
+        const p = (y * 64 + x) * 4;
+        img[p] = 220;
+        img[p + 1] = 180;
+        img[p + 2] = 60;
+      }
+    expect(recognizeExact(img, 64, 32)).toBe(false);
   });
 
   test("phase reliability drops when the image is downscaled, and synthesis falls back", async () => {

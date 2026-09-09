@@ -238,6 +238,14 @@ export function App() {
         <header className="head">
           <h1>频谱 SPECTRUM</h1>
           <p>声音 ↔ 图像</p>
+          <a
+            className="head-link"
+            href="https://github.com/HK-SHAO/atools"
+            target="_blank"
+            rel="noreferrer"
+          >
+            源代码
+          </a>
         </header>
 
         {job && source ? (

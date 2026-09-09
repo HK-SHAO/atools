@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { recognizeExact, sniff } from "./image";
 import type { Pixels } from "./arrays";
+import { RAMP } from "./palette";
 
 const ftyp = (major: string) => {
   const b = new Uint8Array(16);
@@ -43,8 +44,9 @@ describe("recognizeExact（可逆图像素签名）", () => {
 
   function exactPixels(w: number, h: number): Pixels {
     const px = new Uint8ClampedArray(w * h * 4);
+    const rows = Math.floor(h / 2);
     for (let y = 0; y < h; y++) {
-      const phase = y >= h / 2;
+      const phase = y >= rows;
       for (let x = 0; x < w; x++) {
         const p = (y * w + x) * 4;
         if (phase) {
@@ -53,9 +55,10 @@ describe("recognizeExact（可逆图像素签名）", () => {
           px[p + 1] = Math.round((Math.sin(a) * 0.5 + 0.5) * 255);
           px[p + 2] = 0;
         } else {
-          px[p] = 200;
-          px[p + 1] = 100 + ((x * 7) % 128);
-          px[p + 2] = 40;
+          const level = 40 + ((x * 7 + y * 3) % 200);
+          px[p] = RAMP[level * 3]!;
+          px[p + 1] = level;
+          px[p + 2] = RAMP[level * 3 + 2]!;
         }
         px[p + 3] = 255;
       }
