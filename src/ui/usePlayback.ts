@@ -42,7 +42,6 @@ export function usePlayback(pcm: Samples, sr: number) {
       const head = headRef.current;
       if (head) {
         head.style.left = `${at * 100}%`;
-        head.style.transform = `translateX(${-at * 100}%)`;
         head.style.opacity = at <= 0 && !liveRef.current ? "0" : "1";
       }
       if (timeRef.current) timeRef.current.textContent = clock(Math.min(pos, duration));

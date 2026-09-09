@@ -1,7 +1,5 @@
 import type { Samples } from "./arrays";
 
-const DEMO_SECONDS = 3.2;
-
 export interface Decoded {
   pcm: Samples;
   sr: number;
@@ -32,9 +30,10 @@ const DECODE_HELP =
 
 function decodeRaw(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise((ok, no) => {
-    void ctx.decodeAudioData(data, ok, err =>
+    const p = ctx.decodeAudioData(data, ok, err =>
       no(err instanceof Error ? err : new Error(String(err ?? "解码失败"))),
     );
+    void p?.catch(() => {}); // 回调式的返回 Promise 弃用之，reject 会成未捕获异常
   });
 }
 
@@ -120,48 +119,4 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
   }
 
   throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
-}
-
-export function demoTrack(sr: number): Samples {
-  const n = Math.round(sr * DEMO_SECONDS);
-  const pcm = new Float32Array(n);
-  let seed = 20260908;
-  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
-
-  const f0 = 140;
-  const f1 = 9000;
-  const ratio = f1 / f0;
-  const k = (2 * Math.PI * f0 * DEMO_SECONDS) / Math.log(ratio);
-  for (let i = 0; i < n; i++) {
-    const t = i / sr;
-    pcm[i] = 0.34 * Math.sin(k * (Math.pow(ratio, t / DEMO_SECONDS) - 1));
-  }
-
-  const chord = [110, 164.81, 220, 277.18];
-  chord.forEach((f, idx) => {
-    const gain = 0.2 / (1 + idx * 0.4);
-    for (let i = 0; i < n; i++) {
-      const t = i / sr;
-      const env = Math.exp(-t * 1.1) * (1 - Math.exp(-t * 220));
-      pcm[i] = pcm[i]! + gain * env * Math.sin(2 * Math.PI * f * t + Math.sin(2 * Math.PI * 5 * t) * 0.6);
-    }
-  });
-
-  for (const [at, len] of [
-    [0.35, 0.05],
-    [2.1, 0.03],
-  ] as const) {
-    const from = Math.round(at * sr);
-    const size = Math.round(len * sr);
-    for (let i = 0; i < size && from + i < n; i++) {
-      const env = Math.pow(1 - i / size, 3);
-      pcm[from + i] = pcm[from + i]! + 0.3 * env * rand();
-    }
-  }
-
-  let peak = 0;
-  for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(pcm[i]!));
-  if (peak > 0) for (let i = 0; i < n; i++) pcm[i] = (pcm[i]! / peak) * 0.92;
-
-  return pcm;
 }

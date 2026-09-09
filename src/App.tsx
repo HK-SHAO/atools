@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { decodeAudioFile, demoTrack } from "./lib/audio";
+import { decodeAudioFile } from "./lib/audio";
 import type { Samples } from "./lib/arrays";
+import DEMO_URL from "./assets/fade-demo.m4a";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "./lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "./lib/params";
 import { resample, silenceBounds, slice } from "./lib/resample";
@@ -20,7 +21,6 @@ interface Job {
   png: Blob;
 }
 
-const DEMO_RATE = 44100;
 const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
 const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
@@ -187,9 +187,17 @@ export function App() {
   }, [job]);
 
   const demo = useCallback(() => {
-    setMode("compact");
-    setEnc(e => reopen(e));
-    setSource({ pcm: demoTrack(DEMO_RATE), sr: DEMO_RATE, name: "示例" });
+    void (async () => {
+      try {
+        const buf = await (await fetch(DEMO_URL)).arrayBuffer();
+        const { pcm, sr } = await decodeAudioFile(buf);
+        setMode("compact");
+        setEnc(e => reopen(e));
+        setSource({ pcm, sr, name: "fade-demo" });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "示例加载失败");
+      }
+    })();
   }, []);
 
   const trim = useCallback(() => {

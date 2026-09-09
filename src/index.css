@@ -145,15 +145,15 @@
 
   .spec-head {
     position: absolute;
-    top: -2;
-    bottom: -2;
+    top: 0;
+    bottom: 0;
     left: 0;
     width: calc(0.15 * var(--u));
-    background: #fffdf7;
-    box-shadow: 0 0 0 1px rgba(29, 23, 16, 0.5);
+    background: #fff;
+    mix-blend-mode: difference;
     opacity: 0;
     pointer-events: none;
-    will-change: transform, left;
+    will-change: left;
   }
 
   .spec:focus-visible {
