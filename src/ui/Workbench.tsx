@@ -52,7 +52,7 @@ function save(blob: Blob, filename: string): void {
 }
 
 const MODE_NOTE: Record<ReadMode, string | null> = {
-  exact: "可逆模式：音质几乎无损。要长期保存请用 PNG，转成 JPEG 音质会略降",
+  exact: "相位已载入。要长期保存请用 PNG，转成 JPEG 音质会略降",
   compact: null,
   degraded: "这张图被压缩或缩放过，音质会打折扣",
   foreign: "这不是本工具生成的图，试着把画面明暗当声音来读",
@@ -64,8 +64,8 @@ const kb = (n: number): string =>
 function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
   if (exact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
-  const cell = (r: LossRow): string => `${r.label} 还原度 ${Math.round(r.corr * 100)}%`;
-  return `自检：${rows.map(cell).join("；")}`;
+  const cell = (r: LossRow): string => `${r.label} ${Math.round(r.corr * 100)}%`;
+  return `还原度：${rows.map(cell).join("；")}`;
 }
 
 export function Workbench({
@@ -179,11 +179,11 @@ export function Workbench({
       </div>
 
       <p className="facts">
-        采样率 {srLabel(meta.sr)}、{clock(duration)}、{kb(png.size)}
-        {compact ? "" : "、可逆"}
-        {loss ? `；${lossLine(loss, meta.exact)}` : ""}
-        {note ? `；${note}` : ""}
-        {hint ? `；${hint}` : ""}
+        采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
+        {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
+        {loss ? `${lossLine(loss, meta.exact)}；` : ""}
+        {note ? `${note}；` : ""}
+        {hint ? `${hint}；` : ""}
       </p>
       {error && <p className="note is-error">{error}</p>}
       {stage && (

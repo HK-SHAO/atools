@@ -180,7 +180,7 @@ export function App() {
       );
       if (!alive()) return;
       setJob(j => (j ? { ...j, pcm } : j));
-      setHint("相位已精修");
+      setHint("相位已重建");
     } catch (e) {
       if (!alive() || e instanceof Aborted) return;
       console.error(e);
