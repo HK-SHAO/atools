@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import { audit, type LossRow } from "../lib/audit";
-import { downloadName, spectrumToPng, type ReadMode } from "../lib/image";
+import { downloadName, type ReadMode } from "../lib/image";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -52,10 +52,10 @@ function save(blob: Blob, filename: string): void {
 }
 
 const MODE_NOTE: Record<ReadMode, string | null> = {
-  exact: "相位已载入。要长期保存请用 PNG，转成 JPEG 音质会略降",
+  exact: "相位已载入。无损图片的音质更好",
   compact: null,
-  degraded: "这张图被压缩或缩放过，音质会打折扣",
-  foreign: "这不是本工具生成的图，试着把画面明暗当声音来读",
+  degraded: "此图被压缩或缩放过，音质会失真",
+  foreign: "这不是本工具生成的，建议采用专用图片",
 };
 
 const kb = (n: number): string =>

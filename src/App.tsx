@@ -308,7 +308,6 @@ export function App() {
             <button
               type="button"
               className="act"
-              style={{ display: 'none' }}
               onClick={() => {
                 setSource(null);
                 setJob(null);
