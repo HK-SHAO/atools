@@ -443,6 +443,22 @@
     color: var(--soft);
   }
 
+  .credit {
+    margin-left: auto;
+  }
+
+  .credit a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 2px;
+    transition: color 0.15s;
+  }
+
+  .credit a:hover {
+    color: var(--ink);
+  }
+
   .app[data-wide] .params {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(calc(11 * var(--u)), 1fr));

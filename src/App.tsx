@@ -8,6 +8,7 @@ import { resample, silenceBounds, slice } from "./lib/resample";
 import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "./lib/spectrum";
 import { useContainerScale } from "./ui/useContainerScale";
 import { Workbench } from "./ui/Workbench";
+import { CREDIT_AUTHOR, CREDIT_NAME } from "./credit";
 
 interface Source {
   pcm: Samples;
@@ -311,6 +312,12 @@ export function App() {
             演示音频
           </button>
           <span className="dim">单声道；一张图存下一段声音</span>
+          <span className="credit">
+            {CREDIT_NAME} · created by{" "}
+            <a href={CREDIT_AUTHOR.url} target="_blank" rel="noreferrer">
+              {CREDIT_AUTHOR.name}
+            </a>
+          </span>
         </footer>
       </div>
     </div>

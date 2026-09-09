@@ -1,7 +1,12 @@
 {
-  "name": "bun-react-template",
+  "name": "spectrum",
   "version": "0.1.0",
   "private": true,
+  "author": {
+    "name": "烧风 HK-SHAO",
+    "email": "hk-shao@outlook.com",
+    "url": "https://space.bilibili.com/24046148"
+  },
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
