@@ -133,7 +133,8 @@ const failures: string[] = [];
 const fail = (msg: string): void => void failures.push(msg);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-const cssFiles = [...new Bun.Glob("*.css").scanSync({ cwd: `${project}/dist` })];
+// 递归找：产物布局（扁平还是 assets/）不是契约，「整个 dist 只有一份 css」才是。
+const cssFiles = [...new Bun.Glob("**/*.css").scanSync({ cwd: `${project}/dist` })];
 if (cssFiles.length !== 1) {
   console.error(`dist/ 里应当只有一个 css 产物，实际 ${cssFiles.length} 个 —— 先 bun run build:web`);
   process.exit(1);

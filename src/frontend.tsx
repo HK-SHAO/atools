@@ -10,8 +10,14 @@ const app = (
   </StrictMode>
 );
 
-(import.meta.hot.data.root ??= createRoot(elem)).render(app);
+// HMR 重跑本模块时复用同一个 root。
+// 不能直接写 `import.meta.hot.data.root`：生产构建里 `import.meta.hot` 是 undefined
+// （Bun 的打包器会把整个表达式折掉，Vite 不会），那样首屏就崩在取 .data 上。
+const hot = import.meta.hot;
+const root = hot?.data.root ?? createRoot(elem);
+if (hot) hot.data.root = root;
+root.render(app);
 
-if (!import.meta.hot && "serviceWorker" in navigator) {
+if (!hot && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
 }

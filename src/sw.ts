@@ -1,4 +1,4 @@
-// 应用壳离线。壳是什么、缓存叫什么，全由 build.ts 注入的 __SHELL__ 决定：
+// 应用壳离线。壳是什么、缓存叫什么，全由 `scripts/sw.ts` 在产物上注入的 __SHELL__ 决定：
 // 入口产物 + index.html 直接引用到的资源 + manifest 自己引的图标。
 // 音频解码器是动态分包（按需 import），不预缓存，改由运行期缓存兜住：
 // 用过一次的格式此后离线可用，没用过的离线时优雅失败。
@@ -8,7 +8,6 @@
 // 新版一 activate 就清空旧缓存，而正在用的页面还揣着旧的 HTML —— 它剩下没加载过的
 // 动态分包会连同旧缓存一起消失。首次安装没有旧 Worker，本来就直接 activate，
 // 所以「首次访问即离线可用」不靠 skipWaiting，靠下面的 clients.claim。
-declare const __SHELL__: { cache: string; home: string; files: string[] };
 
 // ServiceWorkerGlobalScope、ExtendableEvent、FetchEvent 都住在 lib.webworker 里，
 // 与本项目用的 lib.dom 不能同引，这里只声明用得到的那几个口子。
@@ -29,9 +28,13 @@ interface WorkerScope {
   addEventListener(type: "fetch", listener: (event: Routed) => void): void;
 }
 
-// 一次性解构：define 注入的是对象字面量，每用一次就整份内联一遍（实测 6 处 → 2.0 KB），
-// 拆开后只剩这一处，产物回到 1.1 KB。
-const { cache: CACHE, home, files } = __SHELL__;
+// 占位符是**字符串字面量**而不是标识符：压缩器不会动字符串，替换因此不依赖任何命名约定。
+// 一次性解构：对象字面量每用一次就整份内联一遍，拆开后只剩这一处。
+const { cache: CACHE, home, files } = JSON.parse("__SHELL__") as {
+  cache: string;
+  home: string;
+  files: string[];
+};
 
 const scope = self as unknown as WorkerScope;
 const HOME = new URL(home, scope.location.href).href;

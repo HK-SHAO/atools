@@ -37,5 +37,8 @@ docs/voice
 docs/audio-examples
 docs/ra2
 
+# 本地参考资料（moonbitlang/skills 的副本），与仓库无关
+.local/
+
 .workbuddy/
 .data/
