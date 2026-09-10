@@ -22,10 +22,10 @@
   width: 100%;
   max-width: var(--c-max);
   margin: 0 auto;
-  padding-top: max(1.25em, env(safe-area-inset-top, 0px));
+  padding-top: max(1.5em, env(safe-area-inset-top, 0px));
   padding-bottom: max(1.5em, env(safe-area-inset-bottom, 0px));
-  padding-left: max(1em, env(safe-area-inset-left, 0px));
-  padding-right: max(1em, env(safe-area-inset-right, 0px));
+  padding-left: max(1.5em, env(safe-area-inset-left, 0px));
+  padding-right: max(1.5em, env(safe-area-inset-right, 0px));
   font-size: var(--u);
 }
 

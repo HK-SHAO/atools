@@ -95,11 +95,12 @@ if (toy) {
   const zipPath = path.join(project, "toy.zip");
   await rm(zipPath, { force: true });
   await Bun.$`cd ${outdir} && zip -qr ${zipPath} . -x '*.DS_Store'`;
-  console.log(` toy.zip  ${(Bun.file(zipPath).size / 1024 / 1024).toFixed(2)} MB  (index.html 在包根)`);
+  console.log(`toy.zip  ${(Bun.file(zipPath).size / 1024 / 1024).toFixed(2)} MB  (index.html 在包根)`);
 } else {
-  for (const output of app.outputs)
-    console.log(` ${path.relative(project, output.path)}  ${(output.size / 1024).toFixed(1)} KB`);
+  for (const output of app.outputs) {
+    console.log(`${path.relative(project, output.path)}  ${(output.size / 1024).toFixed(1)} KB`);
+  }
   console.log(
-    ` dist/sw.js  ${(serviceWorker.length / 1024).toFixed(1)} KB  预缓存 ${shell.length} 项：${shell.join(" ")}`,
+    `dist/sw.js ${(serviceWorker.length / 1024).toFixed(1)} KB \n预缓存 ${shell.length} 项：\n${shell.join("\n")}`,
   );
 }

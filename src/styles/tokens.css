@@ -36,7 +36,7 @@
 
 /* .app 是容器，.shell 是它的令牌根：容器单位只认祖先容器，令牌根必须在容器下一层 */
 .shell {
-  --c-max: 1180px;
+  --c-max: 100cqi;
   --c-eff: min(100cqi, 160cqb);
   --c-vh: 1cqb;
 
