@@ -70,6 +70,32 @@ for (const to of [8000, 16000, 48000]) {
   if (ratio < 3) failures.push(`→${to} 相位表只快 ${ratio.toFixed(1)}×，缓存没生效或又被绕过了`);
 }
 
+// 相位数最多的那几个组合：既约分母大 + 浮点漂移，实际相位数可达一万（11025→32000 实测 10001）。
+// 相位表上限若设小了，这些组合会从「省钱」变成「每样点一次未命中 + 一次分配」，
+// 曾经实测比逐样点现算还慢 1.18×。这里把它们钉住：慢于逐样点就是不合格。
+console.log("\n相位种类最多的几个组合（相位表最容易退化的地方）");
+console.log("  组合              样点      相位表      逐样点现算     倍数");
+for (const [from, to] of [
+  [11025, 16000],
+  [11025, 32000],
+  [22050, 32000],
+  [11025, 8000],
+] as [number, number][]) {
+  const src = signal(from * SECS, from);
+  const table = ms(() => resample(src, from, to));
+  const plain = ms(() => naive(src, from, to));
+  const ratio = plain / table;
+  console.log(
+    `${from}→${to}`.padEnd(18) +
+      String(src.length).padStart(8) +
+      `${table.toFixed(1)} ms`.padStart(12) +
+      `${plain.toFixed(1)} ms`.padStart(14) +
+      `${ratio.toFixed(2)}×`.padStart(9),
+  );
+  if (ratio < 1.05)
+    failures.push(`${from}→${to} 相位表 ${ratio.toFixed(2)}× —— 相位种类超过预算时退化得比逐样点还慢`);
+}
+
 if (process.env.PAGE !== "0") {
   const PORT = Number(process.env.PORT ?? 4370);
   const CDP = PORT + 700;

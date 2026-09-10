@@ -13,7 +13,7 @@ bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 bun bench/scale.ts       # 尺度门禁：字号随容器等比、五种控件同高、令牌锚在当前容器上
 bun bench/offline.ts     # PWA 门禁：manifest 可装、应用壳断网可用（先 build:web）
-bun run perf             # 性能体检：重采样相位表倍数 + 页面主线程长任务
+bun run perf             # 性能体检：重采样相位表倍数 + 相位数最多组合「不得慢于逐样点」的门禁 + 页面主线程长任务
 ```
 
 包管理一律 Bun（`bun install` / `bunx`），不引入 npm/yarn 配置。

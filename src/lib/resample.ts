@@ -2,6 +2,9 @@ import type { Samples } from "./arrays";
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
+// 相位表的内存预算：最坏 4 MB，与「按 4096 条、每条宽 64 抽头」时的占用持平。
+const MEMO_BYTES = 4 << 20;
+
 function kernel(d: number, fc: number): number {
   if (d === 0) return 2 * fc;
   return Math.sin(2 * Math.PI * fc * d) / (Math.PI * d);
@@ -19,40 +22,64 @@ export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Sa
   const half = clamp(Math.round(2 / Math.max(fc, 1e-5)), 3, 64);
   const spread = half + 0.5;
 
-  // 抽头权重只由 frac 决定，而 frac 的取值个数等于 from/to 既约后的分母
-  // （44.1k→8k 只有 80 种），所以同一相的权重先算一次存下。
-  // 上限按内存给：既约分母虽小，同一个相却会因浮点漂移散成近十种 frac，
-  // 最坏 4096×129 个 double 约 4 MB，用完即回收；再离谱的采样率组合退回逐样点现算。
-  // 表以 frac 本身为键、值与原处逐位相同，只是不再重复算 sin/cos。
+  // 抽头权重只由 frac 决定，所以同一相的权重算一次存下。
+  // 上限不能设小：同一个相会因浮点漂移散成近十种 frac（44.1k→16k 既约分母 160，实测 1442 种）。
+  // 但也不能只按条数封 —— 若相位种类真的超过预算，表就从「省钱」变成「每样点一次未命中 + 一次
+  // 分配」，实测 11025→32000 反而比逐样点现算慢 1.18×。所以顶到上限就整段退回现算，
+  // 并且回退路径不分配数组，最坏只是与逐样点持平。上限同时按条数与内存双重封顶。
   const taps = new Map<number, Float64Array>();
-  const PHASES = 4096;
+  const cap = Math.max(64, Math.min(1 << 14, Math.floor(MEMO_BYTES / (2 * half * 8))));
+  let memo = true;
 
   for (let j = 0; j < out.length; j++) {
     const center = j * ratio;
     const i0 = Math.floor(center);
     const frac = center - i0;
 
-    let w = taps.get(frac);
-    if (w === undefined) {
-      w = new Float64Array(2 * half);
-      for (let m = 1 - half; m <= half; m++) {
-        const d = m - frac;
-        const t = d / spread;
-        w[m + half - 1] =
-          kernel(d, fc) *
-          (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
+    let w: Float64Array | undefined;
+    if (memo) {
+      w = taps.get(frac);
+      if (w === undefined) {
+        if (taps.size < cap) {
+          const made = new Float64Array(2 * half);
+          for (let m = 1 - half; m <= half; m++) {
+            const d = m - frac;
+            const t = d / spread;
+            made[m + half - 1] =
+              kernel(d, fc) *
+              (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
+          }
+          taps.set(frac, made);
+          w = made;
+        } else {
+          memo = false;
+          taps.clear();
+        }
       }
-      if (taps.size < PHASES) taps.set(frac, w);
     }
 
     let acc = 0;
     let wsum = 0;
-    for (let m = 1 - half; m <= half; m++) {
-      const tap = w[m + half - 1]!;
-      const i = i0 + m;
-      if (i >= 0 && i < x.length) {
-        acc += x[i]! * tap;
-        wsum += tap;
+    if (w !== undefined) {
+      for (let m = 1 - half; m <= half; m++) {
+        const i = i0 + m;
+        if (i >= 0 && i < x.length) {
+          const tap = w[m + half - 1]!;
+          acc += x[i]! * tap;
+          wsum += tap;
+        }
+      }
+    } else {
+      for (let m = 1 - half; m <= half; m++) {
+        const d = m - frac;
+        const t = d / spread;
+        const tap =
+          kernel(d, fc) * (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
+        const i = i0 + m;
+        if (i >= 0 && i < x.length) {
+          acc += x[i]! * tap;
+          wsum += tap;
+        }
       }
     }
     out[j] = wsum !== 0 ? acc / wsum : 0;

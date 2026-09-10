@@ -96,6 +96,37 @@ describe("params", () => {
   });
 });
 
+// 「相位表之前」的逐样点现算版，作为比位对照。测试专用，不进生产代码。
+const naiveInline = (x: Samples, from: number, to: number, cutoffHz = 0): Float32Array => {
+  const ratio = from / to;
+  const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
+  const nyq = 0.5 * Math.min(1, to / from);
+  const limit = cutoffHz > 0 ? Math.min(nyq, cutoffHz / from) : nyq;
+  const fc = limit * 0.92;
+  const half = Math.min(64, Math.max(3, Math.round(2 / Math.max(fc, 1e-5))));
+  for (let j = 0; j < out.length; j++) {
+    const center = j * ratio;
+    const i0 = Math.floor(center);
+    const frac = center - i0;
+    let acc = 0;
+    let wsum = 0;
+    for (let m = 1 - half; m <= half; m++) {
+      const d = m - frac;
+      const t = d / (half + 0.5);
+      const w =
+        (d === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * d) / (Math.PI * d)) *
+        (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
+      const i = i0 + m;
+      if (i >= 0 && i < x.length) {
+        acc += x[i]! * w;
+        wsum += w;
+      }
+    }
+    out[j] = wsum !== 0 ? acc / wsum : 0;
+  }
+  return out;
+};
+
 describe("resample", () => {
   test("keeps length roughly proportional", () => {
     const x = signal(44100, 44100);
@@ -130,36 +161,6 @@ describe("resample", () => {
 
   // 相位权重查表是纯缓存：值与逐样点现算逐位相同，音质门禁因此不会漂
   test("phase table is bit-identical to computing each tap inline", () => {
-    const naive = (x: Samples, from: number, to: number, cutoffHz = 0): Float32Array => {
-      const ratio = from / to;
-      const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
-      const nyq = 0.5 * Math.min(1, to / from);
-      const limit = cutoffHz > 0 ? Math.min(nyq, cutoffHz / from) : nyq;
-      const fc = limit * 0.92;
-      const half = Math.min(64, Math.max(3, Math.round(2 / Math.max(fc, 1e-5))));
-      for (let j = 0; j < out.length; j++) {
-        const center = j * ratio;
-        const i0 = Math.floor(center);
-        const frac = center - i0;
-        let acc = 0;
-        let wsum = 0;
-        for (let m = 1 - half; m <= half; m++) {
-          const d = m - frac;
-          const t = d / (half + 0.5);
-          const w =
-            (d === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * d) / (Math.PI * d)) *
-            (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
-          const i = i0 + m;
-          if (i >= 0 && i < x.length) {
-            acc += x[i]! * w;
-            wsum += w;
-          }
-        }
-        out[j] = wsum !== 0 ? acc / wsum : 0;
-      }
-      return out;
-    };
-
     const src = signal(44100, 44100 * 2);
     for (const [from, to, cutoff] of [
       [44100, 8000, 0],
@@ -169,11 +170,57 @@ describe("resample", () => {
       [48000, 44100, 0],
     ] as [number, number, number][]) {
       const got = resample(src, from, to, cutoff);
-      const want = naive(src, from, to, cutoff);
+      const want = naiveInline(src, from, to, cutoff);
       expect(got.length).toBe(want.length);
       let same = true;
       for (let i = 0; i < got.length; i++) if (got[i] !== want[i]) same = false;
       expect([from, to, cutoff, same]).toEqual([from, to, cutoff, true]);
+    }
+  });
+
+  // 表顶到上限时会整段退回现算（回退路径不分配数组）。那条分支必须与查表路径同值，
+  // 否则「逐位不变」只在表装得下时成立。这里用实际相位数远超上限的组合把它压出来。
+  test("phase table falling back to inline taps is bit-identical too", () => {
+    const from = 44101;
+    const to = 96000;
+    const n = from * 2;
+    const x = signal(n, from);
+
+    // 该组合实际会出现多少种 frac —— 必须超过上限 1<<14，这条测试才真的覆盖到回退分支
+    const seen = new Set<number>();
+    const ratio = from / to;
+    for (let j = 0; j < Math.round(n / ratio); j++) {
+      const c = j * ratio;
+      seen.add(c - Math.floor(c));
+    }
+    expect(seen.size).toBeGreaterThan(1 << 14);
+
+    const got = resample(x, from, to);
+    const want = naiveInline(x, from, to);
+    expect(got.length).toBe(want.length);
+    let differ = 0;
+    for (let i = 0; i < got.length; i++) if (got[i] !== want[i]) differ++;
+    expect(differ).toBe(0);
+  });
+
+  // 边缘输入：空、单点、极短、全零、冲激，以及比率离谱到几乎没有重复相的组合
+  test("edge lengths and degenerate rates agree with inline taps", () => {
+    const cases: [number, number, number, Samples][] = [
+      [44100, 8000, 0, Float32Array.from([0]) as Samples],
+      [44100, 8000, 0, Float32Array.from([0, 1]) as Samples],
+      [8000, 44100, 0, Float32Array.from([1]) as Samples],
+      [22050, 8000, 0, new Float32Array(7) as Samples],
+      [44100, 16000, 0, new Float32Array(1001).fill(0.7) as Samples],
+      [44100, 8000, 20000, signal(5000, 44100)],
+      [44101, 8000, 0, signal(5000, 44101)],
+      [32000, 32000, 500, signal(5000, 32000)],
+    ];
+    for (const [from, to, cutoff, x] of cases) {
+      const got = resample(x, from, to, cutoff);
+      const want = naiveInline(x, from, to, cutoff);
+      let differ = got.length === want.length ? 0 : -1;
+      for (let i = 0; i < got.length && differ >= 0; i++) if (got[i] !== want[i]) differ++;
+      expect([from, to, cutoff, x.length, differ]).toEqual([from, to, cutoff, x.length, 0]);
     }
   });
 });
