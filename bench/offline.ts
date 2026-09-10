@@ -85,7 +85,20 @@ try {
   // 整个门禁只加载这一次。若先加载第二遍再断网，安装期什么都没预热也照样能过
   // —— 第一遍顺手就把壳填满了。shaofeng 当年删掉安装期预热之后，离线正是退化成
   // 「得访问两次」才成立；所以「一次访问就够」必须由门禁自己钉住。
-  if (!(await session.ev<boolean>(`return !!navigator.serviceWorker.controller;`)))
+  //
+  // 等到 `controllerchange` 而不是当场读 `controller`：`ready` 只说明有活着的 worker，
+  // `clients.claim()` 要再过一个任务才把控制权交到页面上，当场读是个竞态
+  // —— 实测同一条构建连跑两次，一次全绿一次挂四项，根因都在这一行。
+  // 断言本身没放松：真没发 claim 的话，等多久 `controller` 都不会出现。
+  const controlled = await session.ev<boolean>(`
+    if (navigator.serviceWorker.controller) return true;
+    return await Promise.race([
+      new Promise((done) => navigator.serviceWorker.addEventListener(
+        'controllerchange', () => done(true), { once: true })),
+      new Promise((done) => setTimeout(() => done(false), 3000)),
+    ]);
+  `);
+  if (!controlled)
     fail("首次加载后当前页面未受控（clients.claim 没生效：首次访问拿不到离线能力，得再加载一次）");
 
   const online = await session.ev<{

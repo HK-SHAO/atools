@@ -91,6 +91,34 @@ describe("rtisi", () => {
     );
     for (let i = 0; i < y.length; i++) expect(Number.isFinite(y[i]!)).toBe(true);
   });
+
+  /**
+   * 打包的消融口。
+   *
+   * 这条素材（纯音、良态）上两条支路只差舍入，所以卡得很紧：中位相对偏差 < 1e-12。
+   * 打包要是写错（配错槽位、镜像少一项），这个数会跳到 O(1)，抓得住。
+   *
+   * **但别把这条界线当成放之四海皆准**：换成含噪素材（win 512、8 秒、正弦叠噪声），
+   * 同样的两条支路会差到峰值的百分之几 —— 那不是打包引入的，是 RTISI-LA 的条件数：
+   * 给**不打包**那条支路喂 1 ulp 的幅度扰动、代码一个字不改，偏差一样是百分之几。
+   * 实测数字与论证在 docs/migration.md 里程碑 4，所以端到端判据只能按**分布**比指标，
+   * 不能按波形比。`bun run quality -- --tune='{"pair":false}'` 一行复现。
+   */
+  test("良态素材上打包只差舍入，两支路对参照的指标一致", async () => {
+    const plain = await rtisiLa(mag, frames, bins, win, hop, x.length, { iters: 8, pair: false });
+    const packed = await rtisiLa(mag, frames, bins, win, hop, x.length, { iters: 8 });
+
+    let peak = 0;
+    for (let i = 0; i < plain.length; i++) peak = Math.max(peak, Math.abs(plain[i]!));
+    const d = new Float64Array(packed.length);
+    for (let i = 0; i < packed.length; i++) d[i] = Math.abs(packed[i]! - plain[i]!) / peak;
+    d.sort();
+    expect(d[d.length >> 1]!).toBeLessThan(1e-12);
+
+    const ca = align(x, Float32Array.from(packed) as Samples, 64).corr;
+    const cb = align(x, Float32Array.from(plain) as Samples, 64).corr;
+    expect(Math.abs(ca - cb)).toBeLessThan(0.05);
+  });
 });
 
 describe("metric", () => {
