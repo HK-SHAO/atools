@@ -133,29 +133,33 @@ const CASES: { enc: Encode; double?: boolean }[] = [
   { enc: { mode: "compact", sr: 8000, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 }, double: true },
 ];
 
-// 阈值来自基线实测加余量。算法真实提升后把阈值提到新基线；变红先当退步查。
-const GATE: [string, string, number, number, number][] = [
-  ["严苛", "可逆 8k", 0.99, 3.5, -10],
-  ["人声", "紧凑 8k 8bit", 0.15, 9, -8],
-  ["严苛", "紧凑 8k 8bit", 0.05, 12, -3.5],
-  // 这条盯的是「地板那一档不被钉死」（TUNE.relaxFloor）：它落地之前，
-  // 乐声 4bit 的谱差是 26.6（远超 ≤10），所以这条会当场判红，不是摆设。
-  ["乐声", "紧凑 8k 4bit", 0.5, 10, -8],
+// [素材, 用例, 相关 ≥, 谱差 ≤, 收敛 ≤, 包络 ≥]，阈值取新基线再加余量。
+//
+// 「包络」这一列是主 guard：它盯的是**重叠倍数**。hop 从 win/2 退回 2 倍重叠时，
+// 8bit 三行的包络会掉到 0.70~0.75（实测），当场判红 —— 那正是「统一 4 倍重叠」要守的东西。
+// 最后一行盯的是 relaxFloor：关掉它，乐声 4bit 的谱差从 16 涨到 27。
+const GATE: [string, string, number, number, number, number][] = [
+  ["严苛", "可逆 8k", 0.99, 2.5, -30, 0.95],
+  ["人声", "紧凑 8k 8bit", 0.2, 6, -12, 0.9],
+  ["严苛", "紧凑 8k 8bit", 0.08, 5, -6, 0.9],
+  ["乐声", "紧凑 8k 8bit", 0.5, 5, -15, 0.8],
+  ["乐声", "紧凑 8k 4bit", 0.4, 20, -6, 0.62],
 ];
 
 function gate(rows: Row[]): boolean {
   let ok = true;
-  for (const [signal, tag, minCorr, maxLsd, maxConv] of GATE) {
+  for (const [signal, tag, minCorr, maxLsd, maxConv, minEnv] of GATE) {
     const row = rows.find(r => r.signal === signal && r.label.startsWith(tag));
     if (!row) {
       console.log(`  ✗ 门禁用例缺失：${signal} / ${tag}`);
       ok = false;
       continue;
     }
-    const pass = row.corr >= minCorr && row.lsd <= maxLsd && row.conv <= maxConv;
+    const pass = row.corr >= minCorr && row.lsd <= maxLsd && row.conv <= maxConv && row.env >= minEnv;
     if (!pass) ok = false;
     console.log(
-      `  ${pass ? "✓" : "✗"} ${signal} ${tag}  相关 ${row.corr} (≥${minCorr})  谱差 ${row.lsd} (≤${maxLsd})  收敛 ${row.conv} (≤${maxConv})`,
+      `  ${pass ? "✓" : "✗"} ${signal} ${tag}  相关 ${row.corr} (≥${minCorr})  谱差 ${row.lsd} (≤${maxLsd})` +
+        `  收敛 ${row.conv} (≤${maxConv})  包络 ${row.env} (≥${minEnv})`,
     );
   }
   return ok;

@@ -91,8 +91,10 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const bands = enc.mode === "exact" ? BANDS : 1;
 
   if (frames > MAX_FRAMES) throw new Error("音频太长，图放不下：剪短一点，或调低采样率");
+  // 别再写「把窗长调低」—— 像素 ≈ N·重叠/2，与窗长无关（见 params.ts 的 hopOf）。
+  // 能压图的旋钮只有采样率、频宽（紧凑档）和时长。
   if (frames * bins * bands > MAX_PIXELS)
-    throw new Error("图太大了：把「窗长」或「采样率」调低一些");
+    throw new Error("图太大了：调低采样率或频宽，或先剪短一点");
 
   return { win, hop, frames, bins, samples };
 }
@@ -122,7 +124,10 @@ export function fitEncode(
       };
     }
   }
-  for (let f = e.fineness; f >= 1; f--) {
+  // 帧数 = 4N/win、像素 ≈ 2N，所以「装不下」时窗长这一维只剩一个方向可走：
+  // **换更长的窗**（帧数减半），而不是换更短的。统一到 4 倍重叠之前这里是反着往下调的，
+  // 那时窗越短图越小；现在往下调只会让帧数翻倍、更装不下。
+  for (let f = e.fineness + 1; f < FINENESS.length; f++) {
     const e2: Encode = {
       ...e,
       sr: 8000,
@@ -132,7 +137,7 @@ export function fitEncode(
     if (fits(e2, 8000, Math.ceil((srcSamples * 8000) / srcSr) + hopOf(e2)))
       return {
         enc: e2,
-        note: "音频较长，已调低采样率与分辨率；想更清晰可先剪短",
+        note: "音频较长，已调低采样率并换用更长的窗；想更清晰可先剪短",
       };
   }
   const bands = e.mode === "exact" ? BANDS : 1;

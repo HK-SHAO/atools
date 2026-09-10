@@ -2,7 +2,7 @@ import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, DEFAULT_SR, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
-import { stepsOf } from "./params";
+import { hopOfWin, stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
 const FORMAT_VERSION = 4;
@@ -143,10 +143,10 @@ export function metaFromGeometry(frames: number, bins: number, exact: boolean, b
   return {
     sr: 8000,
     win,
-    hop: win / 2,
+    hop: hopOfWin(win),
     frames: Math.max(2, Math.min(frames, MAX_FRAMES)),
     bins: Math.min(bins, win / 2 + 1),
-    samples: Math.max(2, Math.min(frames, MAX_FRAMES)) * (win / 2),
+    samples: Math.max(2, Math.min(frames, MAX_FRAMES)) * hopOfWin(win),
     bits,
     ref: 0,
     exact,
@@ -354,10 +354,10 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         const gmeta: Meta = {
           sr: stub.sr,
           win: stub.win,
-          hop: stub.win / 2,
+          hop: hopOfWin(stub.win),
           frames: stub.width,
           bins: bins0,
-          samples: stub.width * (stub.win / 2),
+          samples: stub.width * hopOfWin(stub.win),
           bits: 8,
           ref: 0,
           exact: false,
@@ -449,10 +449,10 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       const meta0: Meta = {
         sr: stub.sr,
         win: stub.win,
-        hop: stub.win / 2,
+        hop: hopOfWin(stub.win),
         frames: frames0,
         bins: bins0,
-        samples: frames0 * (stub.win / 2),
+        samples: frames0 * hopOfWin(stub.win),
         bits: stub.exact ? 0 : 8,
         ref: meta?.ref ?? 0,
         exact: stub.exact,

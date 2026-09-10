@@ -5,7 +5,7 @@ import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
 import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
-import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { OVERLAP, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
 import { TUNE } from "./phase";
 import { resample, silenceBounds, slice, trimRange } from "./resample";
@@ -83,7 +83,10 @@ describe("params", () => {
       end: 0,
     });
     expect(winOf(VOICE)).toBe(512);
-    expect(hopOf(VOICE)).toBe(256);
+    expect(hopOf(VOICE)).toBe(128);
+    // 三档的 hop 一律是 win/4，没有例外 —— 这是那条「统一 4 倍重叠」的决定。
+    for (const fineness of [0, 1, 2] as const)
+      expect(hopOf({ ...VOICE, fineness }) * OVERLAP).toBe(winOf({ ...VOICE, fineness }));
     expect(stepsOf(8)).toBe(255);
     expect(dbSpanOf(8)).toBe(96);
   });
@@ -547,7 +550,8 @@ describe("shape", () => {
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
-    expect(fit.enc.sr).toBe(16000);
+    // 4 倍重叠让帧数翻倍，「同样的图能装多久」因此减半，自动降采样会多落一档。
+    expect(fit.enc.sr).toBe(8000);
     const tuned = shapeFor(fit.enc, fit.enc.sr, Math.ceil((samples * fit.enc.sr) / 44100));
     expect(tuned.frames).toBeLessThanOrEqual(20000);
     expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
@@ -561,13 +565,29 @@ describe("shape", () => {
     expect(huge.enc.end - huge.enc.start).toBeLessThanOrEqual((20000 * hopOf(huge.enc)) / 8000);
   });
 
+  // 帧数 = 4N/win：装不下时要往**更长**的窗走（帧数减半），不是更短。
+  // 这条钉住那个方向 —— 换方向会让它掉进「剪短」兜底，end 就不再是 0。
+  test("too many frames is cured by a longer window, not a shorter one", () => {
+    const samples = 8000 * 400;
+    expect(() => shapeFor(VOICE, 8000, samples)).toThrow();
+    const fit = fitEncode(VOICE, 8000, samples);
+    expect(fit.enc.fineness).toBe(2);
+    expect(fit.enc.sr).toBe(8000);
+    expect(fit.enc.end).toBe(0);
+    expect(fit.note).toContain("窗");
+    expect(shapeFor(fit.enc, 8000, samples).frames).toBeLessThanOrEqual(20000);
+  });
+
   test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
     const e: Encode = { ...VOICE, mode: "exact", sr: 8000, fineness: 2 };
     const samples = 8000 * 256;
     const fit = fitEncode(e, 8000, samples);
     expect(fit.note).not.toBeNull();
+    // fitEncode 可能选择「剪短」而不是「降采样」，所以要按它真正覆盖的时长来验，
+    // 否则验的是一个它从没承诺过的整段几何。
     const sr = fit.enc.sr > 0 ? fit.enc.sr : 8000;
-    const tuned = shapeFor(fit.enc, sr, Math.ceil((samples * sr) / 8000));
+    const secs = fit.enc.end > fit.enc.start ? fit.enc.end - fit.enc.start : samples / 8000;
+    const tuned = shapeFor(fit.enc, sr, Math.ceil(secs * sr));
     expect(tuned.frames).toBeLessThanOrEqual(20000);
     expect(tuned.frames * tuned.bins * BANDS).toBeLessThanOrEqual(8_000_000);
   });
@@ -851,7 +871,7 @@ describe("reads our images with no metadata at all", () => {
     const m = metaFromGeometry(620, 257, true, 0);
     expect(m.win).toBe(512);
     expect(m.bins).toBeLessThanOrEqual(m.win / 2 + 1);
-    expect(m.hop).toBe(m.win / 2);
+    expect(m.hop).toBe(m.win / OVERLAP);
     expect(m.sr).toBe(8000);
     const big = metaFromGeometry(620, 3000, true, 0);
     expect(big.win).toBe(4096);
@@ -968,11 +988,23 @@ describe("floor relaxation", () => {
 });
 
 describe("image footprint", () => {
-  test("compact voice defaults beat the reversible layout by a wide margin", () => {
-    const s = shapeFor(VOICE, 8000, 8000 * 10);
-    const compact = s.frames * s.bins;
-    const reversible = shapeFor({ ...VOICE, mode: "exact" }, 8000, 8000 * 10);
-    expect(compact * BANDS).toBeLessThanOrEqual(reversible.frames * reversible.bins * BANDS);
-    expect(compact).toBeLessThan(120_000);
+  const SAMPLES = 8000 * 10;
+
+  // 像素 ≈ N·重叠/2 —— 只由重叠倍数决定，与窗长无关。这条把「重叠才是尺寸旋钮」
+  // 钉住：谁把重叠改大，这里立刻判红；也解释了三档的图为什么一样大。
+  test("image area is set by the overlap factor, not the window", () => {
+    const px = ([0, 1, 2] as const).map(f => {
+      const s = shapeFor({ ...VOICE, fineness: f }, 8000, SAMPLES);
+      return s.frames * s.bins;
+    });
+    for (const p of px) expect(p).toBeLessThanOrEqual(SAMPLES * (OVERLAP / 2) * 1.02);
+    expect(Math.max(...px) / Math.min(...px)).toBeLessThan(1.05);
+  });
+
+  // 可逆档比紧凑档多存一条相位带，同样的几何下正好两倍像素。
+  test("the reversible layout costs one extra band", () => {
+    const c = shapeFor(VOICE, 8000, SAMPLES);
+    const r = shapeFor({ ...VOICE, mode: "exact" }, 8000, SAMPLES);
+    expect(r.frames * r.bins * BANDS).toBe(BANDS * (c.frames * c.bins));
   });
 });
