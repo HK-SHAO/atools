@@ -1,0 +1,41 @@
+.spec {
+  position: relative;
+  width: 100%;
+  height: clamp(6.5em, calc(24 * var(--c-vh)), 12em);
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: #1d1710;
+  box-shadow: inset 0 0 0 1px rgba(61, 52, 39, 0.16);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.spec-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.spec-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0.15em;
+  background: #fff;
+  mix-blend-mode: difference;
+  opacity: 0;
+  pointer-events: none;
+  will-change: left;
+}
+
+.spec:focus-visible {
+  outline: 0.125em solid rgba(147, 200, 234, 0.8);
+  outline-offset: 0.125em;
+}
+
+@supports (corner-shape: squircle) {
+  .spec {
+    corner-shape: squircle;
+  }
+}

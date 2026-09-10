@@ -1,0 +1,40 @@
+:root {
+  --c-vh: 6.67px;
+  --c-max: 1180px;
+
+  --bg-warm:
+    radial-gradient(circle at 18% 12%, rgba(255, 196, 83, 0.3), transparent 44%),
+    linear-gradient(180deg, #fff8ea 0%, #f8e6c4 100%);
+
+  --ink: #3d3427;
+  --soft: #8a7d68;
+  --line: rgba(61, 52, 39, 0.13);
+  --glass: rgba(255, 252, 245, 0.66);
+  --glass-hover: rgba(255, 252, 245, 0.85);
+  --glass-line: rgba(255, 255, 255, 0.6);
+
+  --r-pill: 999px;
+
+  --font: ui-rounded, -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
+    system-ui, sans-serif;
+
+  color-scheme: light;
+}
+
+.app {
+  --u: 16px;
+
+  --fs-lead: calc(0.9375 * var(--u));
+  --fs-hi: calc(0.75 * var(--u));
+  --fs-lo: calc(0.6875 * var(--u));
+  --h-ctl: calc(1.75 * var(--u));
+
+  --r-md: calc(0.75 * var(--u));
+  --r-lg: calc(1 * var(--u));
+
+  --blur: blur(calc(0.75 * var(--u))) saturate(1.2);
+
+  --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.5 * var(--u)) rgba(61, 52, 39, 0.06);
+  --shadow-hover: 0 calc(0.25 * var(--u)) calc(1 * var(--u)) rgba(61, 52, 39, 0.16);
+  --shadow-card: 0 calc(0.5 * var(--u)) calc(1.5 * var(--u)) rgba(61, 52, 39, 0.07);
+}

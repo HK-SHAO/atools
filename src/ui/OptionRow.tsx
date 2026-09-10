@@ -10,7 +10,7 @@ interface Props<T> {
   onPick: (v: T) => void;
 }
 
-export function Row<T>({ label, value, options, onPick }: Props<T>) {
+export function OptionRow<T>({ label, value, options, onPick }: Props<T>) {
   return (
     <div className="prow">
       <span className="plabel">{label}</span>

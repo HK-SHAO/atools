@@ -1,0 +1,69 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.time {
+  margin: 0;
+  font-size: var(--fs-hi);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.facts {
+  margin: 0;
+  font-size: var(--fs-lo);
+  letter-spacing: 0.04em;
+  color: var(--soft);
+}
+
+.acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25em;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--line);
+}
+
+.params {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125em;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--line);
+}
+
+.prow {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+.plabel {
+  flex: none;
+  width: 3.625em;
+  font-size: var(--fs-lo);
+  letter-spacing: 0.1em;
+  color: var(--soft);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25em;
+  min-width: 0;
+}
+
+@container (min-width: 800px) {
+  .params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
+    column-gap: 1.25em;
+    row-gap: 0.125em;
+    align-items: center;
+  }
+}
