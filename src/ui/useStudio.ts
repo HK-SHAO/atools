@@ -184,13 +184,19 @@ export function useStudio() {
   }, [job]);
 
   const demo = useCallback(async () => {
+    // 与 open / refine 同款代次守卫：演示在解码，用户中途点了「清空」或拖进新文件，
+    // 这个 Promise 回来时不能再往界面上盖。
+    const my = ++genRef.current;
+    const alive = () => genRef.current === my;
     try {
       const buf = await (await fetch(DEMO_URL)).arrayBuffer();
       const { pcm, sr } = await decodeAudioFile(buf);
+      if (!alive()) return;
       setMode("compact");
       setEnc(e => ({ ...reopen(e), sr: 0, ...trimRange(pcm, sr) }));
       setSource({ pcm, sr, name: "fade-demo" });
     } catch (e) {
+      if (!alive() || e instanceof Aborted) return;
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
     }

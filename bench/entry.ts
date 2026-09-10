@@ -1,5 +1,6 @@
 import { decodeAudioFile } from "../src/lib/audio";
 import { FFT, hannWindow } from "../src/lib/fft";
+import { align, magnitudes, spectral } from "../src/lib/metric";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
 import { FINENESS, type Encode, type Mode } from "../src/lib/params";
 import { SYNTH_TUNE } from "../src/lib/spectrum";
@@ -262,39 +263,6 @@ export function atRate(pcm: Samples, sr: number, to: number): { pcm: Samples; sr
   return { pcm: resample(pcm, sr, to, 0), sr: to };
 }
 
-function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
-  const n = Math.min(a.length, b.length);
-  let best = 0;
-  let bv = -2;
-  for (let lag = -span; lag <= span; lag++) {
-    let sa = 0;
-    let sb = 0;
-    let sab = 0;
-    for (let i = 0; i < n; i++) {
-      const j = i + lag;
-      if (j < 0 || j >= n) continue;
-      sa += a[i]! * a[i]!;
-      sb += b[j]! * b[j]!;
-      sab += a[i]! * b[j]!;
-    }
-    const v = sab / Math.sqrt(Math.max(sa * sb, 1e-30));
-    if (v > bv) {
-      bv = v;
-      best = lag;
-    }
-  }
-  let sa = 0;
-  let se = 0;
-  for (let i = 0; i < n; i++) {
-    const j = i + best;
-    if (j < 0 || j >= n) continue;
-    const d = a[i]! - b[j]!;
-    sa += a[i]! * a[i]!;
-    se += d * d;
-  }
-  return { corr: bv, snr: 10 * log10(Math.max(sa, 1e-30) / Math.max(se, 1e-30)) };
-}
-
 function chunkCorr(a: Samples, b: Samples, chunk: number, span: number): number {
   const n = Math.min(a.length, b.length);
   let sum = 0;
@@ -319,56 +287,6 @@ function chunkCorr(a: Samples, b: Samples, chunk: number, span: number): number 
     cnt++;
   }
   return cnt > 0 ? sum / cnt : 0;
-}
-
-function magnitudes(x: Samples, win: number, hop: number): Float64Array {
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const bins = win / 2 + 1;
-  const frames = Math.floor(x.length / hop) + 1;
-  const pad = new Float64Array(x.length + win);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const out = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) out[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-  }
-  return out;
-}
-
-function spectral(ref: Float64Array, got: Float64Array): { conv: number; lsd: number } {
-  const n = Math.min(ref.length, got.length);
-  let num = 0;
-  let den = 0;
-  for (let i = 0; i < n; i++) {
-    const d = ref[i]! - got[i]!;
-    num += d * d;
-    den += ref[i]! * ref[i]!;
-  }
-  const conv = 10 * log10(Math.max(num, 1e-30) / Math.max(den, 1e-30));
-
-  let topA = 0;
-  let topB = 0;
-  for (let i = 0; i < n; i++) {
-    if (ref[i]! > topA) topA = ref[i]!;
-    if (got[i]! > topB) topB = got[i]!;
-  }
-  const floorA = Math.log(Math.max(topA, 1e-30)) - 80 / 8.686;
-  const floorB = Math.log(Math.max(topB, 1e-30)) - 80 / 8.686;
-  let acc = 0;
-  for (let i = 0; i < n; i++) {
-    const la = Math.max(Math.log(Math.max(ref[i]!, 1e-30)), floorA);
-    const lb = Math.max(Math.log(Math.max(got[i]!, 1e-30)), floorB);
-    const d = (la - floorA) - (lb - floorB);
-    acc += d * d;
-  }
-  return { conv, lsd: 8.686 * Math.sqrt(acc / Math.max(n, 1)) };
 }
 
 function magSnr(ref: Samples, spec: Spectrum): number {
@@ -444,7 +362,6 @@ export async function loadAudio(url: string): Promise<{ pcm: Samples; sr: number
 export function setTune(
   t: Partial<{
     pghi: boolean;
-    iters: number;
     momentum: number;
     gamma: number;
     rtisi: boolean;
@@ -457,7 +374,6 @@ export function setTune(
   }>,
 ): string {
   if (t.pghi !== undefined) TUNE.pghi = t.pghi;
-  if (t.iters !== undefined) TUNE.iters = t.iters;
   if (t.momentum !== undefined) TUNE.momentum = t.momentum;
   if (t.gamma !== undefined) TUNE.gamma = t.gamma;
   if (t.rtisi !== undefined) TUNE.rtisi = t.rtisi;
@@ -567,9 +483,20 @@ export async function synthProbe(
   let t = performance.now();
   out.push(show("上限", wola(truth), performance.now() - t));
 
-  const gl0 = TUNE.rtisiGl;
+  // 四路要各自显式置位，别指望上一次跑留下的状态 —— TUNE.rtisiGl 默认是 0，
+  // 曾经这里标着「GL」的两行其实一轮 GL 都没跑（第三行因此与第二行一模一样）。
+  const gl = TUNE.rtisiGl > 0 ? TUNE.rtisiGl : 8;
   const runs: [string, () => Promise<Samples>][] = [
-    ["PGHI+GL", () => (TUNE.rtisi = false, synthesise(spec))],
+    ["PGHI", () => {
+      TUNE.rtisi = false;
+      TUNE.rtisiGl = 0;
+      return synthesise(spec);
+    }],
+    ["PGHI+GL", () => {
+      TUNE.rtisi = false;
+      TUNE.rtisiGl = gl;
+      return synthesise(spec);
+    }],
     ["RTISI", () => {
       TUNE.rtisi = true;
       TUNE.rtisiGl = 0;
@@ -577,7 +504,7 @@ export async function synthProbe(
     }],
     ["RTISI+GL", () => {
       TUNE.rtisi = true;
-      TUNE.rtisiGl = gl0;
+      TUNE.rtisiGl = gl;
       return synthesise(spec);
     }],
   ];

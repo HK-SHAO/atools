@@ -81,7 +81,6 @@ export function drawStub(
   sr: number,
   win: number,
   exact: boolean,
-  toIndex?: (lum: number) => number,
 ): void {
   const row = stubLuma(w, sr, win, exact);
   if (!row) return;
@@ -89,12 +88,9 @@ export function drawStub(
     for (let x = 0; x < w; x++) {
       const p = (y * w + x) * 4;
       const lum = row[x]!;
-      if (toIndex) px[p] = toIndex(lum);
-      else {
-        px[p] = lum;
-        px[p + 1] = lum;
-        px[p + 2] = lum;
-      }
+      px[p] = lum;
+      px[p + 1] = lum;
+      px[p + 2] = lum;
       px[p + 3] = 255;
     }
   }

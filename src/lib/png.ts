@@ -297,14 +297,18 @@ export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | 
   }
   const raw = await inflate(info.idat);
   if (!raw) return null;
-  const flat = unfilter(raw, info.width, info.height, 1);
-  if (!flat) return null;
-
   const { width, height } = info;
   const depth = info.bitDepth;
+  // 一行是 ceil(width·depth/8) 字节，不是 width 字节：depth<8 时两者差 8 倍，
+  // 按 width 取会让长度校验直接失败（自家 2/4 bit 图读回来恒为 null）。
+  // 滤波的 bpp 恒为 1 —— PNG 规定 depth<8 时逐字节滤波。
+  const rowBytes = Math.ceil((width * depth) / 8);
+  const flat = unfilter(raw, rowBytes, height, 1);
+  if (!flat) return null;
+
   const levels = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
-    const rowAt = y * Math.ceil((width * depth) / 8);
+    const rowAt = y * rowBytes;
     let acc = 0;
     let bits = 0;
     let k = 0;

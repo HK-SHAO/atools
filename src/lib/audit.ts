@@ -39,10 +39,9 @@ function levelGap(a: Spectrum, b: Spectrum): number {
   if (a.meta.bins !== b.meta.bins || a.meta.frames !== b.meta.frames) return -1;
   const n = Math.min(a.levels.length, b.levels.length);
   if (n === 0) return -1;
-  const to8 = (v: number): number => (v > 255 ? v >> 8 : v);
   let worst = 0;
   for (let i = 0; i < n; i++) {
-    const d = Math.abs(to8(a.levels[i]!) - to8(b.levels[i]!));
+    const d = Math.abs(a.levels[i]! - b.levels[i]!);
     if (d > worst) worst = d;
   }
   return worst;

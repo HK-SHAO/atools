@@ -38,6 +38,38 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 需要手写 `-webkit-` 前缀的地方（`backdrop-filter`）就手写：Bun 的 CSS 压缩器不会替你补，
 漏掉它只会在 Safari 上静默失效，而本机 Chromium 评测台看不见。`bench/scale.ts` 有一条产物断言盯着它。
 
+## 尺度系统：`.app` 容器 + `.shell` 令牌根 + `@property` 冻结
+
+一套纯 CSS 的尺度：界面在任意容器宽度下自适应，无 JS、无 `ResizeObserver`。
+
+- `.app` 是 `container-type: size` 的查询容器，`.shell` 是它下一层的令牌根。**容器查询单位只认祖先
+  容器**，所以令牌根必须紧挨在容器下面。`.app` 是**唯一**的查询容器（`.card` 上曾经也有，已撤）。
+- `--u = min(14×eff/340, 14+(eff−340)/280, 16.5px)`，其中 `eff = min(100cqi, 160cqb)`。两段曲线在
+  340px 处相接，并在 16.5px 封顶。
+- `--u` 与 `--c-vh` 必须用 `@property { syntax: "<length>" }` 注册：**注册后**才在 `.shell` 上解析成
+  绝对 px，再随继承下发到全树；不注册则 `cqi` 留在令牌里，到使用点才解析，会被使用点**最近的**
+  `container-type` 容器抢走（当时是 `.card`，症状是卡片内控件高 24.5 → 20.3、字号 → 7.98）。
+- 尺度分两级：全局量（`--fs-*` / `--h-ctl` / `--r-*` / `--shadow-*` / `--blur`）用 `calc(n * var(--u))`，
+  与 `--u` 写在同一个元素上；局部比例（控件内边距、缝隙、图标尺寸）用字面 `em`，在使用点随局部字号。
+  两个反面例子（都是实测）：在 `:root` 里写 `calc(n * var(--u))` 会被兜底值算死；用 `em` 表示的字号
+  令牌若在同一元素上又设一次会叠乘（出现过 `0.6875²`）。
+- 容器选 `.app` 而不选 `#root`：组件自带容器、不向宿主提要求；且 `.app` 的 content box 恰好等于原先
+  用 JS 量的 `clientWidth/clientHeight`，改回去不用重算基准。
+
+## 控件几何与参数面板
+
+- 五种控件（`act` / `chip` / `num` / `icon-btn` / `drop-act`）在 `primitives.css` 里共用同一组选择器
+  —— 同高、同一种玻璃表面，各自只调 `padding-inline`。新增控件必须并入这一组，不得自带高度或字号。
+  注意 `button` 的 UA 样式带 `padding: 1px 6px`，只写 `padding-inline` 会漏掉上下。
+- `.params` 是 `flex-wrap`：每个 `.prow`（标签 + 一组 chip）**按内容取宽**，整行装不下才换行 —— 桌面
+  宽度下（卡片 1145、面板 1112）六块恰好合成一行，900 及以下折成两行。**不要用等宽栅格**：曾经用
+  `repeat(auto-fit, minmax(11em, 1fr))` 会把列宽拉平，宽区块（频宽、区间）就被挤到内部换行。
+  也不再设断点 —— `container-type` 因此从 `.card` 上撤掉。
+- 间距是 0.25 / 0.5 / 1em 三级分组：区块内 chip 之间 0.25em，标签到 chip 0.5em，区块之间 1em。
+  取过 1.25em，桌面下六块差 6px 就折行。
+- 评测台比对行数前要先确认参数状态一致：`scale.ts` 投喂 `voice/greeting.mp3`（采样 8k，频宽只有两个
+  选项），`smoke.ts` 点「演示」（采样=原，频宽五个选项），两者的段落数本来就不同。
+
 ## 评测台按语义类名取样
 
 `bench/scale.ts` 与 `bench/smoke.ts` 直接用类选择器取元素（`.act` / `.params .chip` /

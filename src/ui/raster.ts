@@ -32,8 +32,7 @@ export function buildSheet(spec: Spectrum, rows: number, maxWidth = MAX_SHEET_WI
         const to = Math.min(frames, Math.max(from + 1, Math.floor((x + 1) * sx)));
         let m = 0;
         for (let f = from; f < to; f++) {
-          const v = levels[f * bins + b]!;
-          const lv = v > 255 ? v >> 8 : v;
+          const lv = levels[f * bins + b]!;
           if (lv > m) m = lv;
         }
         if (m > best[x]!) best[x] = m;

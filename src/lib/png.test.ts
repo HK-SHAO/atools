@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { isPng, readMeta, withMeta } from "./png";
+import { RAMP } from "./palette";
+import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 
 const SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
@@ -63,4 +64,35 @@ describe("png metadata chunk", () => {
     expect(readMeta(plain)).toBeNull();
     expect(readMeta(Uint8Array.from([1, 2, 3]))).toBeNull();
   });
+});
+
+describe("indexed ramp", () => {
+  // depth<8 时一行是 ceil(width·depth/8) 字节。曾经按 width 取，长度校验直接失败、
+  // 自家 2/4 bit 图读回来恒为 null（退化到通用读图）。这四条把 1/2/4/8 全钉住。
+  for (const depth of [1, 2, 4, 8]) {
+    test(`round trips at bit depth ${depth}`, async () => {
+      const steps = (1 << depth) - 1;
+      const width = 37;
+      const height = 12;
+      const indices = new Uint8Array(width * height);
+      for (let i = 0; i < indices.length; i++) indices[i] = (i * 7) % (1 << depth);
+
+      const palette = new Uint8Array((1 << depth) * 3);
+      for (let q = 0; q <= steps; q++) {
+        const lv = Math.min(255, Math.round((Math.min(q, steps) * 255) / steps));
+        palette[q * 3] = RAMP[lv * 3]!;
+        palette[q * 3 + 1] = RAMP[lv * 3 + 1]!;
+        palette[q * 3 + 2] = RAMP[lv * 3 + 2]!;
+      }
+
+      const bytes = await indexedPng(indices, width, height, depth, palette, "x");
+      const got = await readIndexedRamp(bytes);
+      expect(got).not.toBeNull();
+      expect([got!.width, got!.height]).toEqual([width, height]);
+      for (let i = 0; i < indices.length; i++) {
+        const want = Math.min(255, Math.round((Math.min(indices[i]!, steps) * 255) / steps));
+        expect(got!.levels[i]).toBe(want);
+      }
+    });
+  }
 });

@@ -1,6 +1,5 @@
 export const TUNE = {
   pghi: true,
-  iters: 32,
   momentum: 0.99,
   gamma: 0.25645,
   tol: [0.1, 1e-10] as [number, number],

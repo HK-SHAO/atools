@@ -1,10 +1,8 @@
 import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
 
 interface RtisiOptions {
-  lookahead?: number;
   iters?: number;
   warm?: Float64Array | null;
-  fromPast?: boolean;
   budget?: number;
   tick?: (m: number, frames: number) => Promise<void> | void;
 }
@@ -23,10 +21,9 @@ export async function rtisiLa(
   const L = win;
   const a = Math.max(1, Math.round(hop));
   const R = Math.max(1, Math.round(L / a));
-  let K = Math.max(0, Math.min(frames - 1, opts.lookahead ?? R - 1));
+  let K = Math.max(0, Math.min(frames - 1, R - 1));
   let iters = Math.max(1, opts.iters ?? 8);
   const warm = opts.warm ?? null;
-  const fromPast = opts.fromPast !== false;
   const tick = opts.tick;
 
   const unit = frames * L * Math.max(1, Math.log2(L));
@@ -122,7 +119,8 @@ export async function rtisiLa(
           sin.fill(0, here, here + bins);
         }
       }
-      if (fromPast) read(0);
+      // 第 0 帧的相位从已经写进 out 的过去帧重读：逐帧推进才不会在帧界上出爆音。
+      read(0);
     }
 
     for (let it = 0; it < iters; it++) {

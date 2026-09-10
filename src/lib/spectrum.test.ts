@@ -366,7 +366,7 @@ describe("compact round trip", () => {
 
 function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   const bands = [spec.levels, spec.phaseCos, spec.phaseSin].filter(
-    (b): b is Uint8Array | Uint16Array => b != null,
+    (b): b is Uint8Array => b != null,
   );
   const frames = spec.meta.frames;
   for (const band of bands) {
@@ -739,6 +739,37 @@ describe("metadata", () => {
     bad[4] = 300.5;
     expect(textToMeta(JSON.stringify(bad))).toBeNull();
   });
+
+  // 两个入口共用一处 sanitize：文件名那条曾经不查 sr>0（时长变 Infinity）、不查 win 的
+  // 上下界、也不查 bits，改个名就能把 16 位深喂进 encode。
+  test("both entries reject the same out-of-range fields", () => {
+    const name = (sr: number, win: number, bits: number, frames: number): string =>
+      `x_SR${sr}_N${win}_H128_F${frames}_L38400_B${bits}.png`;
+    const text = (sr: number, win: number, bits: number, frames: number): string =>
+      JSON.stringify([4, sr, win, 128, frames, 129, 38400, bits, 0, 0]);
+
+    for (const [sr, win, bits, frames] of [
+      [0, 512, 8, 300], // sr=0 → 时长 Infinity
+      [8000, 8, 8, 300], // win 越下界
+      [8000, 8192, 8, 300], // win 越上界
+      [8000, 512, 16, 300], // 位深不在 0/2/4/8
+      [8000, 512, 3, 300], // 同上
+      [8000, 512, 8, 0], // 帧数为 0
+      [8000, 512, 8, 999_999], // 帧数越 MAX_FRAMES
+      [8000, 512, -2, 300], // 负位深
+    ]) {
+      expect(metaFromName(name(sr!, win!, bits!, frames!))).toBeNull();
+      expect(textToMeta(text(sr!, win!, bits!, frames!))).toBeNull();
+    }
+  });
+
+  test("accepts what the app actually writes", () => {
+    for (const bits of [0, 2, 4, 8]) {
+      const m = { ...meta, bits };
+      expect(textToMeta(metaToText(m))?.bits).toBe(bits);
+      expect(metaFromName(`x_SR8000_N512_H128_F300_L38400_B${bits}.png`)?.bits).toBe(bits);
+    }
+  });
 });
 
 describe("reads our images with no metadata at all", () => {
@@ -858,6 +889,24 @@ describe("image params", () => {
       const p = paramsForImage(120, rows, 44100, 8, 0, false);
       expect(p.bins).toBeLessThanOrEqual(p.win / 2 + 1);
       expect(p.win).toBeGreaterThanOrEqual(256);
+    }
+  });
+});
+
+describe("level bytes", () => {
+  // 曾经 encode 给 bits>=16 开过一条 Uint16Array 的分支，而 levelToDb 是按字节解释的
+  // （level·steps/255），两条约定一撞就整段 NaN（实测 4096/4096 非有限）。
+  // 那条分支 UI 到不了，但它的存在本身就是「levels 到底几个字节」的歧义源，已删。
+  // 这条把「levels 恒为字节」和「任意位深下合成都有限」钉住。
+  test("levels are bytes at every bit depth and synthesis stays finite", async () => {
+    const sr = 8000;
+    const pcm = signal(sr * 2, sr);
+    for (const bits of [2, 4, 8]) {
+      const spec = await encode(pcm, sr, { ...VOICE, bits });
+      expect(spec.levels).toBeInstanceOf(Uint8Array);
+      for (const v of spec.levels) expect(v).toBeLessThanOrEqual(255);
+      const y = await synthesise(spec);
+      expect(y.every(Number.isFinite)).toBe(true);
     }
   });
 });

@@ -49,7 +49,7 @@ export interface Meta {
 
 export interface Spectrum {
 
-  levels: Uint8Array | Uint16Array;
+  levels: Uint8Array;
 
   phaseCos: Uint8Array | null;
   phaseSin: Uint8Array | null;
@@ -275,28 +275,10 @@ export async function encode(
   meta.ref = peak > 0 ? 20 * Math.log10(peak / scale) + 1 : 0;
   const floorDb = meta.ref - span;
 
-  if (bits >= 16) {
-    const levels = new Uint16Array(frames * bins);
-    for (let f = 0; f < frames; f++) {
-      core.analyse(x, f * hop);
-      const base = f * bins;
-      for (let b = 0; b < bins; b++) {
-        const re = core.re[b]!;
-        const im = core.im[b]!;
-        const db = 20 * Math.log10(Math.sqrt(re * re + im * im) / scale);
-        const v = ((db - floorDb) / span) * 65535;
-        levels[base + b] = v <= 0 ? 0 : v >= 65535 ? 65535 : Math.round(v);
-      }
-      if (Date.now() >= next) {
-        if (alive && !alive()) throw new Aborted();
-        onProgress?.((f + 1) / frames);
-        await yieldToUi();
-        next = Date.now() + SLICE_MS;
-      }
-    }
-    return { meta, levels, phaseCos: null, phaseSin: null };
-  }
-
+  // 无论位深多少，level 一律是字节：quantize 把量化档按 255 展开。
+  // 曾经这里给 bits>=16 开过 Uint16Array 的分支，而 levelToDb 是按字节解释的
+  // （level·steps/255），两条约定一撞就是整段 NaN（实测 4096/4096 非有限）。
+  // 位深只由 params.ts 的 BITS_OPTIONS（2/4/8）给，那条分支从来到不了。
   const levels = new Uint8Array(frames * bins);
   for (let f = 0; f < frames; f++) {
     core.analyse(x, f * hop);
@@ -493,6 +475,48 @@ async function glRefine(
   }
 }
 
+/**
+ * 拿一组现成相位做一次加权叠接（WOLA）逆变换 —— 不迭代、不做一致性投影。
+ * 只服务于消融：`TUNE.rtisi = false` 时它替代 `rtisiLa`，用来量「RTISI-LA 到底贡献了什么」。
+ */
+function olaFromPhase(
+  target: Float64Array,
+  phase: Float64Array,
+  frames: number,
+  bins: number,
+  win: number,
+  hop: number,
+  samples: number,
+): Samples {
+  const core = new Frames(win);
+  const padded = samples + win;
+  const acc = new Float64Array(padded);
+  for (let f = 0; f < frames; f++) {
+    const base = f * bins;
+    for (let b = 0; b < bins; b++) {
+      const m = target[base + b]!;
+      core.re[b] = m * Math.cos(phase[base + b]!);
+      core.im[b] = m * Math.sin(phase[base + b]!);
+    }
+    for (let b = bins; b < core.bins; b++) {
+      core.re[b] = 0;
+      core.im[b] = 0;
+    }
+    core.add(acc, f * hop);
+  }
+
+  const cover = coverage(win, hop, frames, padded);
+  let top = 0;
+  for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
+  const floor = top * 0.05;
+  const y = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const c = cover[win / 2 + i]!;
+    y[i] = c > floor ? acc[win / 2 + i]! / c : 0;
+  }
+  return y;
+}
+
 async function invert(
   spec: Spectrum,
   alive?: () => boolean,
@@ -511,20 +535,30 @@ async function invert(
       ? { cos: spec.phaseCos, sin: spec.phaseSin, w: spec.phaseW }
       : null;
   let next = 0;
-  const y = await rtisiLa(target, frames, bins, win, hop, samples, {
-    iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
-    budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
-    warm,
-    tick: (m, total) => {
-      if (Date.now() < next) return;
-      if (alive && !alive()) throw new Aborted();
-      onProgress?.(m / total);
-      return (async () => {
-        await yieldToUi();
-        next = Date.now() + SLICE_MS;
-      })();
-    },
-  });
+  const y = TUNE.rtisi
+    ? await rtisiLa(target, frames, bins, win, hop, samples, {
+        iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
+        budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
+        warm,
+        tick: (m, total) => {
+          if (Date.now() < next) return;
+          if (alive && !alive()) throw new Aborted();
+          onProgress?.(m / total);
+          return (async () => {
+            await yieldToUi();
+            next = Date.now() + SLICE_MS;
+          })();
+        },
+      })
+    : olaFromPhase(
+        target,
+        warm ?? new Float64Array(frames * bins),
+        frames,
+        bins,
+        win,
+        hop,
+        samples,
+      );
 
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = y[i]!;

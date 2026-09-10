@@ -22,6 +22,40 @@ export function metaToText(meta: Meta): string {
   ]);
 }
 
+/** 位深的合法取值：0 表示可逆档（不存量化档）。见 format-spec.md。 */
+const LEVEL_BITS = [0, 2, 4, 8] as const;
+
+/**
+ * tEXt 与文件名是同一份 Meta 的两个入口，校验必须共用一处 —— 分开写的下场就是
+ * 一边查得严一边漏：文件名那条曾经不查 sr>0（时长变 Infinity）、不查 win 的上下界、
+ * 也不查 bits，于是改个名就能把 16 位深喂进来（那时 encode 还有条 Uint16Array 分支，
+ * 与 levelToDb 的按字节解释相撞，输出整段 NaN）。
+ */
+function sanitize(m: {
+  sr: number;
+  win: number;
+  hop: number;
+  frames: number;
+  bins: number;
+  samples: number;
+  bits: number;
+  ref: number;
+  exact: boolean;
+}): Meta | null {
+  const { sr, win, hop, frames, bins, samples, bits, ref, exact } = m;
+  const ints = [sr, win, hop, frames, bins, samples, bits];
+  if (!ints.every(Number.isInteger)) return null;
+  if (!Number.isFinite(ref)) return null;
+  if ((win & (win - 1)) !== 0 || win < 256 || win > 4096) return null;
+  if (sr <= 0 || sr > 96_000) return null;
+  if (hop < 1 || hop > win) return null;
+  if (bins < 2 || bins > win / 2 + 1) return null;
+  if (frames < 1 || frames > MAX_FRAMES) return null;
+  if (samples < 0) return null;
+  if (!LEVEL_BITS.includes(bits as (typeof LEVEL_BITS)[number])) return null;
+  return { sr, win, hop, frames, bins, samples, bits, ref, exact };
+}
+
 export function textToMeta(text: string): Meta | null {
   try {
     const v: unknown = JSON.parse(text);
@@ -32,11 +66,7 @@ export function textToMeta(text: string): Meta | null {
     const n = (v as unknown[]).slice(1, 10).map(Number);
     if (n.some((x, i) => (i === 7 ? !Number.isFinite(x) : !Number.isInteger(x)))) return null;
     const [sr, win, hop, frames, bins, samples, bits, ref, exact] = n as number[];
-    if (sr! <= 0 || win! <= 0 || hop! <= 0 || frames! <= 0 || bins! <= 0 || samples! < 0) return null;
-    if ((win! & (win! - 1)) !== 0 || win! < 256 || win! > 4096) return null;
-    if (hop! < 1 || hop! > win!) return null;
-    if (bins! > win! / 2 + 1) return null;
-    return {
+    return sanitize({
       sr: sr!,
       win: win!,
       hop: hop!,
@@ -46,7 +76,7 @@ export function textToMeta(text: string): Meta | null {
       bits: bits!,
       ref: ref!,
       exact: exact! === 1,
-    };
+    });
   } catch {
     return null;
   }
@@ -59,9 +89,7 @@ export function metaFromName(name: string): Meta | null {
     );
   if (!m) return null;
   const [sr, win, hop, frames, samples, bits] = [1, 2, 3, 4, 5, 6].map(i => Number(m[i]));
-  if (![sr, win, hop, frames, samples, bits].every(x => Number.isFinite(x!) && x! >= 0)) return null;
-  if ((win! & (win! - 1)) !== 0) return null;
-  return {
+  return sanitize({
     sr: sr!,
     win: win!,
     hop: Math.min(win!, hop!),
@@ -71,7 +99,7 @@ export function metaFromName(name: string): Meta | null {
     bits: bits!,
     ref: 0,
     exact: bits! === 0,
-  };
+  });
 }
 
 export function downloadName(base: string, meta: Meta): string {
