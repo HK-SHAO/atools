@@ -28,11 +28,13 @@ const usable = (request: Request): boolean =>
   !request.headers.has("range") &&
   new URL(request.url).origin === scope.location.origin;
 
+// 壳资源少一样就不接管：Promise.all 让安装失败，旧 Worker 继续服役，浏览器下次导航再试。
+// allSettled 会让缺一项的半壳照样激活，离线时才炸 —— 那时已经没人能告诉用户发生了什么。
 scope.addEventListener("install", event => {
   (event as Lifecycle).waitUntil(
     caches
       .open(__CACHE__)
-      .then(cache => Promise.allSettled(SHELL.map(url => cache.add(url))))
+      .then(cache => Promise.all(SHELL.map(url => cache.add(url))))
       .then(() => scope.skipWaiting()),
   );
 });

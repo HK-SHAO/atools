@@ -30,16 +30,34 @@ const html = await Bun.file(path.join(outdir, "index.html")).text();
 const manifest = (await Bun.file(path.join(project, "src/manifest.webmanifest")).json()) as {
   icons: { src: string }[];
 };
-const precache = [
-  "index.html",
-  ...[...html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)].map(m => m[1]!),
-  ...manifest.icons.map(icon => icon.src.replace(/^\.\//, "")),
-];
-
 // manifest 内部按字面路径引用图标，打包器不会改写 manifest 的内容，
 // 所以 HTML 直接引到的那个走哈希输出，manifest 引的按原样落到它旁边。
 for (const icon of manifest.icons)
   await Bun.write(path.join(outdir, icon.src), Bun.file(path.join(project, "src", icon.src)));
+
+// 壳清单从 index.html 直接引到的同源相对路径推出来（外链与 data: 都匹配不上），
+// 再加 manifest 自己引的图标；去重后逐项核实确实落进了 dist/。
+// 校验这一步必须有：清单靠正则推，引用写错只会让条目静默消失，不会让构建失败，
+// 而半壳的表现是「离线时白屏」，离出错的地方已经很远。
+const precache = [
+  ...new Set([
+    "index.html",
+    ...[...html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)].map(m => m[1]!),
+    ...manifest.icons.map(icon => icon.src.replace(/^\.\//, "")),
+  ]),
+];
+
+// sw.js 不在 HTML 里，天然收不进来 —— 这是硬要求：它一旦进壳，
+// Service Worker 就会一直把旧的自己喂给浏览器，从此再也发不出新版。
+if (precache.includes("sw.js") || precache.some(entry => entry.endsWith("/sw.js"))) {
+  console.error("sw.js 被 index.html 直接引到了：它进了预缓存就再也更新不了，去掉这个引用");
+  process.exit(1);
+}
+for (const entry of precache)
+  if (!(await Bun.file(path.join(outdir, entry)).exists())) {
+    console.error(`预缓存清单里的 ${entry} 不在 dist/ 里：清单由 index.html 推出，多半是引用写错了`);
+    process.exit(1);
+  }
 
 const worker = await Bun.build({
   entrypoints: [path.join(project, "src/sw.ts")],

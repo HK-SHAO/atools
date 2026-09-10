@@ -129,24 +129,37 @@ try {
   }
   if (online.hook !== "yes") fail(`apple-mobile-web-app-capable=${online.hook}，iOS 独立窗口起不来`);
 
-  const shell =
-    (await waitFor(
-      "应用壳入缓存",
-      async () => {
-        const cached = await session.ev<string[]>(CACHED);
-        return cached.length >= 6 ? cached : null;
-      },
-      10000,
-    ).catch(() => null)) ?? [];
-  if (!shell.length) fail("Service Worker 一项都没预缓存");
-  for (const [what, at] of [
+  // 壳 = index.html 直接引到的那几件 + manifest 自己引的图标。逐项对照：
+  // 少一项就是「断网白屏」，而这只有断网才看得出来，必须在这里挡住。
+  const wanted: [string, string][] = [
     ["index.html", "/index.html"],
     ["入口脚本", new URL(online.href.script!).pathname],
     ["样式", new URL(online.href.style!).pathname],
     ["manifest", new URL(online.href.manifest!).pathname],
     ["favicon", new URL(online.href.icon!).pathname],
-  ] as [string, string][])
-    if (!shell.includes(at)) fail(`预缓存里没有${what}（${at}）`);
+    ["apple-touch-icon", new URL(online.href.apple!).pathname],
+  ];
+  for (const [src] of manifest?.icons ?? [])
+    wanted.push([`manifest 图标 ${src}`, new URL(src, online.href.manifest!).pathname]);
+
+  // 等它凑齐再判：装到一半的缓存会被误报成「漏装」。
+  // 超时也不在这里下结论 —— 读回现状交给下面的逐项对照，这样报出来的是**具体缺哪一项**，
+  // 而不是笼统的「一项都没预缓存」。真的空手而归时再单说。
+  const shell =
+    (await waitFor(
+      "应用壳入缓存",
+      async () => {
+        const cached = await session.ev<string[]>(CACHED);
+        return cached.length >= wanted.length ? cached : null;
+      },
+      10000,
+    ).catch(() => null)) ?? (await session.ev<string[]>(CACHED));
+  if (!shell.length) fail("Service Worker 一项都没预缓存");
+  for (const [what, at] of wanted) if (!shell.includes(at)) fail(`预缓存里没有${what}（${at}）`);
+
+  // 反向的不变量：sw.js 自己绝不能进壳，否则 Service Worker 会把旧的自己喂回来
+  if (shell.some(at => at.endsWith("/sw.js")))
+    fail("sw.js 自己进了预缓存：浏览器再也拿不到新的 Service Worker");
   console.log(`预缓存 ${shell.length} 项：${shell.join(" ")}`);
 
   await session.ev(`

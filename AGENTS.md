@@ -6,13 +6,14 @@
 
 ```bash
 bun install
-bun dev                  # 开发服务器 http://localhost:3000
+bun dev                  # 开发服务器 http://localhost:3000（源码直出 + HMR）
+bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
 bun test                 # 全量测试（bun:test，勿用 jest/vitest）
 bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 bun bench/scale.ts       # 尺度门禁：字号随容器等比、五种控件同高、令牌锚在当前容器上
-bun bench/offline.ts     # PWA 门禁：manifest 可装、应用壳断网可用（先 build:web）
+bun bench/offline.ts     # PWA 门禁：manifest 可装、iOS 头标签齐备、应用壳逐项入缓存、断网可用（先 build:web）
 bun run perf             # 性能体检：重采样相位表倍数 + 相位数最多组合「不得慢于逐样点」的门禁 + 页面主线程长任务
 ```
 
