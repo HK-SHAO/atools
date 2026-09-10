@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
-import { FINENESS, SR_OPTIONS, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
@@ -8,9 +8,27 @@ export const BANDS = 2;
 
 const MIN_WIN = 256;
 const MAX_WIN = 4096;
-export const MAX_FRAMES = 20000;
+
+/**
+ * 像素预算 —— 「能装多久」只有这一个真预算。
+ *
+ * 像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**（见 params.ts 的 hopOf），所以三档窗长
+ * 在同一采样率下的时长上限本来就该一样。8M 像素的紧凑图实测约 6.6MB，编码 + 打包 ~260ms，
+ * 也在浏览器 canvas 面积上限之内。
+ */
 const MAX_PIXELS = 8_000_000;
+
+/**
+ * 单边（帧数就是图宽）上限。只用来挡住「窄带 + 超长」把图拉成几万比一的长条 ——
+ * 它是几何上限，不是时长上限：实测 Chromium 到 12 万宽仍能解码，这里取 2^16 留一半余量。
+ */
+export const MAX_FRAMES = 65536;
+
 export const DEFAULT_SR = 44100;
+
+/** 一张图最多多少帧：像素预算与单边上限的较小者。读写两侧共用同一个预算。 */
+export const maxFramesFor = (bins: number, bands = 1): number =>
+  Math.min(MAX_FRAMES, Math.floor(MAX_PIXELS / (bins * bands)));
 
 const DB_MIN = -120;
 const DB_MAX = 0;
@@ -90,11 +108,9 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
   const bands = enc.mode === "exact" ? BANDS : 1;
 
-  if (frames > MAX_FRAMES) throw new Error("音频太长，图放不下：剪短一点，或调低采样率");
-  // 别再写「把窗长调低」—— 像素 ≈ N·重叠/2，与窗长无关（见 params.ts 的 hopOf）。
-  // 能压图的旋钮只有采样率、频宽（紧凑档）和时长。
-  if (frames * bins * bands > MAX_PIXELS)
-    throw new Error("图太大了：调低采样率或频宽，或先剪短一点");
+  // 只有像素这一个预算，所以只有一条提示 —— 别再写「把窗长调低」：像素 ≈ N·重叠/2，
+  // 与窗长无关（见 params.ts 的 hopOf）。能压图的旋钮只有采样率、频宽和时长。
+  if (frames > maxFramesFor(bins, bands)) throw new Error("音频太长，图放不下：调低采样率，或剪短一点");
 
   return { win, hop, frames, bins, samples };
 }
@@ -102,8 +118,14 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
 function fits(enc: Encode, sr: number, samples: number): boolean {
   const bins = rowsFor(winOf(enc), sr, enc.mode === "compact" ? enc.fmax : 0);
   const frames = Math.floor(Math.max(1, samples) / hopOf(enc)) + 1;
+  return frames <= maxFramesFor(bins, enc.mode === "exact" ? BANDS : 1);
+}
+
+/** 这个档位在某个采样率下最多能装多少秒 —— 由像素预算决定，三档窗长因此得到同一个上限。 */
+function ceilingOf(enc: Encode, sr: number): number {
+  const bins = rowsFor(winOf(enc), sr, enc.mode === "compact" ? enc.fmax : 0);
   const bands = enc.mode === "exact" ? BANDS : 1;
-  return frames <= MAX_FRAMES && frames * bins * bands <= MAX_PIXELS;
+  return Math.floor(((maxFramesFor(bins, bands) - 1) * hopOf(enc)) / sr);
 }
 
 export function fitEncode(
@@ -112,51 +134,30 @@ export function fitEncode(
   srcSamples: number,
 ): { enc: Encode; note: string | null } {
   const want = e.sr > 0 ? e.sr : srcSr;
+  const at = (sr: number): number => Math.ceil((srcSamples * sr) / srcSr) + hopOf(e);
+  if (fits(e, want, at(want))) return { enc: e, note: null };
+
+  // 装不下就沿采样率往下走，每一步都把「为什么」说清楚：这段多少秒、你要的那档上限多少秒。
+  // 只说「已自动调低采样率」而不给上限，用户没法知道该剪到多短。
+  const secs = Math.round(srcSamples / srcSr);
   const lower = (SR_OPTIONS as readonly number[])
     .filter(s => s > 0 && s < want)
     .sort((a, b) => b - a);
-  for (const sr of [want, ...lower]) {
-    if (fits(e, sr, Math.ceil((srcSamples * sr) / srcSr) + hopOf(e))) {
-      if (sr === want) return { enc: e, note: null };
+  for (const sr of lower) {
+    if (fits(e, sr, at(sr)))
       return {
         enc: { ...e, sr, fmax: e.fmax >= sr / 2 ? 0 : e.fmax },
-        note: "音频较长，已自动调低采样率；想更清晰可先剪短",
-      };
-    }
-  }
-  // 帧数 = 4N/win、像素 ≈ 2N，所以「装不下」时窗长这一维只剩一个方向可走：
-  // **换更长的窗**（帧数减半），而不是换更短的。统一到 4 倍重叠之前这里是反着往下调的，
-  // 那时窗越短图越小；现在往下调只会让帧数翻倍、更装不下。
-  for (let f = e.fineness + 1; f < FINENESS.length; f++) {
-    const e2: Encode = {
-      ...e,
-      sr: 8000,
-      fmax: e.fmax >= 4000 ? 0 : e.fmax,
-      fineness: f as Encode["fineness"],
-    };
-    if (fits(e2, 8000, Math.ceil((srcSamples * 8000) / srcSr) + hopOf(e2)))
-      return {
-        enc: e2,
-        note: "音频较长，已调低采样率并换用更长的窗；想更清晰可先剪短",
+        note: `音频 ${secs} 秒超出 ${srLabel(want)} 的上限 ${ceilingOf(e, want)} 秒，已降到 ${srLabel(sr)}`,
       };
   }
-  const bands = e.mode === "exact" ? BANDS : 1;
-  let bestF: Encode["fineness"] = e.fineness;
-  let bestSecs = 0;
-  for (let f = 0; f < FINENESS.length; f++) {
-    const hop = hopOf({ ...e, fineness: f as Encode["fineness"] });
-    const bins = rowsFor(FINENESS[f]!.win, 8000, 0);
-    const cap = Math.min(MAX_FRAMES, Math.floor(MAX_PIXELS / (bins * bands)));
-    const secs = Math.floor(((cap - 1) * hop) / 8000);
-    if (secs > bestSecs) {
-      bestSecs = secs;
-      bestF = f as Encode["fineness"];
-    }
-  }
-  const secs = Math.max(1, bestSecs);
+
+  // 8k 都装不下：按像素预算剪到最长，其余保持不变。窗长这一维没有可换的 —— 像素 ≈ N·重叠/2
+  // 与窗长无关，三档的容量只差千分之几，为这点差别换档是噪声不是收益。
+  const last: Encode = { ...e, sr: 8000, fmax: 0 };
+  const keep = Math.max(1, ceilingOf(last, 8000));
   return {
-    enc: { ...e, sr: 8000, fmax: 0, fineness: bestF as Encode["fineness"], end: e.start + secs },
-    note: `音频太长，只保留前 ${secs} 秒`,
+    enc: { ...last, end: e.start + keep },
+    note: `音频太长，只保留前 ${keep} 秒`,
   };
 }
 
@@ -658,6 +659,6 @@ export function paramsForImage(
   const win = pow2(2 * (clamped - 1));
   const bins = Math.min(clamped, win / 2 + 1);
   const hop = Math.max(1, Math.round(win / 4));
-  const count = Math.max(1, Math.min(frames, MAX_FRAMES));
+  const count = Math.max(1, Math.min(frames, maxFramesFor(bins, exact ? BANDS : 1)));
   return { sr, win, hop, frames: count, bins, samples: count * hop, bits, ref, exact };
 }

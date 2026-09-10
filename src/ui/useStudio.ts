@@ -40,18 +40,27 @@ function adoptMeta(meta: Meta): Encode {
 
 export function useStudio() {
   const [source, setSource] = useState<Source | null>(null);
-  const [enc, setEnc] = useState<Encode>(VOICE);
+  // 自动降级的提示必须与那次降级**同一个 state**：分开存会让 effect 的第二轮（enc 已是降级后的值、
+  // fitEncode 原样放行）把它清掉 —— 提示只闪一帧，用户看到的就是「采样率自己跳回 8k，毫无说明」。
+  const [pick, setPick] = useState<{ enc: Encode; note: string | null }>({ enc: VOICE, note: null });
   const [job, setJob] = useState<Job | null>(null);
   const [mode, setMode] = useState<ReadMode>("compact");
   const [stage, setStage] = useState<Stage>(null);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const genRef = useRef(0);
+  const enc = pick.enc;
+
+  // 用户动参数 = 新的一段叙事：旧提示（含自动降级那条）一并作废。
+  const setEnc = useCallback((next: Encode | ((e: Encode) => Encode)) => {
+    setPick(p => ({ enc: typeof next === "function" ? next(p.enc) : next, note: null }));
+    setHint(null);
+  }, []);
 
   useEffect(() => {
     if (!source) {
       setJob(null);
-      setHint(null);
+      setPick(p => (p.note === null ? p : { ...p, note: null }));
       return;
     }
     let cancelled = false;
@@ -63,11 +72,9 @@ export function useStudio() {
         const clipped = slice(source.pcm, source.sr, enc.start, enc.end);
         const fit = fitEncode(enc, source.sr, clipped.length);
         if (fit.enc !== enc) {
-          setHint(fit.note);
-          setEnc(fit.enc);
+          setPick({ enc: fit.enc, note: fit.note });
           return;
         }
-        setHint(null);
         const sr = enc.sr > 0 ? enc.sr : source.sr;
         const tuned = resample(clipped, source.sr, sr, enc.mode === "compact" ? enc.fmax : 0);
         if (cancelled) return;
@@ -210,5 +217,19 @@ export function useStudio() {
     setHint(null);
   }, []);
 
-  return { source, enc, setEnc, job, mode, stage, error, hint, open, refine, demo, clear };
+  // 自动降级那条是「当前设置的既定事实」，得一直挂着；hint 是「刚发生的事」。两者都留着。
+  return {
+    source,
+    enc,
+    setEnc,
+    job,
+    mode,
+    stage,
+    error,
+    hint: [pick.note, hint].filter(Boolean).join("；") || null,
+    open,
+    refine,
+    demo,
+    clear,
+  };
 }

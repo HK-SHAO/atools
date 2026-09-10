@@ -1,7 +1,7 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
-import { BANDS, DEFAULT_SR, MAX_FRAMES, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, DEFAULT_SR, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { hopOfWin, stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
@@ -50,7 +50,7 @@ function sanitize(m: {
   if (sr <= 0 || sr > 96_000) return null;
   if (hop < 1 || hop > win) return null;
   if (bins < 2 || bins > win / 2 + 1) return null;
-  if (frames < 1 || frames > MAX_FRAMES) return null;
+  if (frames < 1 || frames > maxFramesFor(bins, exact ? BANDS : 1)) return null;
   if (samples < 0) return null;
   if (!LEVEL_BITS.includes(bits as (typeof LEVEL_BITS)[number])) return null;
   return { sr, win, hop, frames, bins, samples, bits, ref, exact };
@@ -140,13 +140,15 @@ function winFromBins(bins: number): number {
 
 export function metaFromGeometry(frames: number, bins: number, exact: boolean, bits: number): Meta {
   const win = winFromBins(bins);
+  const rows = Math.min(bins, win / 2 + 1);
+  const count = Math.max(2, Math.min(frames, maxFramesFor(rows, exact ? BANDS : 1)));
   return {
     sr: 8000,
     win,
     hop: hopOfWin(win),
-    frames: Math.max(2, Math.min(frames, MAX_FRAMES)),
-    bins: Math.min(bins, win / 2 + 1),
-    samples: Math.max(2, Math.min(frames, MAX_FRAMES)) * hopOfWin(win),
+    frames: count,
+    bins: rows,
+    samples: count * hopOfWin(win),
     bits,
     ref: 0,
     exact,
@@ -288,7 +290,7 @@ function rescaled(meta: Meta, width: number, maxHop: number): Meta {
     1,
     Math.min(Math.round(maxHop), Math.round(meta.samples / Math.max(2, width))),
   );
-  const frames = Math.max(2, Math.min(MAX_FRAMES, Math.round(meta.samples / hop)));
+  const frames = Math.max(2, Math.min(maxFramesFor(meta.bins), Math.round(meta.samples / hop)));
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
 

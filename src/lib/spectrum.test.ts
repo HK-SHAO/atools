@@ -4,7 +4,7 @@ import { FFT, hannWindow } from "./fft";
 import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
-import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
+import { BANDS, MAX_FRAMES, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { OVERLAP, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
 import { TUNE } from "./phase";
@@ -541,6 +541,52 @@ describe("shape", () => {
     expect(() => shapeFor({ ...VOICE, fineness: 2 }, 44100, 44100 * 600)).toThrow();
   });
 
+  const fitsAt = (fineness: 0 | 1 | 2, sr: number, secs: number): boolean => {
+    try {
+      shapeFor({ ...VOICE, fineness, sr }, sr, sr * secs);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // 时长上限只由像素预算决定（像素 ≈ N·重叠/2，与窗长无关），三档窗长因此必须在同一条线上。
+  // 曾经帧数另有一条 20000 的上限，它先于像素预算卡住省/中两档 —— 同样 8k，省只有 160 秒、
+  // 细却有 500 秒；默认档的 16k 也就这样被无理由地拒掉（166 秒的素材只差 1.7%）。
+  test("all three windows share one duration ceiling", () => {
+    for (const sr of [8000, 16000, 32000]) {
+      const ceilings = ([0, 1, 2] as const).map(fineness => {
+        let lo = 1;
+        let hi = 4000;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          if (fitsAt(fineness, sr, mid)) lo = mid;
+          else hi = mid - 1;
+        }
+        return lo;
+      });
+      const top = Math.max(...ceilings);
+      expect(top - Math.min(...ceilings)).toBeLessThanOrEqual(Math.ceil(top * 0.01));
+      // 而且顶到的是像素预算，不是被某条更小的上限提前卡住：8k 约 500 秒，不再是一百多秒。
+      expect(Math.min(...ceilings)).toBeGreaterThan(400 * (8000 / sr));
+    }
+  });
+
+  // 用户报的实例：166 秒的 boniu.m4a 点 16k 会被静默退回 8k。
+  test("a 166 s file fits 16k, and 32k says why it cannot", () => {
+    const srcSr = 48000;
+    const srcSamples = 7_972_864;
+
+    const at16 = fitEncode({ ...VOICE, sr: 16000 }, srcSr, srcSamples);
+    expect(at16.enc.sr).toBe(16000);
+    expect(at16.note).toBeNull();
+
+    const at32 = fitEncode({ ...VOICE, sr: 32000 }, srcSr, srcSamples);
+    expect(at32.enc.sr).toBe(16000);
+    expect(at32.note).toContain("32k");
+    expect(at32.note).toContain("秒");
+  });
+
   test("fitEncode downsamples long audio instead of refusing it", () => {
     const samples = 44100 * 264;
     expect(() => shapeFor(VOICE, 8000, Math.ceil((samples * 8000) / 44100))).not.toThrow();
@@ -550,32 +596,21 @@ describe("shape", () => {
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
-    // 4 倍重叠让帧数翻倍，「同样的图能装多久」因此减半，自动降采样会多落一档。
     expect(fit.enc.sr).toBe(8000);
     const tuned = shapeFor(fit.enc, fit.enc.sr, Math.ceil((samples * fit.enc.sr) / 44100));
-    expect(tuned.frames).toBeLessThanOrEqual(20000);
+    expect(tuned.frames).toBeLessThanOrEqual(MAX_FRAMES);
     expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
 
     const short = fitEncode(want, 44100, 44100 * 30);
     expect(short.enc).toEqual(want);
     expect(short.note).toBeNull();
 
+    // 8k 都装不下才剪短：剪出来的时长自己必须在预算内。
     const huge = fitEncode(VOICE, 44100, 44100 * 3600);
     expect(huge.enc.sr).toBe(8000);
-    expect(huge.enc.end - huge.enc.start).toBeLessThanOrEqual((20000 * hopOf(huge.enc)) / 8000);
-  });
-
-  // 帧数 = 4N/win：装不下时要往**更长**的窗走（帧数减半），不是更短。
-  // 这条钉住那个方向 —— 换方向会让它掉进「剪短」兜底，end 就不再是 0。
-  test("too many frames is cured by a longer window, not a shorter one", () => {
-    const samples = 8000 * 400;
-    expect(() => shapeFor(VOICE, 8000, samples)).toThrow();
-    const fit = fitEncode(VOICE, 8000, samples);
-    expect(fit.enc.fineness).toBe(2);
-    expect(fit.enc.sr).toBe(8000);
-    expect(fit.enc.end).toBe(0);
-    expect(fit.note).toContain("窗");
-    expect(shapeFor(fit.enc, 8000, samples).frames).toBeLessThanOrEqual(20000);
+    const kept = huge.enc.end - huge.enc.start;
+    expect(kept).toBeGreaterThan(400);
+    expect(() => shapeFor(huge.enc, 8000, kept * 8000)).not.toThrow();
   });
 
   test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
@@ -588,14 +623,14 @@ describe("shape", () => {
     const sr = fit.enc.sr > 0 ? fit.enc.sr : 8000;
     const secs = fit.enc.end > fit.enc.start ? fit.enc.end - fit.enc.start : samples / 8000;
     const tuned = shapeFor(fit.enc, sr, Math.ceil(secs * sr));
-    expect(tuned.frames).toBeLessThanOrEqual(20000);
+    expect(tuned.frames).toBeLessThanOrEqual(MAX_FRAMES);
     expect(tuned.frames * tuned.bins * BANDS).toBeLessThanOrEqual(8_000_000);
   });
 
   test("budget holds for sane lengths", () => {
     for (const seconds of [0.2, 1, 5, 30]) {
       const s = shapeFor(VOICE, 8000, 8000 * seconds);
-      expect(s.frames).toBeLessThanOrEqual(20000);
+      expect(s.frames).toBeLessThanOrEqual(MAX_FRAMES);
       expect(s.frames * s.bins).toBeLessThanOrEqual(8_000_000);
     }
   });
