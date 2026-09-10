@@ -2,6 +2,13 @@ import type { Samples } from "./arrays";
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
+/**
+ * 重采样后的长度 —— `resample` 与「能不能装下」的判据（`spectrum.ts` 的 fitEncode）共用这一个
+ * 定义，否则判据会比实际编出来的多算一两帧，把本来装得下的请求判成装不下。
+ */
+export const resampledLength = (n: number, from: number, to: number): number =>
+  Math.max(1, Math.round((n * to) / from));
+
 // 相位表的内存预算：最坏 4 MB，与「按 4096 条、每条宽 64 抽头」时的占用持平。
 const MEMO_BYTES = 4 << 20;
 
@@ -14,7 +21,7 @@ export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Sa
   if (x.length === 0 || (from === to && cutoffHz <= 0)) return x.slice() as Samples;
 
   const ratio = from / to;
-  const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
+  const out = new Float32Array(resampledLength(x.length, from, to));
 
   const nyq = 0.5 * Math.min(1, to / from);
   const limit = cutoffHz > 0 ? Math.min(nyq, cutoffHz / from) : nyq;

@@ -45,6 +45,12 @@ export function usePlayback(
 
   const liveRef = useRef(false);
   const startedRef = useRef(-1);
+  /** 「在放」的意图。参数一变就要靠它决定要不要把新还原的那份接上。 */
+  const playingRef = useRef(false);
+  const mark = useCallback((on: boolean) => {
+    playingRef.current = on;
+    setPlaying(on);
+  }, []);
 
   const paint = useCallback(
     (pos: number) => {
@@ -98,13 +104,18 @@ export function usePlayback(
 
   const start = useCallback(
     async (at: number) => {
+      // 先记下「在放」的意图：等新图还原的时候才有人把这一声接上（见下面的跟随 effect）。
+      playingRef.current = true;
       let ctx: AudioContext | null = null;
       try {
         ctx = await ensure();
       } catch (e) {
         console.error(e);
       }
-      if (!ctx) return;
+      if (!ctx) {
+        playingRef.current = false;
+        return;
+      }
       halt();
       void ctx.resume();
 
@@ -120,7 +131,7 @@ export function usePlayback(
         rafRef.current = 0;
         posRef.current = duration;
         paint(duration);
-        setPlaying(false);
+        mark(false);
       };
 
       node.start(0, from);
@@ -129,7 +140,7 @@ export function usePlayback(
       startedRef.current = from;
       t0Ref.current = ctx.currentTime;
       liveRef.current = true;
-      setPlaying(true);
+      mark(true);
 
       const tick = () => {
         if (nodeRef.current !== node) return;
@@ -149,11 +160,11 @@ export function usePlayback(
       const at = posRef.current;
       halt();
       paint(at);
-      setPlaying(false);
+      mark(false);
       return;
     }
     void start(posRef.current >= duration - 0.02 ? 0 : posRef.current);
-  }, [duration, halt, paint, start]);
+  }, [duration, halt, paint, start, mark]);
 
   const seek = useCallback(
     (ratio: number) => {
@@ -186,9 +197,27 @@ export function usePlayback(
     posRef.current = 0;
     startedRef.current = -1;
     liveRef.current = false;
-    setPlaying(false);
+    mark(false);
     paint(0);
-  }, [duration, sr, halt, paint]);
+  }, [duration, sr, halt, paint, mark]);
+
+  /**
+   * 参数一改，这一份 `audio` 就作废了（新的一张图从头编，`audio` 先变成 null）。
+   * **耳朵必须跟着最新那张图走**：不然界面写着「位深 2」，耳朵里还是上一张图的 8bit，
+   * 用户会以为参数没生效。这里只在「本来就在放」时才续播 —— 闲着调参数不该触发还原，
+   * 那是 `listen` 按需算的前提。等待期间旧的那声继续放，新的一份就绪后原地接上。
+   */
+  const followedRef = useRef<Samples | null>(null);
+  useEffect(() => {
+    if (!playingRef.current || followedRef.current === audio) return;
+    followedRef.current = audio;
+    if (audio && bufPcmRef.current === audio) return;
+    const resume = () => {
+      if (playingRef.current) void start(posRef.current);
+    };
+    if (audio) void start(posRef.current);
+    else void prepare().then(y => (y ? resume() : undefined));
+  }, [audio, prepare, start]);
 
   useEffect(
     () => () => {

@@ -49,12 +49,26 @@ async function idle(patience = 120_000): Promise<boolean> {
 }
 
 /**
+ * 等某个元素出现。**不能只等 `idle`** —— 点完「演示」到进度条冒出来之间有一段空档，
+ * 这段空档里 `idle()` 立刻返回 true，接着读 `.params` 就是 null（曾偶发崩在
+ * `getComputedStyle` 上，是门禁自身的假阴性）。
+ */
+async function appear(selector: string, patience = 120_000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < patience) {
+    if (await ev<boolean>(`return !!document.querySelector(${JSON.stringify(selector)})`)) return true;
+    await sleep(150);
+  }
+  return false;
+}
+
+/**
  * 按播放，直到这一次的录音真出现；返回本次截到的样本数（0 表示没响）。
  *
  * 播放前要先把**图里装的声音**还原出来，所以这里不能只 sleep 一个固定值 —— 短素材
- * 几百毫秒，长素材要好几秒。
+ * 几百毫秒，长素材要好几秒。`keep` 为真时不停，留着继续播（验「播放中改参数」用）。
  */
-async function play(patience = 120_000): Promise<number> {
+async function play(patience = 120_000, keep = false): Promise<number> {
   const before = await ev<number>(`return window.__cap.length`);
   await ev(`document.querySelector('.icon-btn').click(); return 1`);
   const t0 = Date.now();
@@ -65,9 +79,19 @@ async function play(patience = 120_000): Promise<number> {
     await sleep(150);
   }
   await sleep(500);
-  await ev(`document.querySelector('.icon-btn').click(); return 1`); // 停
+  if (!keep) await ev(`document.querySelector('.icon-btn').click(); return 1`); // 停
   const last = await ev<number | null>(`return window.__cap[window.__cap.length - 1]?.length ?? null`);
   return n > before ? (last ?? 0) : 0;
+}
+
+/** 等一份**新**的 PCM 被送进 AudioBuffer（不改参数、不按任何按钮）。 */
+async function waitPushed(before: number, patience = 60_000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < patience) {
+    if ((await ev<number>(`return window.__cap.length`)) > before) return true;
+    await sleep(150);
+  }
+  return false;
 }
 
 try {
@@ -82,13 +106,17 @@ try {
 
   await session.shot(`/tmp/smoke-${TAG}-empty.png`);
   await click(/演示/);
+  if (!(await appear(".params"))) problems.push("演示点下去之后参数面板一直没出现");
   if (!(await idle(60_000))) problems.push("演示加载完界面没停下来");
   await sleep(300);
   await session.shot(`/tmp/smoke-${TAG}-loaded.png`);
 
+  // 取不到面板也要报「问题」，而不是把整轮门禁崩掉（缺元素时 querySelector 是 null）。
   const gridCols = await ev<string>(
-    `return getComputedStyle(document.querySelector('.params')).gridTemplateColumns`,
+    `const el = document.querySelector('.params');
+     return el ? getComputedStyle(el).gridTemplateColumns : '(无参数面板)';`,
   );
+  if (gridCols === "(无参数面板)") problems.push("参数面板没渲染出来");
 
   // 截住真正送进 AudioBuffer 的 PCM —— 界面「听到什么」只有这一条路能验。
   // 在演示加载完之后才装钩子，免得把解码器内部的拷贝也算进来。
@@ -155,6 +183,31 @@ try {
       );
     else console.log(`  位深差异: ${rel.toFixed(1)} dB（${low} 样本）`);
   }
+
+  /**
+   * 播放**中**改参数：耳朵必须跟着最新那张图走。
+   *
+   * 界面上写着「位深 2」，耳朵里却还是上一张图的 8bit —— 用户会以为参数没生效。
+   * 这条只在本来就在放时成立（闲着调参数不该触发还原，那是按需算的前提），
+   * 且在等待期间旧的那声继续放，新的一份就绪后原地接上。
+   */
+  await pick("位深", "8");
+  if (!(await idle())) problems.push("切回位深 8 后界面没停下来");
+  await ev(`window.__cap.length = 0; return 1`);
+  if ((await play(120_000, true)) === 0) problems.push("对照组：播放时没截到音频");
+  if ((await ev<string | null>(`return document.querySelector('.icon-btn')?.getAttribute('aria-label')`)) !== "暂停")
+    problems.push("对照组：按下播放后没在播");
+  const beforeCount = await ev<number>(`return window.__cap.length`);
+  await pick("位深", "4");
+  if (!(await waitPushed(beforeCount)))
+    problems.push("播放中改位深后，耳朵里还是上一张图的声音（没有自动换成新的一份）");
+  else {
+    const label = await ev<string | null>(`return document.querySelector('.icon-btn')?.getAttribute('aria-label')`);
+    if (label !== "暂停") problems.push("换上新的一份之后没有接着放");
+    else console.log(`  播放中改参数：自动换到新的 PCM 并续播 ✓`);
+  }
+  await ev(`document.querySelector('.icon-btn').click(); return 1`);
+  if (!(await idle())) problems.push("停止播放后界面没停下来");
 
   await click(/质检/);
   const tq = Date.now();

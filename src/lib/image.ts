@@ -1,7 +1,7 @@
 import type { Pixels } from "./arrays";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
-import { BANDS, DEFAULT_SR, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, DEFAULT_SR, MAX_FRAMES, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { hopOfWin, stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
@@ -425,8 +425,15 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   const width = bitmap.width;
   const height = bitmap.height;
   try {
-    if (width * height > MAX_SOURCE_PIXELS) {
-      const k = Math.sqrt(MAX_SOURCE_PIXELS / (width * height));
+    // 单边也要卡：**canvas 超过 MAX_FRAMES 宽不会报错，只会变成一块空画布** —— 画点读回是 0、
+    // `toBlob` 给 null，于是读回来的是满屏静音而不是一句错误。面积上限管不到它
+    // （70000×129 才 9M 像素）。实测：70000 宽的自家图，缩了读回来 485KB 的谱，
+    // 不缩读回来 30KB 的空谱。
+    if (width * height > MAX_SOURCE_PIXELS || Math.max(width, height) > MAX_FRAMES) {
+      const k = Math.min(
+        Math.sqrt(MAX_SOURCE_PIXELS / (width * height)),
+        MAX_FRAMES / Math.max(width, height),
+      );
       const scaled = await createImageBitmap(bitmap, {
         resizeWidth: Math.max(1, Math.round(width * k)),
         resizeHeight: Math.max(1, Math.round(height * k)),

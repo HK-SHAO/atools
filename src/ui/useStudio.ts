@@ -62,6 +62,8 @@ export function useStudio() {
 
   const jobRef = useRef<Job | null>(null);
   const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
+  /** 本轮编码什么时候结束。`listen` 要等它 —— 见 `listen` 里的循环。 */
+  const readyRef = useRef<Promise<void>>(Promise.resolve());
 
   const putJob = useCallback((next: Job | null) => {
     jobRef.current = next;
@@ -75,10 +77,24 @@ export function useStudio() {
   }, []);
 
   useEffect(() => {
+    // 动参数 / 换素材 = 上一份还原（按播放、重建相位）**当场作废**。不作废的话它会一路算到底：
+    // 结果被丢掉之外，它结束时的 setStage(null) 还会盖住这一轮的「转换中」，进度条闪一下没了。
+    genRef.current++;
+    let released = false;
+    let unlock!: () => void;
+    readyRef.current = new Promise<void>(r => (unlock = r));
+    const release = () => {
+      if (!released) {
+        released = true;
+        unlock();
+      }
+    };
+
     if (!source) {
+      release();
       putJob(null);
       setPick(p => (p.note === null ? p : { ...p, note: null }));
-      return;
+      return release;
     }
     let cancelled = false;
     const alive = () => !cancelled;
@@ -114,13 +130,16 @@ export function useStudio() {
         console.error(e);
         setError(e instanceof Error ? e.message : "转换失败");
       } finally {
+        release();
         if (!alive()) return;
         setStage(null);
       }
     })();
 
+    // 被换掉的那一轮也要放行，否则正在等它的 listen 会永远挂着。
     return () => {
       cancelled = true;
+      release();
     };
   }, [source, enc, putJob]);
 
@@ -158,11 +177,22 @@ export function useStudio() {
     [putJob],
   );
 
-  /** 播放与「存音频」的取音入口：同一张图的还原只算一次。 */
-  const listen = useCallback((): Promise<Samples | null> => {
+  /**
+   * 播放与「存音频」的取音入口：同一张图的还原只算一次。
+   *
+   * 先等编码停下来 —— 换了参数而新一轮还没落地时，`jobRef` 还指着**上一张图**，
+   * 这时候开算就是白算（结果会被 `render` 里的 spec 比对丢掉），长素材上白等好几秒。
+   * 循环等是因为等的过程中可能又换了一次参数：一直等到没有新一轮在跑为止。
+   */
+  const listen = useCallback(async (): Promise<Samples | null> => {
+    for (;;) {
+      const wait = readyRef.current;
+      await wait;
+      if (readyRef.current === wait) break;
+    }
     const j = jobRef.current;
-    if (!j) return Promise.resolve(null);
-    if (j.audio) return Promise.resolve(j.audio);
+    if (!j) return null;
+    if (j.audio) return j.audio;
     const pend = pendingRef.current;
     if (pend && pend.spec === j.spec) return pend.p;
     const p = render(j.spec, false);

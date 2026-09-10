@@ -4,11 +4,11 @@ import { FFT, hannWindow } from "./fft";
 import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
-import { BANDS, MAX_FRAMES, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
+import { BANDS, MAX_FRAMES, MAX_PIXELS, encode, fitEncode, maxFramesFor, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { OVERLAP, SR_OPTIONS, FMAX_OPTIONS, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
 import { TUNE } from "./phase";
-import { resample, silenceBounds, slice, trimRange } from "./resample";
+import { resample, resampledLength, silenceBounds, slice, trimRange } from "./resample";
 
 function signal(samples: number, sr: number): Samples {
   const out = new Float32Array(samples);
@@ -537,54 +537,70 @@ describe("shape", () => {
   });
 
   test("refuses oversized requests", () => {
-    expect(() => shapeFor(VOICE, 8000, 8000 * 700)).toThrow();
+    // 8k 的天花板约 996 秒（16M 像素 ÷ 2.008 ÷ 8000），1200 秒必须判红。
+    expect(() => shapeFor(VOICE, 8000, 8000 * 1200)).toThrow();
     expect(() => shapeFor({ ...VOICE, fineness: 2 }, 44100, 44100 * 600)).toThrow();
   });
 
-  const fitsAt = (fineness: 0 | 1 | 2, sr: number, secs: number): boolean => {
-    try {
-      shapeFor({ ...VOICE, fineness, sr }, sr, sr * secs);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  // 时长上限只由像素预算决定（像素 ≈ N·重叠/2，与窗长无关），三档窗长因此必须在同一条线上。
-  // 曾经帧数另有一条 20000 的上限，它先于像素预算卡住省/中两档 —— 同样 8k，省只有 160 秒、
-  // 细却有 500 秒；默认档的 16k 也就这样被无理由地拒掉（166 秒的素材只差 1.7%）。
-  test("all three windows share one duration ceiling", () => {
-    for (const sr of [8000, 16000, 32000]) {
-      const ceilings = ([0, 1, 2] as const).map(fineness => {
-        let lo = 1;
-        let hi = 4000;
-        while (lo < hi) {
-          const mid = Math.ceil((lo + hi) / 2);
-          if (fitsAt(fineness, sr, mid)) lo = mid;
-          else hi = mid - 1;
-        }
-        return lo;
-      });
-      const top = Math.max(...ceilings);
-      expect(top - Math.min(...ceilings)).toBeLessThanOrEqual(Math.ceil(top * 0.01));
-      // 而且顶到的是像素预算，不是被某条更小的上限提前卡住：8k 约 500 秒，不再是一百多秒。
-      expect(Math.min(...ceilings)).toBeGreaterThan(400 * (8000 / sr));
-    }
+  // 时长上限是两道墙里更小的那道：**像素预算**（管文件体积，0.84 字节/像素）与
+  // **单边 65535 列**（canvas 的硬墙，实测 65535 宽还行、65536 就静默失败）。断言不写死
+  // 是哪道墙说了算 —— 只要求：① 上限那一格正好贴上墙（再多一帧就判红）；② 至少有一道
+  // 墙是紧的，说明上限不是随手定的数。曾经这里还有第二条独立的 20000 帧上限，它先于两条
+  // 墙卡住省/中两档，同样 8k 下省只有 160 秒、细却有 500 秒 —— 那才是无理由的不一致。
+  test("the duration ceiling sits exactly on the tighter of the two walls", () => {
+    for (const sr of [8000, 16000, 24000, 32000])
+      for (const fineness of [0, 1, 2] as const) {
+        const e: Encode = { ...VOICE, fineness, sr };
+        const hop = hopOf(e);
+        const bins = rowsFor(winOf(e), sr, 0);
+        const cap = maxFramesFor(bins, 1);
+        expect(shapeFor(e, sr, (cap - 1) * hop).frames).toBe(cap);
+        expect(() => shapeFor(e, sr, cap * hop)).toThrow();
+        expect(cap).toBeLessThanOrEqual(MAX_FRAMES);
+        expect(cap === MAX_FRAMES || cap * bins > MAX_PIXELS * 0.99).toBe(true);
+      }
   });
 
-  // 用户报的实例：166 秒的 boniu.m4a 点 16k 会被静默退回 8k。
-  test("a 166 s file fits 16k, and 32k says why it cannot", () => {
+  // 两道墙同时存在，就意味着「窗长不影响容量」只在预算比列墙紧时成立。省档每秒 125 列
+  // （hop 64，8k），是最档的两倍，所以它先撞列墙。这不是缺陷，是格式的几何：列数有上限，
+  // 而每秒列数由窗长定。
+  test("the small window hits the column wall, the long ones the pixel budget", () => {
+    const framesOf = (fineness: 0 | 1 | 2): number =>
+      maxFramesFor(rowsFor(winOf({ ...VOICE, fineness }), 8000, 0), 1);
+    expect(framesOf(0)).toBe(MAX_FRAMES);
+    expect(framesOf(2)).toBeLessThan(MAX_FRAMES);
+  });
+
+  // 用户报的实例：166 秒的 boniu.m4a 点 32k 会被退回 16k。真因有两个：预算只有 8M，
+  // 且 `fits` 把样点数多算了一两帧（ceil + 一个 hop）。现在 32k 直接装得下。
+  test("a 166 s file fits 32k now that both the budget and the frame count are honest", () => {
     const srcSr = 48000;
     const srcSamples = 7_972_864;
+    for (const sr of [16000, 24000, 32000]) {
+      const fit = fitEncode({ ...VOICE, sr }, srcSr, srcSamples);
+      expect(fit.enc.sr).toBe(sr);
+      expect(fit.note).toBeNull();
+    }
+    // 真的把它编出来一次：判据说的「装得下」要和 encode 的结果一致，不能只是算对了。
+    const want: Encode = { ...VOICE, sr: 32000 };
+    const n = resampledLength(srcSamples, srcSr, 32000);
+    const shape = shapeFor(want, 32000, n);
+    expect(shape.frames * shape.bins).toBeLessThanOrEqual(MAX_PIXELS);
+    expect(shape.frames).toBeLessThanOrEqual(MAX_FRAMES);
+  });
 
-    const at16 = fitEncode({ ...VOICE, sr: 16000 }, srcSr, srcSamples);
-    expect(at16.enc.sr).toBe(16000);
-    expect(at16.note).toBeNull();
-
-    const at32 = fitEncode({ ...VOICE, sr: 32000 }, srcSr, srcSamples);
-    expect(at32.enc.sr).toBe(16000);
-    expect(at32.note).toContain("32k");
-    expect(at32.note).toContain("秒");
+  // 「算得准」这件事本身要有断言：判据喂进去的样点数必须与 resample 真给出的长度一致，
+  // 否则刚好装在边界上的请求会被判成装不下（这里是 N 取到天花板的整数倍）。
+  test("a request that exactly fits is never degraded", () => {
+    for (const fineness of [0, 1, 2] as const) {
+      const e: Encode = { ...VOICE, fineness };
+      const cap = maxFramesFor(rowsFor(winOf(e), 8000, 0), 1);
+      const n = (cap - 1) * hopOf(e);
+      expect(shapeFor(e, 8000, n)).toBeTruthy();
+      const fit = fitEncode(e, 8000, n);
+      expect(fit.note).toBeNull();
+      expect(fit.enc).toEqual(e);
+    }
   });
 
   test("fitEncode downsamples long audio instead of refusing it", () => {
@@ -596,10 +612,12 @@ describe("shape", () => {
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
-    expect(fit.enc.sr).toBe(8000);
-    const tuned = shapeFor(fit.enc, fit.enc.sr, Math.ceil((samples * fit.enc.sr) / 44100));
+    // 沿采样率往下找**第一个装得下的**：落点必须装得下，而它上面那一档必须确实装不下。
+    expect(fit.enc.sr).toBe(24000);
+    expect(() => shapeFor(want, 32000, resampledLength(samples, 44100, 32000))).toThrow();
+    const tuned = shapeFor(fit.enc, fit.enc.sr, resampledLength(samples, 44100, fit.enc.sr));
     expect(tuned.frames).toBeLessThanOrEqual(MAX_FRAMES);
-    expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(8_000_000);
+    expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(MAX_PIXELS);
 
     const short = fitEncode(want, 44100, 44100 * 30);
     expect(short.enc).toEqual(want);
@@ -615,7 +633,8 @@ describe("shape", () => {
 
   test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
     const e: Encode = { ...VOICE, mode: "exact", sr: 8000, fineness: 2 };
-    const samples = 8000 * 256;
+    // 可逆档存三张平面，判据给它算两道带宽，所以它的天花板只有中档的一半。
+    const samples = 8000 * 500;
     const fit = fitEncode(e, 8000, samples);
     expect(fit.note).not.toBeNull();
     // fitEncode 可能选择「剪短」而不是「降采样」，所以要按它真正覆盖的时长来验，
@@ -624,14 +643,14 @@ describe("shape", () => {
     const secs = fit.enc.end > fit.enc.start ? fit.enc.end - fit.enc.start : samples / 8000;
     const tuned = shapeFor(fit.enc, sr, Math.ceil(secs * sr));
     expect(tuned.frames).toBeLessThanOrEqual(MAX_FRAMES);
-    expect(tuned.frames * tuned.bins * BANDS).toBeLessThanOrEqual(8_000_000);
+    expect(tuned.frames * tuned.bins * BANDS).toBeLessThanOrEqual(MAX_PIXELS);
   });
 
   test("budget holds for sane lengths", () => {
     for (const seconds of [0.2, 1, 5, 30]) {
       const s = shapeFor(VOICE, 8000, 8000 * seconds);
       expect(s.frames).toBeLessThanOrEqual(MAX_FRAMES);
-      expect(s.frames * s.bins).toBeLessThanOrEqual(8_000_000);
+      expect(s.frames * s.bins).toBeLessThanOrEqual(MAX_PIXELS);
     }
   });
 

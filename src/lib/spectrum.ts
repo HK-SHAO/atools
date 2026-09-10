@@ -2,6 +2,7 @@ import type { Samples } from "./arrays";
 import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
 import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
+import { resampledLength } from "./resample";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
 export const BANDS = 2;
@@ -12,17 +13,25 @@ const MAX_WIN = 4096;
 /**
  * 像素预算 —— 「能装多久」只有这一个真预算。
  *
- * 像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**（见 params.ts 的 hopOf），所以三档窗长
- * 在同一采样率下的时长上限本来就该一样。8M 像素的紧凑图实测约 6.6MB，编码 + 打包 ~260ms，
- * 也在浏览器 canvas 面积上限之内。
+ * 像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**（见 params.ts 的 hopOf）。实测
+ * 0.84 字节/像素，所以预算同时就是文件体积：16M 像素 ≈ 13MB 的 PNG，编码 + 打包 ~1.2s。
+ *
+ * 为什么是 16M 而不是更大：**65535 列是浏览器的硬墙**（实测 70000 宽的 canvas 会静默
+ * 变成空画布，`toBlob` 给 null），而默认档（win 512）在 16M 像素处正好撞上它 ——
+ * 再往上加，默认档也装不出更长的音频，等于白加。要更长只能换更长的窗（时间分辨率变粗）
+ * 或者把音频切段，那是另一套格式，不是把数字调大。各档的时长天花板都是
+ * `min(像素预算, 65535 列)` 里更小的那道，见 docs/algorithms.md 的实测表。
  */
-const MAX_PIXELS = 8_000_000;
+export const MAX_PIXELS = 16_000_000;
 
 /**
- * 单边（帧数就是图宽）上限。只用来挡住「窄带 + 超长」把图拉成几万比一的长条 ——
- * 它是几何上限，不是时长上限：实测 Chromium 到 12 万宽仍能解码，这里取 2^16 留一半余量。
+ * 单边（帧数就是图宽）上限：canvas 的硬墙。实测 65535 宽仍然画得出、`toBlob` 正常，
+ * **65536 就开始静默失败**（画点读回是 0、`toBlob` 给 null），所以取 65535 而不是 2^16。
+ * 它管两件事：① 挡住「窄带 + 超长」把图拉成几万比一的长条；② 让省档（win 256）
+ * 的列数先于像素预算到顶 —— 省档每秒的列数是最档的两倍，所以它的容量天生只有一半。
+ * 读图侧共用这个数（`image.ts` 的 MAX_SIDE）：宽超了的图必须先缩，否则读回来的是静音。
  */
-export const MAX_FRAMES = 65536;
+export const MAX_FRAMES = 65535;
 
 export const DEFAULT_SR = 44100;
 
@@ -134,7 +143,10 @@ export function fitEncode(
   srcSamples: number,
 ): { enc: Encode; note: string | null } {
   const want = e.sr > 0 ? e.sr : srcSr;
-  const at = (sr: number): number => Math.ceil((srcSamples * sr) / srcSr) + hopOf(e);
+  // 喂给判据的必须是**真实编出来的**样点数：resample 给 round(N·to/from)，多一个 hop 就多一帧。
+  // 曾经这里是 ceil(...) + hopOf(e)，两处各多算一帧，于是「刚好装得下」的请求被判成装不下
+  // （166 秒的素材在 24k 差 0.05% 就被退回 16k，有一半是这个多算出来的）。
+  const at = (sr: number): number => resampledLength(srcSamples, srcSr, sr);
   if (fits(e, want, at(want))) return { enc: e, note: null };
 
   // 装不下就沿采样率往下走，每一步都把「为什么」说清楚：这段多少秒、你要的那档上限多少秒。
