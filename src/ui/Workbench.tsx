@@ -52,7 +52,10 @@ function save(blob: Blob, filename: string): void {
 
 interface Props {
   spec: Spectrum;
-  pcm: Samples;
+  /** 编码前的音频：质检的参照。 */
+  ref: Samples;
+  /** 图里装的声音；还没还原出来时为 null（按播放/存音频时才补算）。 */
+  audio: Samples | null;
   png: Blob;
   name: string;
   srcSr: number;
@@ -60,6 +63,7 @@ interface Props {
   enc: Encode;
   onEnc: (e: Encode) => void;
   onRefine: () => void;
+  onListen: () => Promise<Samples | null>;
   stage: Stage;
   hint: string | null;
   error: string | null;
@@ -67,7 +71,8 @@ interface Props {
 
 export function Workbench({
   spec,
-  pcm,
+  ref,
+  audio,
   png,
   name,
   srcSr,
@@ -75,27 +80,35 @@ export function Workbench({
   enc,
   onEnc,
   onRefine,
+  onListen,
   stage,
   hint,
   error,
 }: Props) {
   const busy = stage !== null;
   const { meta } = spec;
+  // 时间轴长度只由 meta 决定，与是否已经还原无关 —— 否则音频没算出来时时长会显示成 0。
+  const duration = meta.samples / meta.sr;
   const sheet = useMemo(() => buildSheet(spec, SHEET_ROWS), [spec]);
-  const { playing, duration, toggle, seek, scrub, commit, nudge, headRef, timeRef } = usePlayback(
-    pcm,
+  const { playing, toggle, seek, scrub, commit, nudge, headRef, timeRef } = usePlayback(
+    audio,
     meta.sr,
+    duration,
+    onListen,
   );
-  const { loss, checking, check } = useAudit(pcm, spec, png, name);
+  const { loss, checking, check } = useAudit(ref, spec, png, name);
 
   const savePng = useCallback(() => save(png, downloadName(name, meta)), [meta, name, png]);
 
-  const saveWav = useCallback(() => {
+  // 存的与听的是同一份：图里装的声音。
+  const saveWav = useCallback(async () => {
+    const y = audio ?? (await onListen());
+    if (!y) return;
     save(
-      new Blob([wavFile(pcm, meta.sr)], { type: "audio/wav" }),
+      new Blob([wavFile(y, meta.sr)], { type: "audio/wav" }),
       `${name.replace(/\.[^.]+$/, "")}.wav`,
     );
-  }, [meta.sr, name, pcm]);
+  }, [audio, meta.sr, name, onListen]);
 
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
@@ -117,6 +130,7 @@ export function Workbench({
           type="button"
           className="icon-btn"
           onClick={toggle}
+          disabled={audio === null && busy}
           aria-label={playing ? "暂停" : "播放"}
         >
           <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
@@ -131,7 +145,7 @@ export function Workbench({
           <span ref={timeRef}>0:00</span>
           <span className="dim"> / {clock(duration)}</span>
         </p>
-        {busy && <span className="dim tick">转换中</span>}
+        {busy && <span className="dim tick">{stage.label}中</span>}
       </div>
 
       <p className="facts">
@@ -148,7 +162,7 @@ export function Workbench({
         <button type="button" className="act" onClick={savePng}>
           存频谱图
         </button>
-        <button type="button" className="act" onClick={saveWav}>
+        <button type="button" className="act" onClick={() => void saveWav()} disabled={busy}>
           存音频
         </button>
         <button type="button" className="act" onClick={check} disabled={checking || busy}>

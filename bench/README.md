@@ -10,7 +10,7 @@
 | `bun run quality` | 否 | **质量回归**：确定性合成素材 → 真实 encode/synthesise 链路 → SNR/相关/谱收敛/谱差。日常改动后先跑这个。 |
 | `bun run quality -- --gate` | 否 | 同上 + 质量门禁：低于阈值退出码 1（可挂 CI / 提交前钩子）。 |
 | `bun run bench` | 是 | **端到端评测台**：Chromium 无头跑完整链路（音频 → 图 → PNG/JPEG/缩放降级 → 读图 → 还原），覆盖图片容器层的损失。 |
-| `bun run smoke` | 是 | **界面冒烟**：起页面 → 点演示 → 质检 → 点频谱图试播，只报控制台错误与截图（`/tmp/smoke-*.png`）。需要 dev server 在 `http://127.0.0.1:3000`。 |
+| `bun run smoke` | 是 | **界面行为门禁**：跑在 `dist/` 上（先 `bun run build:web` + `bun start`，页面在 `http://127.0.0.1:3000`）。点演示 → 点频谱图试播 → 切 2bit / 8bit **各播一次** → 质检。硬断言两条：**参数必须进到声音里**（截住 `AudioBuffer.copyToChannel` 拿到的两次 PCM 必须有差异 —— 播的若是编码前的原声，2bit 与 8bit 会逐样点相同，这是用户报过的现象）、控制台无错误；有问题退出码 1。截图落到 `/tmp/smoke-*.png`。 |
 | `bun bench/scale.ts` | 是 | **尺度门禁**：先 `bun run build:web`，再校验字号随容器等比、五种控件同高、令牌锚在当前容器上、参数标签同列，并单独证一次「跟容器而非跟视口」。 |
 | `bun bench/offline.ts` | 是 | **PWA 门禁**：先 `bun run build:web`，再校验 manifest 可装（MIME、`scope`/`start_url` 落在应用根、图标可达）、iOS 头标签齐备、预缓存**逐项**对照（8 项一项不落，且 `sw.js` 不在其中）、断网可用。**只加载一次页面**（「第二遍才离线」不算数）；另验 SPA 回落出来的 HTML 不进运行期缓存、新版 SW 停在 `waiting` 不夺取正在用的页面。 |
 | `bun run perf` | 是 | **性能体检**：重采样相位表的倍数对照 + 相位数最多那几个组合「不得慢于逐样点」的门禁（机器无关，可当门禁）+ 真实页面里加载长音频的主线程长任务清单。`SECS=60` 改素材时长，`PAGE=0` 只跑前半。 |

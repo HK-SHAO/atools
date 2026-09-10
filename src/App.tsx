@@ -30,7 +30,8 @@ export function App() {
         {source && job ? (
           <Workbench
             spec={job.spec}
-            pcm={job.pcm}
+            ref={job.ref}
+            audio={job.audio}
             png={job.png}
             name={source.name}
             srcSr={source.sr}
@@ -38,6 +39,7 @@ export function App() {
             enc={studio.enc}
             onEnc={studio.setEnc}
             onRefine={studio.refine}
+            onListen={studio.listen}
             stage={studio.stage}
             hint={studio.hint}
             error={studio.error}

@@ -27,18 +27,20 @@ src/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset
 src/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 src/ui/      组件与 hooks，只是结构与行为；样式一律在 src/styles/ 里，组件上只有语义类名
 src/sw.ts    Service Worker（应用壳预缓存 + 运行期缓存）；manifest 与 icons 同样立在 src/ 根
-bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，offline.ts 守 PWA，perf.ts 看性能，smoke.ts 冒烟）
+bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，offline.ts 守 PWA，perf.ts 看性能，smoke.ts 守界面行为）
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）
 ```
 
 数据流：`pcm → encode() → Spectrum{levels, phaseCos/Sin, Meta} → PNG/容器 → 读图 → Spectrum → synthesise() → pcm`。`Meta` 是唯一权威参数（sr/win/hop/frames/bins/samples/bits/ref/exact），随 tEXt、文件名、条码票根三路冗余传递。
+
+**播放与「存音频」走的是 `synthesise(spec)` 的结果，不是编码前的原声。** 位深 / 窗长这类参数只改图，放原声等于让它们静默失效（2bit 与 8bit 听起来会一模一样）；这份还原结果按需算、随参数作废（`useStudio` 的 `listen`），时间轴长度一律取自 `meta.samples / meta.sr`，与是否已还原无关。界面上的「听到什么」只有 `synthesise` 这一条路 —— `bench/smoke.ts` 截 2bit/8bit 两次播出的 PCM 来守它。
 
 关键模块职责：
 - `spectrum.ts` STFT 编解码与重建调度（fast/fine 两档）
 - `phase.ts` + `rtisi.ts` 相位重建（PGHI 暖启 → RTISI-LA → GL 打磨）
 - `image.ts` 容器嗅探、认图分级（可逆/紧凑/降级/通用）、缩放适配
 - `stub.ts` 底部条码票根（meta 丢失后的参数权威通道）
-- `useStudio.ts` 流水线编排，`usePlayback` 播放，`useAudit` 质检，`useDragDrop` 拖放
+- `useStudio.ts` 流水线编排（含按需还原 `listen`），`usePlayback` 播放，`useAudit` 质检，`useDragDrop` 拖放
 
 ## 样式
 

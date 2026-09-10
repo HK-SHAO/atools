@@ -5,7 +5,7 @@ import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
 import { BANDS, MAX_FRAMES, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
-import { OVERLAP, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { OVERLAP, SR_OPTIONS, FMAX_OPTIONS, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
 import { TUNE } from "./phase";
 import { resample, silenceBounds, slice, trimRange } from "./resample";
@@ -633,6 +633,27 @@ describe("shape", () => {
       expect(s.frames).toBeLessThanOrEqual(MAX_FRAMES);
       expect(s.frames * s.bins).toBeLessThanOrEqual(8_000_000);
     }
+  });
+
+  // 频宽菜单不该有自己的上限 —— 上限是奈奎斯特。用户报过：32k 采样（可用到 16k）最多也只
+  // 能选 8k，花了大图的像素却拿不到更宽的带，且没有任何说明。
+  test("bandwidth ladder is capped by Nyquist, not by the menu", () => {
+    const bands: readonly number[] = FMAX_OPTIONS;
+    for (const hz of [4000, 8000, 12000, 16000]) expect(bands).toContain(hz);
+    expect(FMAX_OPTIONS.some(hz => hz > 8000 && hz < 32000 / 2)).toBe(true);
+  });
+
+  // 采样梯子不留「差不到 9%」的近邻档：11.025 / 22.05 kHz 与相邻档在带宽、图长、听感上
+  // 都分辨不出（22.05 与 24 只差 8.8%），一起摆出来只是让人多犹豫一次。断言写的是**规则**
+  // （该在的档都在、相邻至少差 25%），不是当时那张清单 —— 将来合理地加一档不该因此判红。
+  test("sample-rate ladder has no near-duplicate rungs", () => {
+    const rates: number[] = [...SR_OPTIONS].filter(s => s > 0).sort((a, b) => a - b);
+    expect(rates[0]).toBe(8000);
+    expect(rates.at(-1)).toBe(32000);
+    // 8/16/24/32：电话 / 宽带语音 / 通用音频 / 广播。24k 是标准档，不该缺席。
+    for (const sr of [8000, 16000, 24000, 32000]) expect(rates).toContain(sr);
+    for (let i = 1; i < rates.length; i++)
+      expect(rates[i]! / rates[i - 1]!).toBeGreaterThanOrEqual(1.25);
   });
 });
 

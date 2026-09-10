@@ -20,12 +20,55 @@ session.on(m => {
   if (m.method === "Log.entryAdded" && m.params?.type === "error") problems.push(m.params.text ?? "log");
 });
 
+const ev = <T>(js: string): Promise<T> => session.ev<T>(js);
+
 const click = (pattern: RegExp): Promise<string> =>
-  session.ev<string>(`
+  ev<string>(`
     const b = [...document.querySelectorAll('button')].find((x) => ${pattern}.test(x.textContent ?? ''));
     b?.click();
     return b ? b.textContent.trim() : '';
   `);
+
+/** 点某一档（按参数标签找，不依赖列序）。 */
+const pick = (label: string, chip: string): Promise<string> =>
+  ev<string>(`
+    const l = [...document.querySelectorAll('.params .plabel')].find((x) => x.textContent.trim() === ${JSON.stringify(label)});
+    const c = l && [...l.nextElementSibling.querySelectorAll('.chip')].find((x) => x.textContent.trim() === ${JSON.stringify(chip)});
+    c?.click();
+    return c ? c.textContent.trim() : '(没找到)';
+  `);
+
+/** 等界面空下来（stage 的进度条消失）。 */
+async function idle(patience = 120_000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < patience) {
+    if (!(await ev<boolean>(`return !!document.querySelector('.note-bar')`))) return true;
+    await sleep(200);
+  }
+  return false;
+}
+
+/**
+ * 按播放，直到这一次的录音真出现；返回本次截到的样本数（0 表示没响）。
+ *
+ * 播放前要先把**图里装的声音**还原出来，所以这里不能只 sleep 一个固定值 —— 短素材
+ * 几百毫秒，长素材要好几秒。
+ */
+async function play(patience = 120_000): Promise<number> {
+  const before = await ev<number>(`return window.__cap.length`);
+  await ev(`document.querySelector('.icon-btn').click(); return 1`);
+  const t0 = Date.now();
+  let n = before;
+  while (Date.now() - t0 < patience) {
+    n = await ev<number>(`return window.__cap.length`);
+    if (n > before) break;
+    await sleep(150);
+  }
+  await sleep(500);
+  await ev(`document.querySelector('.icon-btn').click(); return 1`); // 停
+  const last = await ev<number | null>(`return window.__cap[window.__cap.length - 1]?.length ?? null`);
+  return n > before ? (last ?? 0) : 0;
+}
 
 try {
   await session.send("Log.enable");
@@ -39,35 +82,87 @@ try {
 
   await session.shot(`/tmp/smoke-${TAG}-empty.png`);
   await click(/演示/);
-  await sleep(3000);
+  if (!(await idle(60_000))) problems.push("演示加载完界面没停下来");
+  await sleep(300);
   await session.shot(`/tmp/smoke-${TAG}-loaded.png`);
 
-  const gridCols = await session.ev<string>(
+  const gridCols = await ev<string>(
     `return getComputedStyle(document.querySelector('.params')).gridTemplateColumns`,
   );
 
-  const [x, y] = await session.ev<[number, number]>(`
+  // 截住真正送进 AudioBuffer 的 PCM —— 界面「听到什么」只有这一条路能验。
+  // 在演示加载完之后才装钩子，免得把解码器内部的拷贝也算进来。
+  await ev(`
+    window.__cap = [];
+    const orig = AudioBuffer.prototype.copyToChannel;
+    AudioBuffer.prototype.copyToChannel = function (src, ch) {
+      window.__cap.push(new Float32Array(src));
+      return orig.call(this, src, ch);
+    };
+    return 1;
+  `);
+
+  // 频谱图就是进度条：点一下就该从那里响起来。
+  const [x, y] = await ev<[number, number]>(`
     const r = document.querySelector('.spec').getBoundingClientRect();
     return [r.left + r.width * 0.66, r.top + r.height / 2];
   `);
   for (const type of ["mousePressed", "mouseReleased"])
     await session.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
-  await sleep(900);
-
-  const playing = await session.ev<string | null>(
-    `return document.querySelector('.icon-btn')?.getAttribute('aria-label')`,
-  );
-  const head = await session.ev<[string, number, number]>(`
+  const t0 = Date.now();
+  let playing: string | null = null;
+  while (Date.now() - t0 < 60_000) {
+    playing = await ev<string | null>(`return document.querySelector('.icon-btn')?.getAttribute('aria-label')`);
+    if (playing === "暂停") break;
+    await sleep(150);
+  }
+  if (playing !== "暂停") problems.push("点频谱图后没有开始播放");
+  const head = await ev<[string, number, number]>(`
     const h = document.querySelector('.spec-head');
     const s = h.getBoundingClientRect();
     const p = document.querySelector('.spec').getBoundingClientRect();
     return [h.style.opacity, Math.round(s.left - p.left), Math.round(p.right - s.right)];
   `);
+  await ev(`document.querySelector('.icon-btn').click(); return 1`);
   await session.shot(`/tmp/smoke-${TAG}-playing.png`);
 
+  // 参数必须进到耳朵里：位深只改图，但播的必须是图里装的声音 ——
+  // 曾经播的是编码前的原声，于是 2bit 与 8bit 听起来一模一样（差 0 dB），
+  // 用户报「调低位深没感觉、像是没应用」。
+  const records: number[] = [];
+  for (const bits of ["2", "8"]) {
+    const got = await pick("位深", bits);
+    if (got === "(没找到)") problems.push(`参数面板里没有位深 ${bits}`);
+    if (!(await idle())) problems.push(`切到位深 ${bits} 后界面没停下来`);
+    await sleep(200);
+    records.push(await play());
+  }
+  const [low, high] = records as [number, number];
+  if (low === 0 || high === 0) problems.push(`换位深后没截到播放的音频（${low} / ${high}）`);
+  else if (low !== high) problems.push(`两种位深播出的样本数不同（${low} / ${high}）`);
+  else {
+    const rel = await ev<number | null>(`
+      const [a, b] = window.__cap.slice(-2);
+      let num = 0, den = 0;
+      for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; num += d * d; den += a[i] * a[i]; }
+      return num === 0 ? null : 10 * Math.log10(num / den);
+    `);
+    if (rel === null || rel < -30)
+      problems.push(
+        rel === null
+          ? "2bit 与 8bit 播出的竟然是同一段音频 —— 位深没进到声音里"
+          : `2bit 与 8bit 的播出差异只有 ${rel.toFixed(1)} dB —— 位深几乎没进到声音里`,
+      );
+    else console.log(`  位深差异: ${rel.toFixed(1)} dB（${low} 样本）`);
+  }
+
   await click(/质检/);
-  await sleep(Number(process.env.WAIT ?? 9000));
-  const facts = await session.ev<string>(
+  const tq = Date.now();
+  while (Date.now() - tq < 60_000) {
+    if (!(await ev<boolean>(`return /质检中/.test(document.querySelector('.acts')?.textContent ?? '')`))) break;
+    await sleep(300);
+  }
+  const facts = await ev<string>(
     `return [...document.querySelectorAll('.facts')].map((x) => x.textContent).join(' | ')`,
   );
   await session.shot(`/tmp/smoke-${TAG}-audit.png`);
@@ -76,7 +171,9 @@ try {
   console.log("  参数列:", String(gridCols).slice(0, 90));
   console.log("  播放键:", playing, " 竖线[透明度,距左,距右]:", JSON.stringify(head));
   console.log("  自检:", String(facts).replace(/\s+/g, " ").slice(0, 320));
-  console.log("  问题:", problems.length ? problems.slice(0, 4).join(" || ") : "(none)");
 } finally {
   await session.stop();
 }
+
+console.log("  问题:", problems.length ? problems.slice(0, 4).join(" || ") : "(none)");
+process.exit(problems.length ? 1 : 0);

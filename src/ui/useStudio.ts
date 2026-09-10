@@ -15,8 +15,17 @@ interface Source {
 
 interface Job {
   spec: Spectrum;
-  pcm: Samples;
   png: Blob;
+  /** 编码前的音频（重采样后）：质检的参照 —— 「还原度」是拿它比的。 */
+  ref: Samples;
+  /**
+   * 图里装的声音 = `synthesise(spec)`。播放与「存音频」用的是它，**不是** `ref`。
+   *
+   * 位深 / 窗长 / 频宽只改图，原声对它们完全不敏感：放原声的话 2bit 与 8bit 听起来
+   * 一模一样（实测包络相关 0.64 vs 0.99），用户会以为参数没生效。按需算（`listen`）：
+   * 参数一动这份就作废，真按播放时才补算，免得调参数时空跑。
+   */
+  audio: Samples | null;
 }
 
 export type Stage = { label: string; value: number } | null;
@@ -51,6 +60,14 @@ export function useStudio() {
   const genRef = useRef(0);
   const enc = pick.enc;
 
+  const jobRef = useRef<Job | null>(null);
+  const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
+
+  const putJob = useCallback((next: Job | null) => {
+    jobRef.current = next;
+    setJob(next);
+  }, []);
+
   // 用户动参数 = 新的一段叙事：旧提示（含自动降级那条）一并作废。
   const setEnc = useCallback((next: Encode | ((e: Encode) => Encode)) => {
     setPick(p => ({ enc: typeof next === "function" ? next(p.enc) : next, note: null }));
@@ -59,7 +76,7 @@ export function useStudio() {
 
   useEffect(() => {
     if (!source) {
-      setJob(null);
+      putJob(null);
       setPick(p => (p.note === null ? p : { ...p, note: null }));
       return;
     }
@@ -90,105 +107,138 @@ export function useStudio() {
         const png = await spectrumToPng(spec);
         if (cancelled) return;
 
-        setJob({ spec, pcm: tuned, png });
+        putJob({ spec, png, ref: tuned, audio: null });
         setError(null);
       } catch (e) {
         if (cancelled || e instanceof Aborted) return;
         console.error(e);
         setError(e instanceof Error ? e.message : "转换失败");
       } finally {
-        if (!cancelled) setStage(null);
+        if (!alive()) return;
+        setStage(null);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [source, enc]);
+  }, [source, enc, putJob]);
 
-  const open = useCallback(async (file: File) => {
-    const my = ++genRef.current;
-    const alive = () => genRef.current === my;
-    setError(null);
-    setStage({ label: "读取", value: 0 });
-    try {
-      const bytes = await file.arrayBuffer();
-      const container: Container = sniff(new Uint8Array(bytes));
-      const looksImage =
-        container !== "?" || file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
-
-      if (looksImage) {
-        setStage({ label: "读图", value: 0 });
-        await nextFrame();
-        const { spec, mode: readMode, guessed, phaseReliability } = await imageToSpectrum(
-          new Blob([bytes]),
-          file.name,
+  /** 还原一张图的声音。`fine` 走精修档（更多迭代 + GL 打磨），「重建相位」用。 */
+  const render = useCallback(
+    async (spec: Spectrum, fine: boolean): Promise<Samples | null> => {
+      const my = ++genRef.current;
+      const alive = () => genRef.current === my;
+      const label = fine ? "精修" : "还原";
+      setStage({ label, value: 0 });
+      try {
+        const audio = await synthesise(
+          spec,
+          alive,
+          v => {
+            if (alive()) setStage({ label, value: v });
+          },
+          fine ? "fine" : "fast",
         );
-        if (!alive()) return;
-
-        const label = "还原声音";
-        setStage({ label, value: 0 });
-        await nextFrame();
-        const pcm = await synthesise(spec, alive, v => {
-          if (alive()) setStage({ label, value: v });
-        });
-        if (!alive()) return;
-
-        setMode(readMode);
-        setEnc(() => adoptMeta(spec.meta));
-        setSource({ pcm, sr: spec.meta.sr, name: file.name });
-        if (guessed)
-          setHint(
-            "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
-          );
-        else if (phaseReliability !== null && phaseReliability < 0.5)
-          setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
-        return;
+        if (!alive()) return null;
+        const cur = jobRef.current;
+        // 等的时候参数被改过：这一份已经不是当前这张图。
+        if (!cur || cur.spec !== spec) return null;
+        putJob({ ...cur, audio });
+        return audio;
+      } catch (e) {
+        if (e instanceof Aborted) return null;
+        console.error(e);
+        if (alive()) setError(e instanceof Error ? e.message : "还原失败");
+        return null;
+      } finally {
+        if (alive()) setStage(null);
       }
+    },
+    [putJob],
+  );
 
-      setStage({ label: "解码", value: 0 });
-      await nextFrame();
-      const { pcm: mono, sr } = await decodeAudioFile(bytes);
-      if (!alive()) return;
+  /** 播放与「存音频」的取音入口：同一张图的还原只算一次。 */
+  const listen = useCallback((): Promise<Samples | null> => {
+    const j = jobRef.current;
+    if (!j) return Promise.resolve(null);
+    if (j.audio) return Promise.resolve(j.audio);
+    const pend = pendingRef.current;
+    if (pend && pend.spec === j.spec) return pend.p;
+    const p = render(j.spec, false);
+    pendingRef.current = { spec: j.spec, p };
+    void p.then(() => {
+      if (pendingRef.current?.p === p) pendingRef.current = null;
+    });
+    return p;
+  }, [render]);
 
-      setMode("compact");
-      setEnc(e => ({ ...reopen(e), ...trimRange(mono, sr) }));
-      setSource({ pcm: mono, sr, name: file.name });
-    } catch (e) {
-      if (!alive() || e instanceof Aborted) return;
-      console.error(e);
-      setError(e instanceof Error ? e.message : "这个文件处理不了");
-    } finally {
-      if (alive()) setStage(null);
-    }
-  }, []);
+  const open = useCallback(
+    async (file: File) => {
+      const my = ++genRef.current;
+      const alive = () => genRef.current === my;
+      setError(null);
+      setStage({ label: "读取", value: 0 });
+      try {
+        const bytes = await file.arrayBuffer();
+        const container: Container = sniff(new Uint8Array(bytes));
+        const looksImage =
+          container !== "?" || file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
+
+        if (looksImage) {
+          setStage({ label: "读图", value: 0 });
+          await nextFrame();
+          const { spec, mode: readMode, guessed, phaseReliability } = await imageToSpectrum(
+            new Blob([bytes]),
+            file.name,
+          );
+          if (!alive()) return;
+
+          const label = "还原声音";
+          setStage({ label, value: 0 });
+          await nextFrame();
+          const pcm = await synthesise(spec, alive, v => {
+            if (alive()) setStage({ label, value: v });
+          });
+          if (!alive()) return;
+
+          setMode(readMode);
+          setEnc(() => adoptMeta(spec.meta));
+          setSource({ pcm, sr: spec.meta.sr, name: file.name });
+          if (guessed)
+            setHint(
+              "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
+            );
+          else if (phaseReliability !== null && phaseReliability < 0.5)
+            setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
+          return;
+        }
+
+        setStage({ label: "解码", value: 0 });
+        await nextFrame();
+        const { pcm: mono, sr } = await decodeAudioFile(bytes);
+        if (!alive()) return;
+
+        setMode("compact");
+        setEnc(e => ({ ...reopen(e), ...trimRange(mono, sr) }));
+        setSource({ pcm: mono, sr, name: file.name });
+      } catch (e) {
+        if (!alive() || e instanceof Aborted) return;
+        console.error(e);
+        setError(e instanceof Error ? e.message : "这个文件处理不了");
+      } finally {
+        if (alive()) setStage(null);
+      }
+    },
+    [setEnc],
+  );
 
   const refine = useCallback(async () => {
-    if (!job) return;
-    const my = ++genRef.current;
-    const alive = () => genRef.current === my;
+    const j = jobRef.current;
+    if (!j) return;
     setError(null);
-    setStage({ label: "精修", value: 0 });
-    try {
-      const pcm = await synthesise(
-        job.spec,
-        alive,
-        v => {
-          if (alive()) setStage({ label: "精修", value: v });
-        },
-        "fine",
-      );
-      if (!alive()) return;
-      setJob(j => (j ? { ...j, pcm } : j));
-      setHint("相位已重建");
-    } catch (e) {
-      if (!alive() || e instanceof Aborted) return;
-      console.error(e);
-      setError(e instanceof Error ? e.message : "精修失败");
-    } finally {
-      if (alive()) setStage(null);
-    }
-  }, [job]);
+    if (await render(j.spec, true)) setHint("相位已重建");
+  }, [render]);
 
   const demo = useCallback(async () => {
     // 与 open / refine 同款代次守卫：演示在解码，用户中途点了「清空」或拖进新文件，
@@ -207,12 +257,12 @@ export function useStudio() {
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
     }
-  }, []);
+  }, [setEnc]);
 
   const clear = useCallback(() => {
     genRef.current++;
+    pendingRef.current = null;
     setSource(null);
-    setJob(null);
     setError(null);
     setHint(null);
   }, []);
@@ -228,6 +278,7 @@ export function useStudio() {
     error,
     hint: [pick.note, hint].filter(Boolean).join("；") || null,
     open,
+    listen,
     refine,
     demo,
     clear,

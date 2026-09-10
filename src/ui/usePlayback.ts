@@ -16,8 +16,18 @@ function audioCtor(): Ctor | undefined {
   );
 }
 
-export function usePlayback(pcm: Samples, sr: number) {
-  const duration = pcm.length / sr;
+/**
+ * 播放**图里装的声音**（`useStudio` 的 `listen()` 负责按需还原），不是编码前的原声。
+ *
+ * 时间轴长度取自 `meta.samples / meta.sr`，与是否已经还原无关 —— 否则音频还没算出来时
+ * 时长会显示成 0、进度条也会失灵。音频没就绪时按播放会先等 `prepare()`，进度由 stage 显示。
+ */
+export function usePlayback(
+  audio: Samples | null,
+  sr: number,
+  duration: number,
+  prepare: () => Promise<Samples | null>,
+) {
   const [playing, setPlaying] = useState(false);
 
   const ctxRef = useRef<AudioContext | null>(null);
@@ -62,7 +72,13 @@ export function usePlayback(pcm: Samples, sr: number) {
     node.disconnect();
   }, []);
 
-  const ensure = useCallback((): AudioContext => {
+  const ensure = useCallback(async (): Promise<AudioContext | null> => {
+    let pcm = audio;
+    if (!pcm) {
+      pcm = await prepare();
+      // 等的时候参数被改过：这一份已经不是「现在这张图」的声音，这一声不放。
+      if (!pcm) return null;
+    }
     let ctx = ctxRef.current;
     if (!ctx) {
       const Ctor = audioCtor();
@@ -78,11 +94,17 @@ export function usePlayback(pcm: Samples, sr: number) {
       bufPcmRef.current = pcm;
     }
     return ctx;
-  }, [pcm, sr]);
+  }, [audio, prepare, sr]);
 
   const start = useCallback(
-    (at: number) => {
-      const ctx = ensure();
+    async (at: number) => {
+      let ctx: AudioContext | null = null;
+      try {
+        ctx = await ensure();
+      } catch (e) {
+        console.error(e);
+      }
+      if (!ctx) return;
       halt();
       void ctx.resume();
 
@@ -130,7 +152,7 @@ export function usePlayback(pcm: Samples, sr: number) {
       setPlaying(false);
       return;
     }
-    start(posRef.current >= duration - 0.02 ? 0 : posRef.current);
+    void start(posRef.current >= duration - 0.02 ? 0 : posRef.current);
   }, [duration, halt, paint, start]);
 
   const seek = useCallback(
@@ -139,7 +161,7 @@ export function usePlayback(pcm: Samples, sr: number) {
       posRef.current = pos;
       liveRef.current = true;
       paint(pos);
-      start(pos);
+      void start(pos);
     },
     [duration, paint, start],
   );
@@ -155,9 +177,10 @@ export function usePlayback(pcm: Samples, sr: number) {
   );
 
   const commit = useCallback(() => {
-    if (Math.abs(posRef.current - startedRef.current) > 1e-4) start(posRef.current);
+    if (Math.abs(posRef.current - startedRef.current) > 1e-4) void start(posRef.current);
   }, [start]);
 
+  // 换一段音频才回到起点 —— 参数变动会重算还原结果，但进度位置不该跟着跳。
   useEffect(() => {
     halt();
     posRef.current = 0;
@@ -165,7 +188,7 @@ export function usePlayback(pcm: Samples, sr: number) {
     liveRef.current = false;
     setPlaying(false);
     paint(0);
-  }, [pcm, sr, halt, paint]);
+  }, [duration, sr, halt, paint]);
 
   useEffect(
     () => () => {
@@ -186,5 +209,5 @@ export function usePlayback(pcm: Samples, sr: number) {
     [duration, seek],
   );
 
-  return { playing, duration, toggle, seek, scrub, commit, nudge, headRef, timeRef };
+  return { playing, toggle, seek, scrub, commit, nudge, headRef, timeRef };
 }
