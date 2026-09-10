@@ -1,5 +1,5 @@
 import type { Samples } from "../src/lib/arrays";
-import { compare, magnitudes, spectral } from "../src/lib/metric";
+import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../src/lib/metric";
 import { TUNE } from "../src/lib/phase";
 import type { Encode } from "../src/lib/params";
 import { encode, synthesise } from "../src/lib/spectrum";
@@ -86,6 +86,10 @@ interface Row {
 
   conv: number;
   lsd: number;
+  /** 包络相关：人耳真正听的那个量，`corr` 严重低估它 */
+  env: number;
+  /** 感知谱距：临界带 + 响度压缩后的 dB，约为 lsd 的 0.3 倍，别横比 */
+  bark: number;
   ms: number;
 }
 
@@ -110,6 +114,8 @@ async function runCase(name: string, gen: (sr: number, sec: number) => Samples, 
     corr: Math.round(m.corr * 1000) / 1000,
     conv: Math.round(conv * 10) / 10,
     lsd: Math.round(m.lsd * 10) / 10,
+    env: Math.round(envelopeCorr(ref, got, sr) * 1000) / 1000,
+    bark: Math.round(barkDistance(ref, got, sr) * 100) / 100,
     ms: Math.round(t1 - t0),
   };
 }
@@ -168,6 +174,8 @@ if (json) {
       "相关".padStart(8) +
       "收敛 dB".padStart(9) +
       "谱差 dB".padStart(9) +
+      "包络".padStart(8) +
+      "感知谱距".padStart(10) +
       "耗时 ms".padStart(9),
   );
   for (const r of rows)
@@ -177,6 +185,8 @@ if (json) {
         r.corr.toFixed(3).padStart(8) +
         r.conv.toFixed(1).padStart(9) +
         r.lsd.toFixed(1).padStart(9) +
+        r.env.toFixed(3).padStart(8) +
+        r.bark.toFixed(2).padStart(10) +
         String(r.ms).padStart(9),
     );
   if (doGate) {
