@@ -69,10 +69,23 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
   写进缓存。
   壳清单是**相对路径全链路**（manifest 的 `"./"`、`new URL(entry, sw.js 的位置)`、注册的 `"./sw.js"`），
   所以子路径部署天然成立，不需要任何一处写死应用根。
-- **构建期两道校验**。壳清单是从 `index.html` 里正则推出来的，引用写错只会让条目静默消失、不会让
-  构建失败，所以 `build.ts` 逐项核实它们确实落进了 `dist/`（含 manifest 自己引的两份图标）。另一条
-  是反向不变量：`sw.js` 一旦被 `index.html` 直接引到就立刻终止构建 —— 它进了壳，浏览器此后只会拿到
-  旧的 Service Worker，再也发不出新版。
+- **构建期四道校验**。壳清单是从 `index.html` 里正则推出来的，所以两个方向都要盯，再加两条反向
+  不变量：
+  ① **「多」**：逐项核实条目确实落进了 `dist/`（含 manifest 自己引的两份图标）。引用写错只会让条目
+  静默消失、不会让构建失败，这条把它变成硬失败。
+  ② **「少」**：拿 `Bun.build` 的 `result.outputs` 对一遍 —— 每个 CSS 与每个非 HTML 的入口产物都
+  必须在壳里。正则一旦跟不上产物形态，壳会静默缩水成一条 `index.html`，线上表现为首次离线导航
+  白屏；这条让它在构建期就炸。
+  ③ **壳外的东西不许进壳**：只在 `result.metafile` 的 `dynamic-import` 里出现、且没有任何静态
+  import 用到的产物，一律不许进壳。「壳 = 首屏所需」是这个设计的地基，1.8 MB 解码器分包正靠这条
+  被挡在外面。
+  ④ `sw.js` 一旦被 `index.html` 直接引到就立刻终止构建 —— 它进了壳，浏览器此后只会拿到旧的
+  Service Worker，再也发不出新版。
+- **正则在产物上成立不是巧合**。实测 `Bun.build` 会把 `href='./x'`、`href=./x`、`href="icons/x.png"`
+  一律改写成 `href="./<name>-<hash>.<ext>"`；而绝对路径 `/icons/x.png` 与 `srcset="a 1x, b 2x"`
+  直接构建失败（`Could not resolve`）。所以「漏匹配」只剩「正则自己失灵」一种可能 —— 那正是上面
+  ② 盯的。Bun 还会替静态 chunk 自己插 `<link rel="modulepreload" href="./chunk-….js">`，形态相同，
+  自动落进壳，不需要额外处理。
 - **预缓存缺一项就不接管**：`install` 用 `Promise.all`，任一壳资源失败即安装失败，旧的 Worker 继续
   服役，浏览器下次导航重试。改用 `allSettled` 的话，缺一项的半壳照样激活，要等到断网白屏才暴露，
   而那时用户和日志之间已经隔了很远。
@@ -112,6 +125,16 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 | `5568702` | 换 vite-plugin-pwa（injectManifest + workbox 预缓存），导航统一回退应用壳 |
 | `6c5e949` | `autoUpdate` → `prompt`，**删掉 `skipWaiting` 与 `clientsClaim`** |
 | `3138ea7` | 整体移除 |
+
+`5568702` 那版一次装了六个包（`vite-plugin-pwa` + `workbox-core` / `precaching` / `routing` /
+`strategies` / `window`），但最终态只 `import` 了两个 —— `workbox-precaching` 与 `workbox-routing`。
+`workbox-strategies` 一次没用；`workbox-window` 本就是 `vite-plugin-pwa` 的依赖，属重复声明。
+**本仓库不引这一套**（2026-09 在临时目录实测过，别再重新论证）：它是 Vite 插件，本项目没有 Vite；
+裸 `workbox-build` 的 `injectManifest` 能在 Bun 下跑通，但代价是 338 个包 / 101 MB，同功能的
+`dist/sw.js` 31.0 KB（gzip 9.9）对手写的 1.1 KB（gzip 0.6），且默认 `globPatterns: ['**/*']` 会把
+全量 2.0 MB 扫进壳 —— 本仓库的壳是正则推出的 287 KB / 8 项，正好把 1.9 MB 动态分包挡在外面，
+这是设计不是巧合。另：`injectManifest` 默认输出保留裸 `import`（module SW），得配 `rollupFormat: 'iife'`
+才回到 classic；Bun 直接出 classic，0 配置。
 
 同一条线上的三个位置，本仓库与它不同：
 

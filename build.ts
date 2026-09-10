@@ -14,6 +14,7 @@ const result = await Bun.build({
   sourcemap: "none",
   splitting: true,
   reactCompiler: true,
+  metafile: true,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },
@@ -56,6 +57,32 @@ if (precache.includes("sw.js") || precache.some(entry => entry.endsWith("/sw.js"
 for (const entry of precache)
   if (!(await Bun.file(path.join(outdir, entry)).exists())) {
     console.error(`预缓存清单里的 ${entry} 不在 dist/ 里：清单由 index.html 推出，多半是引用写错了`);
+    process.exit(1);
+  }
+
+// 上面那条只管「多」：引用写错会被抓住。清单「少」了却没人吭声 —— 正则一旦跟不上产物形态，
+// 壳会静默缩水成一条 index.html，线上表现为首次离线导航白屏。用打包器自己的产物清单对一遍：
+// 每个 CSS 与每个非 HTML 的入口产物，都必须落在壳里。
+for (const output of result.outputs) {
+  if (!output.path.endsWith(".css") && !(output.kind === "entry-point" && !output.path.endsWith(".html")))
+    continue;
+  const rel = path.relative(outdir, output.path);
+  if (!precache.includes(rel)) {
+    console.error(`打包器产出了 ${rel}，预缓存清单里却没有：清单是正则从 index.html 推的，多半是正则失灵了`);
+    process.exit(1);
+  }
+}
+
+// 反方向：只在 dynamic-import 里出现的产物是壳外的东西（解码器 1.9 MB，按需 import）。
+// 它一旦进壳，首次访问就会全量拉下来 —— 这条守住「壳 = 首屏所需」这个设计。
+const dynamicTargets = new Set<string>();
+const staticTargets = new Set<string>();
+for (const output of Object.values(result.metafile!.outputs))
+  for (const imported of output.imports ?? [])
+    (imported.kind === "dynamic-import" ? dynamicTargets : staticTargets).add(imported.path);
+for (const target of dynamicTargets)
+  if (!staticTargets.has(target) && precache.includes(target.replace(/^\.\//, ""))) {
+    console.error(`${target} 只被动态 import 用到，却进了预缓存：壳只装首屏所需，按需分包不该预取`);
     process.exit(1);
   }
 
