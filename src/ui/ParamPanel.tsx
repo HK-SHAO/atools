@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import * as stylex from "@stylexjs/stylex";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -10,23 +9,7 @@ import {
   type Encode,
   type Mode,
 } from "../lib/params";
-import { kit } from "./kit";
 import { OptionRow, Row, type Option } from "./OptionRow";
-
-const params = stylex.create({
-  panel: {
-    display: { default: "flex", "@container (min-width: 800px)": "grid" },
-    flexDirection: "column",
-    gridTemplateColumns: { "@container (min-width: 800px)": "repeat(auto-fit, minmax(11em, 1fr))" },
-    rowGap: "0.125em",
-    columnGap: { "@container (min-width: 800px)": "1.25em" },
-    alignItems: { "@container (min-width: 800px)": "center" },
-    paddingTop: "0.5em",
-    borderTopWidth: "1px",
-    borderTopStyle: "solid",
-    borderTopColor: "var(--line)",
-  },
-});
 
 const MODE_OPTIONS: readonly Option<Mode>[] = [
   { value: "compact", label: "紧凑" },
@@ -79,10 +62,9 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
   );
 
   const field = (side: "start" | "end", aria: string, placeholder?: string) => (
-    <label data-el="num" {...stylex.props(kit.num)}>
+    <label className="num">
       <span aria-hidden="true">{side === "start" ? "起" : "止"}</span>
       <input
-        {...stylex.props(kit.numInput)}
         type="number"
         aria-label={aria}
         min={0}
@@ -105,7 +87,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
   );
 
   return (
-    <div data-el="params" {...stylex.props(params.panel)}>
+    <div className="params">
       <OptionRow<Mode> label="模式" value={enc.mode} options={MODE_OPTIONS} onPick={v => set("mode", v)} />
       <OptionRow<number>
         label="采样"
@@ -128,7 +110,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
       <Row label="区间">
         {field("start", "起点秒数")}
         {field("end", "终点秒数", "结尾")}
-        <button type="button" data-el="chip" {...stylex.props(kit.chip, kit.chipHover)} onClick={onTrim}>
+        <button type="button" className="chip" onClick={onTrim}>
           裁静音
         </button>
       </Row>

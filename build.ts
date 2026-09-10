@@ -1,18 +1,5 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
-import stylex from "@stylexjs/unplugin";
-
-const NOT_CODE = /\.(?!html?$|[cm]?[jt]sx?$|css$|json$|map$|txt$)[^.]+$/;
-
-const asset: Bun.BunPlugin = {
-  name: "asset",
-  setup(build) {
-    build.onLoad({ filter: NOT_CODE }, async (args) => ({
-      contents: new Uint8Array(await Bun.file(args.path).arrayBuffer()),
-      loader: "file",
-    }));
-  },
-};
 
 const toy = process.argv.slice(2).includes("--toy");
 const outdir = path.join(process.cwd(), "dist");
@@ -26,14 +13,6 @@ const result = await Bun.build({
   sourcemap: "none",
   splitting: true,
   reactCompiler: true,
-  plugins: [
-    asset,
-    stylex.esbuild({
-      useCSSLayers: false,
-      importSources: ["@stylexjs/stylex"],
-      unstable_moduleResolution: { type: "commonJS" },
-    }),
-  ],
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },

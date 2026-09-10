@@ -1,0 +1,58 @@
+/* --u 与 --c-vh 必须注册成 <length>：注册后才在 .shell 上把 cqi/cqb 解析成绝对 px
+   再随继承下发；不注册则容器单位留在令牌里、到使用点才解析，会被最近的
+   container-type: inline-size 容器（.card）抢走，卡片内尺寸静默错位。 */
+@property --u {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 16px;
+}
+
+@property --c-vh {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 6.67px;
+}
+
+:root {
+  --bg-warm:
+    radial-gradient(circle at 18% 12%, rgba(255, 196, 83, 0.3), transparent 44%),
+    linear-gradient(180deg, #fff8ea 0%, #f8e6c4 100%);
+
+  --ink: #3d3427;
+  --soft: #8a7d68;
+  --line: rgba(61, 52, 39, 0.13);
+  --line-strong: rgba(61, 52, 39, 0.3);
+  --glass: rgba(255, 252, 245, 0.66);
+  --glass-hover: rgba(255, 252, 245, 0.85);
+  --glass-line: rgba(255, 255, 255, 0.6);
+
+  --r-pill: 999px;
+
+  --font: ui-rounded, -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
+    system-ui, sans-serif;
+
+  color-scheme: light;
+}
+
+/* .app 是容器，.shell 是它的令牌根：容器单位只认祖先容器，令牌根必须在容器下一层 */
+.shell {
+  --c-max: 1180px;
+  --c-eff: min(100cqi, 160cqb);
+  --c-vh: 1cqb;
+
+  --u: min(calc(var(--c-eff) * 14 / 340), calc(14px + (var(--c-eff) - 340px) / 280), 16.5px);
+
+  --fs-lead: calc(0.9375 * var(--u));
+  --fs-hi: calc(0.75 * var(--u));
+  --fs-lo: calc(0.6875 * var(--u));
+  --h-ctl: calc(1.75 * var(--u));
+
+  --r-md: calc(0.75 * var(--u));
+  --r-lg: calc(1 * var(--u));
+
+  --blur: blur(calc(0.75 * var(--u))) saturate(1.2);
+
+  --shadow-ctl: 0 calc(0.125 * var(--u)) calc(0.5 * var(--u)) rgba(61, 52, 39, 0.06);
+  --shadow-hover: 0 calc(0.25 * var(--u)) calc(1 * var(--u)) rgba(61, 52, 39, 0.16);
+  --shadow-card: 0 calc(0.5 * var(--u)) calc(1.5 * var(--u)) rgba(61, 52, 39, 0.07);
+}

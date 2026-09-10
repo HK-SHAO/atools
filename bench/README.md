@@ -20,7 +20,7 @@
 - `cdp.ts` —— Chromium 路径、CDP 会话（`send` / `ev` / `on` / `goto` / `shot`）、静态文件服务都在这里，
   三个浏览器侧入口共用，别在各自文件里再抄一份。页面里的求值一律走 `ev`。
 - `entry.ts` —— 打进页面的评测内核（`window.Bench`），被 `run.ts` 重打成 `bundle-<PORT>.js`。
-- 页面取样一律用 `data-el="<名字>"`（组件类名已被 StyleX 换成原子哈希），清单见 `docs/build.md`。
+- 页面取样一律用语义类名（`.act` / `.params .chip` / `.spec` 等），清单见 `docs/build.md`。这些类名是契约，改名要同步改这里。
 
 ## 质量回归（quality.ts）
 

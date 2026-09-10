@@ -43,11 +43,11 @@ try {
   await session.shot(`/tmp/smoke-${TAG}-loaded.png`);
 
   const gridCols = await session.ev<string>(
-    `return getComputedStyle(document.querySelector('[data-el="params"]')).gridTemplateColumns`,
+    `return getComputedStyle(document.querySelector('.params')).gridTemplateColumns`,
   );
 
   const [x, y] = await session.ev<[number, number]>(`
-    const r = document.querySelector('[data-el="spec"]').getBoundingClientRect();
+    const r = document.querySelector('.spec').getBoundingClientRect();
     return [r.left + r.width * 0.66, r.top + r.height / 2];
   `);
   for (const type of ["mousePressed", "mouseReleased"])
@@ -55,12 +55,12 @@ try {
   await sleep(900);
 
   const playing = await session.ev<string | null>(
-    `return document.querySelector('[data-el="icon-btn"]')?.getAttribute('aria-label')`,
+    `return document.querySelector('.icon-btn')?.getAttribute('aria-label')`,
   );
   const head = await session.ev<[string, number, number]>(`
-    const h = document.querySelector('[data-el="spec-head"]');
+    const h = document.querySelector('.spec-head');
     const s = h.getBoundingClientRect();
-    const p = document.querySelector('[data-el="spec"]').getBoundingClientRect();
+    const p = document.querySelector('.spec').getBoundingClientRect();
     return [h.style.opacity, Math.round(s.left - p.left), Math.round(p.right - s.right)];
   `);
   await session.shot(`/tmp/smoke-${TAG}-playing.png`);
@@ -68,7 +68,7 @@ try {
   await click(/质检/);
   await sleep(Number(process.env.WAIT ?? 9000));
   const facts = await session.ev<string>(
-    `return [...document.querySelectorAll('[data-el="facts"]')].map((x) => x.textContent).join(' | ')`,
+    `return [...document.querySelectorAll('.facts')].map((x) => x.textContent).join(' | ')`,
   );
   await session.shot(`/tmp/smoke-${TAG}-audit.png`);
 

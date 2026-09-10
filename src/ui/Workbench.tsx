@@ -1,12 +1,10 @@
 import { useCallback, useMemo } from "react";
-import * as stylex from "@stylexjs/stylex";
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import { downloadName, type ReadMode } from "../lib/image";
 import { srLabel, type Encode } from "../lib/params";
 import type { Spectrum } from "../lib/spectrum";
 import { wavFile } from "../lib/wav";
-import { kit } from "./kit";
 import { ParamPanel } from "./ParamPanel";
 import { buildSheet } from "./raster";
 import { Spectrogram } from "./Spectrogram";
@@ -51,33 +49,6 @@ function save(blob: Blob, filename: string): void {
     URL.revokeObjectURL(url);
   }, 0);
 }
-
-const bench = stylex.create({
-  bar: { display: "flex", alignItems: "center", gap: "0.5em" },
-  time: {
-    margin: 0,
-    fontSize: "var(--fs-hi)",
-    letterSpacing: "0.04em",
-    fontVariantNumeric: "tabular-nums",
-  },
-  facts: {
-    color: "var(--soft)",
-    margin: 0,
-    fontSize: "var(--fs-lo)",
-    letterSpacing: "0.04em",
-  },
-  acts: {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: "0.25em",
-    paddingTop: "0.5em",
-    borderTopWidth: "1px",
-    borderTopStyle: "solid",
-    borderTopColor: "var(--line)",
-  },
-  tick: { fontSize: "var(--fs-lo)", letterSpacing: "0.1em" },
-});
 
 interface Props {
   spec: Spectrum;
@@ -133,7 +104,7 @@ export function Workbench({
   const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin && !spec.phaseWeak);
 
   return (
-    <section {...stylex.props(kit.card)}>
+    <section className="card">
       <Spectrogram
         sheet={sheet}
         headRef={headRef}
@@ -143,15 +114,14 @@ export function Workbench({
         onNudge={nudge}
       />
 
-      <div {...stylex.props(bench.bar)}>
+      <div className="bar">
         <button
           type="button"
-          data-el="icon-btn"
-          {...stylex.props(kit.iconBtn)}
+          className="icon-btn"
           onClick={toggle}
           aria-label={playing ? "暂停" : "播放"}
         >
-          <svg {...stylex.props(kit.ico)} viewBox="0 0 24 24" aria-hidden="true">
+          <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
             {playing ? (
               <path d="M9 6v12M15 6v12" />
             ) : (
@@ -159,14 +129,14 @@ export function Workbench({
             )}
           </svg>
         </button>
-        <p {...stylex.props(bench.time)}>
+        <p className="time">
           <span ref={timeRef}>0:00</span>
-          <span {...stylex.props(kit.dim)}> / {clock(duration)}</span>
+          <span className="dim"> / {clock(duration)}</span>
         </p>
-        {busy && <span {...stylex.props(kit.dim, bench.tick)}>转换中</span>}
+        {busy && <span className="dim tick">转换中</span>}
       </div>
 
-      <p data-el="facts" {...stylex.props(bench.facts)}>
+      <p className="facts">
         采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
         {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
         {loss ? `${lossLine(loss, meta.exact)}；` : ""}
@@ -176,24 +146,18 @@ export function Workbench({
 
       <StatusNote stage={stage} error={error} />
 
-      <div {...stylex.props(bench.acts)}>
-        <button type="button" data-el="act" {...stylex.props(kit.act)} onClick={savePng}>
+      <div className="acts">
+        <button type="button" className="act" onClick={savePng}>
           存频谱图
         </button>
-        <button type="button" data-el="act" {...stylex.props(kit.act)} onClick={saveWav}>
+        <button type="button" className="act" onClick={saveWav}>
           存音频
         </button>
-        <button
-          type="button"
-          data-el="act"
-          {...stylex.props(kit.act)}
-          onClick={check}
-          disabled={checking || busy}
-        >
+        <button type="button" className="act" onClick={check} disabled={checking || busy}>
           {checking ? "质检中" : "质检"}
         </button>
         {canRefine && (
-          <button type="button" data-el="act" {...stylex.props(kit.act)} onClick={onRefine} disabled={busy}>
+          <button type="button" className="act" onClick={onRefine} disabled={busy}>
             重建相位
           </button>
         )}

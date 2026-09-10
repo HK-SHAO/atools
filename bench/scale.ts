@@ -33,19 +33,19 @@ const curveU = (w: number, h: number): number => {
 
 const CONTROLS = ["act", "chip", "num", "icon-btn", "drop-act"];
 const SELECTORS = [
-  '[data-el="act"]',
-  '[data-el="params"] [data-el="chip"]',
-  '[data-el="params"] [data-el="num"]',
-  '[data-el="icon-btn"]',
-  '[data-el="drop-act"]',
+  '.act',
+  '.params .chip',
+  '.params .num',
+  '.icon-btn',
+  '.drop-act',
 ];
 
 const PROBE = `
   const px = (v) => parseFloat(v);
-  const app = document.querySelector('[data-el="app"]');
-  const shell = document.querySelector('[data-el="shell"]');
-  const params = document.querySelector('[data-el="params"]');
-  const chip = document.querySelector('[data-el="params"] [data-el="chip"]');
+  const app = document.querySelector('.app');
+  const shell = document.querySelector('.shell');
+  const params = document.querySelector('.params');
+  const chip = document.querySelector('.params .chip');
   const height = (sel) => {
     const el = document.querySelector(sel);
     return el ? +el.getBoundingClientRect().height.toFixed(3) : null;
@@ -58,8 +58,8 @@ const PROBE = `
     u: px(getComputedStyle(shell).getPropertyValue('--u')),
     box: { w: app.clientWidth, h: app.clientHeight },
     params: getComputedStyle(params).display,
-    title: font('[data-el="title"]'),
-    chip: font('[data-el="params"] [data-el="chip"]'),
+    title: font('.head h1'),
+    chip: font('.params .chip'),
     heights: ${JSON.stringify(SELECTORS)}.map(height),
     tokens: Object.fromEntries(
       ${JSON.stringify(Object.keys(RATIOS))}.map((k) => [k, getComputedStyle(chip).getPropertyValue(k).trim()]),
@@ -68,30 +68,30 @@ const PROBE = `
 `;
 
 const DROP = `
-  if (!document.querySelector('[data-el="params"]')) {
+  if (!document.querySelector('.params')) {
     const blob = await (await fetch('/audio/${SAMPLE}')).blob();
     const dt = new DataTransfer();
     dt.items.add(new File([blob], 'sample.mp3', { type: blob.type }));
-    document.querySelector('[data-el="app"]').dispatchEvent(
+    document.querySelector('.app').dispatchEvent(
       new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }),
     );
   }
   for (let i = 0; i < 150; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    if (document.querySelector('[data-el="params"]')) return true;
+    if (document.querySelector('.params')) return true;
   }
   return false;
 `;
 
 const SWEEP = `
-  const app = document.querySelector('[data-el="app"]');
-  const shell = document.querySelector('[data-el="shell"]');
-  const params = document.querySelector('[data-el="params"]');
+  const app = document.querySelector('.app');
+  const shell = document.querySelector('.shell');
+  const params = document.querySelector('.params');
   const style = document.createElement('style');
   document.head.append(style);
   const out = [];
   for (const w of [1500, 900, 800, 600, 520]) {
-    style.textContent = '[data-el="app"]{width:' + w + 'px}';
+    style.textContent = '.app{width:' + w + 'px}';
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     out.push({
       w,
@@ -133,8 +133,11 @@ if (cssFiles.length !== 1) {
   process.exit(1);
 }
 const css = await Bun.file(`${project}/dist/${cssFiles[0]}`).text();
-if (css.includes("@layer")) fail(`${cssFiles[0]} 含 @layer：dev 与生产级联口径不一致`);
-if (!css.includes("@property --u")) fail(`${cssFiles[0]} 丢了 @property --u：尺度令牌会被最近的内联容器抢走`);
+for (const [needle, why] of [
+  ["@property --u", "尺度令牌会被最近的内联容器抢走"],
+  ["-webkit-backdrop-filter", "Safari 的毛玻璃会静默失效"],
+] as const)
+  if (!css.includes(needle)) fail(`${cssFiles[0]} 丢了 ${needle}：${why}`);
 
 const server = serveDir(PORT, `${project}/dist`, { "/audio/": `${project}/docs/` });
 const session = await open({ port: CDP, size: SIZES[0]!, url: `http://127.0.0.1:${PORT}/` });
@@ -149,11 +152,11 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await session.goto(`http://127.0.0.1:${PORT}/`, '[data-el="app"]');
+    await session.goto(`http://127.0.0.1:${PORT}/`, '.app');
     await sleep(400);
 
     const bare = await session.ev<number | null>(
-      `const el = document.querySelector('[data-el="drop-act"]');
+      `const el = document.querySelector('.drop-act');
        return el ? +el.getBoundingClientRect().height.toFixed(3) : null;`,
     );
     if (!(await session.ev<boolean>(DROP))) throw new Error(`${w}px：样例音频未载入`);
@@ -222,7 +225,7 @@ try {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await session.goto(`http://127.0.0.1:${PORT}/`, '[data-el="shell"]');
+  await session.goto(`http://127.0.0.1:${PORT}/`, '.shell');
   await session.ev(DROP);
   await sleep(250);
 

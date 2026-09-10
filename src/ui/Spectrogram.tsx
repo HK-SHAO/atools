@@ -1,34 +1,5 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
-import * as stylex from "@stylexjs/stylex";
-import { kit } from "./kit";
 import type { Raster } from "./raster";
-
-const spec = stylex.create({
-  box: {
-    position: "relative",
-    width: "100%",
-    height: "clamp(6.5em, calc(24 * var(--c-vh)), 12em)",
-    overflow: "hidden",
-    borderRadius: "var(--r-md)",
-    backgroundColor: "#1d1710",
-    boxShadow: "inset 0 0 0 1px rgba(61, 52, 39, 0.16)",
-    cursor: "pointer",
-    touchAction: "none",
-  },
-  canvas: { display: "block", width: "100%", height: "100%" },
-  head: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    left: 0,
-    width: "0.15em",
-    backgroundColor: "#fff",
-    mixBlendMode: "difference",
-    opacity: 0,
-    pointerEvents: "none",
-    willChange: "left",
-  },
-});
 
 interface Props {
   sheet: Raster;
@@ -83,10 +54,9 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
   return (
     <div
       ref={boxRef}
-      data-el="spec"
+      className="spec"
       tabIndex={0}
       aria-label="播放进度：点按即播，拖动可擦洗，左右方向键微调"
-      {...stylex.props(kit.squircle, kit.focusSm, spec.box)}
       onPointerDown={e => {
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -109,8 +79,8 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
         onNudge((e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 0.1 : 0.02));
       }}
     >
-      <canvas ref={canvasRef} {...stylex.props(spec.canvas)} />
-      <div ref={headRef} data-el="spec-head" {...stylex.props(spec.head)} />
+      <canvas ref={canvasRef} className="spec-canvas" />
+      <div ref={headRef} className="spec-head" />
     </div>
   );
 }
