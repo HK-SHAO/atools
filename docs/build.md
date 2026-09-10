@@ -37,3 +37,28 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 `.params .num` / `.icon-btn` / `.drop-act` / `.spec` / `.spec-head` / `.facts` / `.app` /
 `.shell` / `.head h1`）。不给组件加 `data-*` 中转：类名本身就是稳定的语义钩子，
 多一层只会让同一件事有两个出处。反过来说，这些类名是**契约**，改名要同步改 `bench/`。
+
+## PWA 与离线
+
+产物另有三样：`sw.js`、`manifest.webmanifest` 与 `icons/`，都由 `bun run build:web` 定夺。
+
+- **manifest 立在 `src/` 根**（与 `index.html` 同级），因为 `scope` 与 `start_url` 都写 `"./"`：
+  它一旦挪进子目录，这两个值就会被解析成那个子目录，装出来的应用直接打不开。
+- **manifest 的内容不经过打包器改写**，所以它引的 `icons/icon-192.png`、`icons/icon-512.png`
+  由 `build.ts` 按字面路径原样落进 `dist/`；只有 HTML 直接引的 `apple-touch-icon` 照常走哈希输出。
+- **图标**：iOS 不认 SVG，`apple-touch-icon` 必须是 PNG。三个 PNG 由 `src/icons/icon.svg` 光栅化而来
+  （满幅底色、无圆角，四条竖杠缩到 0.82 倍以避开圆形遮罩）。本机没有 rsvg/inkscape，
+  用的是仓库自带的 Chromium 快照：照 `bench/cdp.ts` 的 `open()` 开该 SVG，
+  `Emulation.setDeviceMetricsOverride` 定尺寸后 `Page.captureScreenshot`（180 / 192 / 512 各一张）。
+  一次性产物，改图稿要重出，别把这套塞进构建。
+- **Service Worker**：`dist/index.html` 直接引用到的资源就是应用壳，`build.ts` 把这份清单注入
+  `sw.js` 的 `__PRECACHE__`，缓存名取清单的哈希，改了哪块只换哪块。音频解码器是动态 import 的分包，
+  不进壳，改由运行期缓存兜住 —— 用过一次的格式此后离线可用。导航走网络优先（`sw.js` 每次导航都会被
+  重新校验，发新版即接管），其余同源 GET 走缓存优先。
+- **只在生产注册**：`frontend.tsx` 以 `import.meta.hot` 为界，dev 下不注册，免得 HMR 被旧缓存顶着。
+  dev 下 Bun 把 `manifest` 改写成 `/_bun/asset/<hash>.<ext>`，manifest 内部的相对图标路径因此解析不到；
+  这是 dev 才有的现象，图标只在产物里成立，不必去修。
+- **门禁**：`bun bench/offline.ts`。其中的「断网」是直接关掉 HTTP 服务，不是 CDP 模拟 ——
+  实测 `Network.emulateNetworkConditions` 对回环不起作用，探针的对照地址照样拿到 404，整段断言会是空的。
+  离线的 200 用 `fetch(url, { cache: 'reload' })` 判定：该模式强制绕过 HTTP 缓存，源又真的不可达，
+  此时还能拿到 200 就只可能是 Service Worker 给的。

@@ -7,7 +7,7 @@ import { RAMP } from "./palette";
 import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
-import { resample, silenceBounds, slice } from "./resample";
+import { resample, silenceBounds, slice, trimRange } from "./resample";
 
 function signal(samples: number, sr: number): Samples {
   const out = new Float32Array(samples);
@@ -127,6 +127,55 @@ describe("resample", () => {
     const y = resample(x, sr, sr, 3000);
     expect(y.length).toBe(sr);
   });
+
+  // 相位权重查表是纯缓存：值与逐样点现算逐位相同，音质门禁因此不会漂
+  test("phase table is bit-identical to computing each tap inline", () => {
+    const naive = (x: Samples, from: number, to: number, cutoffHz = 0): Float32Array => {
+      const ratio = from / to;
+      const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
+      const nyq = 0.5 * Math.min(1, to / from);
+      const limit = cutoffHz > 0 ? Math.min(nyq, cutoffHz / from) : nyq;
+      const fc = limit * 0.92;
+      const half = Math.min(64, Math.max(3, Math.round(2 / Math.max(fc, 1e-5))));
+      for (let j = 0; j < out.length; j++) {
+        const center = j * ratio;
+        const i0 = Math.floor(center);
+        const frac = center - i0;
+        let acc = 0;
+        let wsum = 0;
+        for (let m = 1 - half; m <= half; m++) {
+          const d = m - frac;
+          const t = d / (half + 0.5);
+          const w =
+            (d === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * d) / (Math.PI * d)) *
+            (0.42 + 0.5 * Math.cos(Math.PI * t) + 0.08 * Math.cos(2 * Math.PI * t));
+          const i = i0 + m;
+          if (i >= 0 && i < x.length) {
+            acc += x[i]! * w;
+            wsum += w;
+          }
+        }
+        out[j] = wsum !== 0 ? acc / wsum : 0;
+      }
+      return out;
+    };
+
+    const src = signal(44100, 44100 * 2);
+    for (const [from, to, cutoff] of [
+      [44100, 8000, 0],
+      [44100, 16000, 0],
+      [44100, 48000, 0],
+      [44100, 44100, 3000],
+      [48000, 44100, 0],
+    ] as [number, number, number][]) {
+      const got = resample(src, from, to, cutoff);
+      const want = naive(src, from, to, cutoff);
+      expect(got.length).toBe(want.length);
+      let same = true;
+      for (let i = 0; i < got.length; i++) if (got[i] !== want[i]) same = false;
+      expect([from, to, cutoff, same]).toEqual([from, to, cutoff, true]);
+    }
+  });
 });
 
 describe("crop", () => {
@@ -150,6 +199,31 @@ describe("crop", () => {
     expect(b.start).toBeLessThan(0.6);
     expect(b.end).toBeGreaterThan(1.1);
     expect(b.end).toBeLessThan(1.35);
+  });
+
+  test("trim range drops the quiet ends of a loaded clip", () => {
+    const sr = 8000;
+    const n = sr * 2;
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      x[i] = t > 0.5 && t < 1.2 ? 0.6 * Math.sin(2 * Math.PI * 300 * t) : 0;
+    }
+    const r = trimRange(x as Samples, sr);
+    expect(r).not.toBeNull();
+    expect(r!.start).toBeGreaterThan(0.4);
+    expect(r!.end).toBeLessThan(1.35);
+  });
+
+  test("trim range leaves audio that is loud end to end alone", () => {
+    const sr = 8000;
+    const x = signal(sr * 2, sr);
+    expect(trimRange(x, sr)).toBeNull();
+  });
+
+  test("trim range gives up on pure silence", () => {
+    const sr = 8000;
+    expect(trimRange(new Float32Array(sr) as Samples, sr)).toBeNull();
   });
 });
 

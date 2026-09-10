@@ -1,6 +1,6 @@
 {
   "name": "atools",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
   "author": {
     "name": "烧风 HK-SHAO",
@@ -16,6 +16,8 @@
     "deploy": "bun run build:web && bunx wrangler deploy --config cloudflare/wrangler.jsonc",
     "test": "bun test",
     "quality": "bun bench/quality.ts",
+    "offline": "bun bench/offline.ts",
+    "perf": "bun bench/perf.ts",
     "bench": "bun bench/run.ts",
     "smoke": "bun bench/smoke.ts"
   },

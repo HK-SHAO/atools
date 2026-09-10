@@ -12,6 +12,8 @@ bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 bun bench/scale.ts       # 尺度门禁：字号随容器等比、五种控件同高、令牌锚在当前容器上
+bun bench/offline.ts     # PWA 门禁：manifest 可装、应用壳断网可用（先 build:web）
+bun run perf             # 性能体检：重采样相位表倍数 + 页面主线程长任务
 ```
 
 包管理一律 Bun（`bun install` / `bunx`），不引入 npm/yarn 配置。
@@ -23,8 +25,9 @@ src/lib/     算法层（纯函数，无 DOM 依赖，可被 Bun 直接测试）
 src/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset/tokens/primitives/layout/spectrogram/workbench
 src/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 src/ui/      组件与 hooks，只是结构与行为；样式一律在 src/styles/ 里，组件上只有语义类名
-bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，smoke.ts 冒烟）
-docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建与样式管线）
+src/sw.ts    Service Worker（应用壳预缓存 + 运行期缓存）；manifest 与 icons 同样立在 src/ 根
+bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，offline.ts 守 PWA，perf.ts 看性能，smoke.ts 冒烟）
+docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）
 ```
 
 数据流：`pcm → encode() → Spectrum{levels, phaseCos/Sin, Meta} → PNG/容器 → 读图 → Spectrum → synthesise() → pcm`。`Meta` 是唯一权威参数（sr/win/hop/frames/bins/samples/bits/ref/exact），随 tEXt、文件名、条码票根三路冗余传递。

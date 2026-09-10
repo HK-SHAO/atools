@@ -80,3 +80,16 @@ export function mirrorSpectrum(re: Float64Array, im: Float64Array, bins: number,
     im[size - b] = -im[b]!;
   }
 }
+
+export function coverage(win: number, hop: number, frames: number, padded: number): Float64Array {
+  const w = hannWindow(win);
+  const ww = new Float64Array(win);
+  for (let m = 0; m < win; m++) ww[m] = w[m]! * w[m]!;
+
+  const cover = new Float64Array(padded);
+  for (let f = 0; f < frames; f++) {
+    const s = f * hop;
+    for (let m = 0; m < win; m++) cover[s + m] = cover[s + m]! + ww[m]!;
+  }
+  return cover;
+}

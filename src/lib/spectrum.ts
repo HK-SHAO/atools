@@ -1,5 +1,5 @@
 import type { Samples } from "./arrays";
-import { FFT, hannWindow, mirrorSpectrum } from "./fft";
+import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
 import { FINENESS, SR_OPTIONS, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
@@ -15,6 +15,7 @@ export const DEFAULT_SR = 44100;
 const DB_MIN = -120;
 const DB_MAX = 0;
 const DB_SPAN = DB_MAX - DB_MIN;
+const DB_TO_LIN = Math.LN10 / 20;
 
 export const SYNTH_TUNE = { phaseDeadZone: 0.1 };
 
@@ -278,8 +279,9 @@ export async function encode(
       core.analyse(x, f * hop);
       const base = f * bins;
       for (let b = 0; b < bins; b++) {
-        const m = Math.sqrt(core.re[b]! * core.re[b]! + core.im[b]! * core.im[b]!);
-        const db = 20 * Math.log10(m / scale);
+        const re = core.re[b]!;
+        const im = core.im[b]!;
+        const db = 20 * Math.log10(Math.sqrt(re * re + im * im) / scale);
         const v = ((db - floorDb) / span) * 65535;
         levels[base + b] = v <= 0 ? 0 : v >= 65535 ? 65535 : Math.round(v);
       }
@@ -313,16 +315,6 @@ export async function encode(
   return { meta, levels, phaseCos: null, phaseSin: null };
 }
 
-const coverage = (win: number, hop: number, frames: number, padded: number): Float64Array => {
-  const w = hannWindow(win);
-  const cover = new Float64Array(padded);
-  for (let f = 0; f < frames; f++) {
-    const s = f * hop;
-    for (let m = 0; m < win; m++) cover[s + m] = cover[s + m]! + w[m]! * w[m]!;
-  }
-  return cover;
-};
-
 async function synthesiseExact(
   spec: Spectrum,
   alive?: () => boolean,
@@ -342,7 +334,7 @@ async function synthesiseExact(
   for (let f = 0; f < frames; f++) {
     const base = f * bins;
     for (let b = 0; b < bins; b++) {
-      const m = Math.pow(10, levelToMagDb(levels[base + b]!) / 20) * scale;
+      const m = Math.exp(levelToMagDb(levels[base + b]!) * DB_TO_LIN) * scale;
       const cr = (phaseCos[base + b]! - 127.5) / 127.5;
       const cs = (phaseSin[base + b]! - 127.5) / 127.5;
       const h = Math.sqrt(cr * cr + cs * cs);
@@ -387,7 +379,7 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
   const { meta, levels } = spec;
   const out = new Float64Array(meta.frames * meta.bins);
   for (let i = 0; i < out.length; i++)
-    out[i] = Math.pow(10, levelToDb(levels[i]!, meta) / 20) * scale;
+    out[i] = Math.exp(levelToDb(levels[i]!, meta) * DB_TO_LIN) * scale;
   return out;
 }
 

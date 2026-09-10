@@ -59,7 +59,6 @@ interface Props {
   mode: ReadMode;
   enc: Encode;
   onEnc: (e: Encode) => void;
-  onTrim: () => void;
   onRefine: () => void;
   stage: Stage;
   hint: string | null;
@@ -75,7 +74,6 @@ export function Workbench({
   mode,
   enc,
   onEnc,
-  onTrim,
   onRefine,
   stage,
   hint,
@@ -163,7 +161,7 @@ export function Workbench({
         )}
       </div>
 
-      <ParamPanel enc={enc} srcSr={srcSr} duration={duration} onEnc={onEnc} onTrim={onTrim} />
+      <ParamPanel enc={enc} srcSr={srcSr} duration={duration} onEnc={onEnc} />
     </section>
   );
 }

@@ -12,6 +12,8 @@
 | `bun run bench` | 是 | **端到端评测台**：Chromium 无头跑完整链路（音频 → 图 → PNG/JPEG/缩放降级 → 读图 → 还原），覆盖图片容器层的损失。 |
 | `bun run smoke` | 是 | **界面冒烟**：起页面 → 点演示 → 质检 → 点频谱图试播，只报控制台错误与截图（`/tmp/smoke-*.png`）。需要 dev server 在 `http://127.0.0.1:3000`。 |
 | `bun bench/scale.ts` | 是 | **尺度门禁**：先 `bun run build:web`，再校验字号随容器等比、五种控件同高、令牌锚在当前容器上、参数区块按内容取宽且自适应换行。 |
+| `bun bench/offline.ts` | 是 | **PWA 门禁**：先 `bun run build:web`，再校验 manifest 可装（MIME、`scope`/`start_url` 落在应用根、图标可达）、iOS 头标签齐备、应用壳断网可用。 |
+| `bun run perf` | 是 | **性能体检**：重采样相位表的倍数对照（机器无关，可当门禁）+ 真实页面里加载长音频的主线程长任务清单。`SECS=60` 改素材时长，`PAGE=0` 只跑前半。 |
 
 另有单元测试 `bun test`，覆盖 FFT/相位/PNG/参数等纯逻辑。
 
@@ -54,6 +56,33 @@
 - `NEURAL=bench/ml/w_p7.json` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
 - 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
+## PWA 门禁（offline.ts）
+
+验两件事：manifest 装得成，应用壳断网开得起来。
+
+- **「断网」是直接关掉 HTTP 服务**，不是 `Network.emulateNetworkConditions`。实测该命令对本机回环不起作用：
+  开着 offline 照样拿到 404，整段离线断言会是空的。为此探针里留了一个从没请求过的对照地址，
+  它若不为 0 就直接判不合格 —— 别把「离线模拟没生效」读成「离线可用」。
+- **离线 200 的判据是 `fetch(url, { cache: 'reload' })`**：该模式强制绕过 HTTP 缓存，源又真的不可达，
+  此时还能拿到 200 就只可能是 Service Worker 给的。
+- 除应用壳外还验一条**运行期缓存**：点一次「演示」，演示音频应随即进缓存，断网后仍拿得到。
+  音频解码器是动态 import 的分包，不预缓存，靠的就是这条路径。
+- 应用壳的期望清单不从 `build.ts` 抄，而是从**运行中的 DOM** 取（入口脚本、样式、manifest、favicon），
+  加上 `index.html` 本身；抄一遍等于把断言写成同义反复。
+
+## 性能体检（perf.ts）
+
+两半，判据不同：
+
+- **重采样相位表**：拿「逐样点现算」的对照实现跑同一份素材，比两者的耗时倍数。
+  比值是机器无关的，因此可以设门禁（低于 3× 判不合格）。数值内核每次改动后跑一眼。
+- **主线程长任务**：真实页面里落一个 60 秒 44.1kHz WAV，用 `PerformanceObserver` 的
+  `longtask` 记录阻塞，并按 `.note` 的文案变化还原阶段时间线。这部分随机器快慢浮动，
+  **只报数不设阈值** —— 它是用来定位「哪一段在卡」的，不是回归门。头一个长任务里含着
+  测量脚本自己合成 WAV 的开销，读的时候要减掉。
+
+结论与复跑数字见 `docs/algorithms.md` 的「重采样与主线程预算」。
+
 ## 已标定的经验数字（2026-09，greeting.mp3 / 2.5s 合成）
 
 - 可逆 1:1 PNG：相关 1.000，LSD 0.2 —— 直逆即最优，勿加迭代。
@@ -67,3 +96,4 @@
 - Chromium 路径写死在 `cdp.ts` 顶部（本机快照），换机器只改这一处。
 - 改动读端/写端行为后：先 `bun run quality -- --gate`，再 `bun run bench`（含缩放/JPEG 矩阵），最后 `bun run smoke`。
 - 改样式后另跑 `bun run build:web && bun bench/scale.ts`。
+- 改构建产物、manifest、图标或 Service Worker 后另跑 `bun run build:web && bun bench/offline.ts`。

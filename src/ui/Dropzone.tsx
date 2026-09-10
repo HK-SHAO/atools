@@ -13,6 +13,8 @@ export function Dropzone({ onFile, dragging }: Props) {
           <label className="drop-act">
             选文件
             <input
+              id="source-file"
+              name="source-file"
               type="file"
               accept="audio/*,image/*"
               hidden

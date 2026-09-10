@@ -37,7 +37,6 @@ export function App() {
             mode={studio.mode}
             enc={studio.enc}
             onEnc={studio.setEnc}
-            onTrim={studio.trim}
             onRefine={studio.refine}
             stage={studio.stage}
             hint={studio.hint}

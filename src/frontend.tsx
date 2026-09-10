@@ -11,3 +11,7 @@ const app = (
 );
 
 (import.meta.hot.data.root ??= createRoot(elem)).render(app);
+
+if (!import.meta.hot && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}

@@ -1,0 +1,25 @@
+{
+  "name": "频谱 · 声音与图像双向转换",
+  "short_name": "频谱",
+  "description": "音频与频谱图双向无损转换：音频转成可下载的频谱图，频谱图还原成可播放的音频。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#fdf7ec",
+  "background_color": "#fdf7ec",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "../lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
-import { resample, silenceBounds, slice } from "../lib/resample";
+import { resample, slice, trimRange } from "../lib/resample";
 import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "../lib/spectrum";
 
 interface Source {
@@ -145,7 +145,7 @@ export function useStudio() {
       if (!alive()) return;
 
       setMode("compact");
-      setEnc(e => reopen(e));
+      setEnc(e => ({ ...reopen(e), ...trimRange(mono, sr) }));
       setSource({ pcm: mono, sr, name: file.name });
     } catch (e) {
       if (!alive() || e instanceof Aborted) return;
@@ -188,24 +188,13 @@ export function useStudio() {
       const buf = await (await fetch(DEMO_URL)).arrayBuffer();
       const { pcm, sr } = await decodeAudioFile(buf);
       setMode("compact");
-      setEnc(e => ({ ...reopen(e), sr: 0 }));
+      setEnc(e => ({ ...reopen(e), sr: 0, ...trimRange(pcm, sr) }));
       setSource({ pcm, sr, name: "fade-demo" });
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
     }
   }, []);
-
-  const trim = useCallback(() => {
-    if (!source) return;
-    const b = silenceBounds(source.pcm, source.sr);
-    if (b.end <= b.start) return;
-    setEnc(e => ({
-      ...e,
-      start: Math.round(b.start * 100) / 100,
-      end: Math.round(b.end * 100) / 100,
-    }));
-  }, [source]);
 
   const clear = useCallback(() => {
     genRef.current++;
@@ -215,5 +204,5 @@ export function useStudio() {
     setHint(null);
   }, []);
 
-  return { source, enc, setEnc, job, mode, stage, error, hint, open, refine, demo, trim, clear };
+  return { source, enc, setEnc, job, mode, stage, error, hint, open, refine, demo, clear };
 }

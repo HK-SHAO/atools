@@ -1,4 +1,4 @@
-import { FFT, hannWindow, mirrorSpectrum } from "./fft";
+import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
 
 interface RtisiOptions {
   lookahead?: number;
@@ -44,8 +44,10 @@ export async function rtisiLa(
   const local = new Float64Array(span);
   const re = new Float64Array(L);
   const im = new Float64Array(L);
-  const ph = new Float64Array((K + 1) * bins);
-  const prev = new Float64Array((K + 1) * bins);
+  const cos = new Float64Array((K + 1) * bins);
+  const sin = new Float64Array((K + 1) * bins);
+  const prevCos = new Float64Array((K + 1) * bins);
+  const prevSin = new Float64Array((K + 1) * bins);
 
   const load = (at: number): void => {
     local.fill(0);
@@ -53,33 +55,47 @@ export async function rtisiLa(
     if (avail > 0) local.set(out.subarray(at, at + avail));
   };
 
+  const put = (k: number, warm: Float64Array, from: number): void => {
+    for (let b = 0; b < bins; b++) {
+      const p = warm[from + b]!;
+      cos[k * bins + b] = Math.cos(p);
+      sin[k * bins + b] = Math.sin(p);
+    }
+  };
+
   const lay = (f: number, k: number): void => {
     const base = f * bins;
-    for (let b = 0; b < full; b++) {
-      if (b < bins) {
-        const g = mag[base + b]!;
-        const p = ph[k * bins + b]!;
-        re[b] = g * Math.cos(p);
-        im[b] = g * Math.sin(p);
-      } else {
-        re[b] = 0;
-        im[b] = 0;
-      }
+    const at = k * bins;
+    for (let b = 0; b < bins; b++) {
+      const g = mag[base + b]!;
+      re[b] = g * cos[at + b]!;
+      im[b] = g * sin[at + b]!;
+    }
+    for (let b = bins; b < full; b++) {
+      re[b] = 0;
+      im[b] = 0;
     }
     mirrorSpectrum(re, im, full, L);
     fft.transform(re, im, true);
-    const at = k * a;
-    for (let n = 0; n < L; n++) local[at + n] = local[at + n]! + re[n]! * w[n]!;
+    const from = k * a;
+    for (let n = 0; n < L; n++) local[from + n] = local[from + n]! + re[n]! * w[n]!;
   };
 
   const read = (k: number): void => {
-    const at = k * a;
+    const from = k * a;
     for (let n = 0; n < L; n++) {
-      re[n] = local[at + n]! * w[n]!;
+      re[n] = local[from + n]! * w[n]!;
       im[n] = 0;
     }
     fft.transform(re, im);
-    for (let b = 0; b < bins; b++) ph[k * bins + b] = Math.atan2(im[b]!, re[b]!);
+    const at = k * bins;
+    for (let b = 0; b < bins; b++) {
+      const rr = re[b]!;
+      const ii = im[b]!;
+      const d = Math.sqrt(rr * rr + ii * ii);
+      cos[at + b] = d > 0 ? rr / d : 1;
+      sin[at + b] = d > 0 ? ii / d : 0;
+    }
   };
 
   for (let m = 0; m < frames; m++) {
@@ -90,14 +106,21 @@ export async function rtisiLa(
 
     if (m === 0) {
       for (let k = 0; k < act; k++) {
-        if (warm) ph.set(warm.subarray(k * bins, (k + 1) * bins), k * bins);
+        if (warm) put(k, warm, k * bins);
         else read(k);
       }
     } else {
       for (let k = 0; k < act; k++) {
-        if (k <= K - 1) ph.set(prev.subarray((k + 1) * bins, (k + 2) * bins), k * bins);
-        else if (warm) ph.set(warm.subarray((m + k) * bins, (m + k + 1) * bins), k * bins);
-        else ph.fill(0, k * bins, (k + 1) * bins);
+        const next = (k + 1) * bins;
+        const here = k * bins;
+        if (k <= K - 1) {
+          cos.set(prevCos.subarray(next, next + bins), here);
+          sin.set(prevSin.subarray(next, next + bins), here);
+        } else if (warm) put(k, warm, (m + k) * bins);
+        else {
+          cos.fill(1, here, here + bins);
+          sin.fill(0, here, here + bins);
+        }
       }
       if (fromPast) read(0);
     }
@@ -109,29 +132,26 @@ export async function rtisiLa(
     }
 
     const base = m * bins;
-    for (let b = 0; b < full; b++) {
-      if (b < bins) {
-        const g = mag[base + b]!;
-        const p = ph[b]!;
-        re[b] = g * Math.cos(p);
-        im[b] = g * Math.sin(p);
-      } else {
-        re[b] = 0;
-        im[b] = 0;
-      }
+    for (let b = 0; b < bins; b++) {
+      const g = mag[base + b]!;
+      re[b] = g * cos[b]!;
+      im[b] = g * sin[b]!;
+    }
+    for (let b = bins; b < full; b++) {
+      re[b] = 0;
+      im[b] = 0;
     }
     mirrorSpectrum(re, im, full, L);
     fft.transform(re, im, true);
     const room = Math.min(L, padded - at);
     for (let n = 0; n < room; n++) out[at + n] = out[at + n]! + re[n]! * w[n]!;
 
-    prev.set(ph);
+    prevCos.set(cos);
+    prevSin.set(sin);
     if (tick) await tick(m + 1, frames);
   }
 
-  const cover = new Float64Array(padded);
-  for (let f = 0; f < frames; f++)
-    for (let n = 0; n < L; n++) cover[f * a + n] = cover[f * a + n]! + w[n]! * w[n]!;
+  const cover = coverage(L, a, frames, padded);
   let top = 0;
   for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
   const floor = top * 0.05;

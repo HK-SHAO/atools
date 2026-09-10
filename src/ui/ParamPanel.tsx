@@ -36,10 +36,9 @@ interface Props {
   srcSr: number;
   duration: number;
   onEnc: (e: Encode) => void;
-  onTrim: () => void;
 }
 
-export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
+export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
 
   useEffect(() => setRange(null), [enc.start, enc.end]);
@@ -65,7 +64,10 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
     <label className="num">
       <span aria-hidden="true">{side === "start" ? "起" : "止"}</span>
       <input
+        id={`range-${side}`}
+        name={`range-${side}`}
         type="number"
+        autoComplete="off"
         aria-label={aria}
         min={0}
         max={duration}
@@ -109,9 +111,6 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
       <Row label="区间">
         {field("start", "起点秒数")}
         {field("end", "终点秒数")}
-        <button type="button" className="chip" onClick={onTrim}>
-          裁静音
-        </button>
       </Row>
     </div>
   );
