@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Plugin } from "vite";
+import { WASM_FILE } from "./moon.ts";
 
 const OUT = "dist";
 const MANIFEST = "public/manifest.webmanifest";
@@ -46,6 +47,12 @@ export function serviceWorker(): Plugin {
     async closeBundle() {
       const root = process.cwd();
       const shell = await shellOf(root);
+
+      // 数值内核必须在壳里：没有它，首次访问后断网就打不开任何音频。
+      // 这条同时是「index.html 的 preload 路径 == 内核落点」的核对 —— 路径写错的表现
+      // 只是那种资源静默不进壳，等断网才暴露。
+      if (!shell.includes(WASM_FILE))
+        throw new Error(`应用壳里没有 ${WASM_FILE}：index.html 的 preload 路径与 scripts/moon.ts 的 WASM_FILE 对不上`);
 
       // 壳里少一样就白屏，而写错的地方只让条目静默消失。构建期把它变成硬失败。
       for (const entry of shell)

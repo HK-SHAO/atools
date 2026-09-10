@@ -12,6 +12,7 @@
     "dev": "vite",
     "start": "vite preview",
     "build:web": "vite build",
+    "build:wasm": "bun scripts/moon.ts --force",
     "build:toy": "vite build && bun scripts/toy.ts",
     "deploy": "vite build && bunx wrangler deploy --config cloudflare/wrangler.jsonc",
     "typecheck": "tsc --noEmit",

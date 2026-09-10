@@ -35,6 +35,8 @@ const INSPECT = `
       manifest: href('manifest'),
       icon: href('icon'),
       apple: href('apple-touch-icon'),
+      // 数值内核由 preload 声明 —— 它在壳里，所以从 DOM 里取，不从构建脚本抄
+      kernel: document.querySelector('link[rel="preload"][as="fetch"]')?.href ?? null,
     },
     hook: document.querySelector('meta[name="apple-mobile-web-app-capable"]')?.content ?? null,
     controlled: !!navigator.serviceWorker.controller,
@@ -144,6 +146,10 @@ try {
     ["favicon", new URL(online.href.icon!).pathname],
     ["apple-touch-icon", new URL(online.href.apple!).pathname],
   ];
+  // 数值内核：没有它首屏之后什么也编不了，所以它必须在壳里。取法同上 —— 从 DOM 的 preload 取，
+  // 缺了 preload 就说明内核掉出壳了，直接判不合格（而不是把这条断言悄悄跳过）。
+  if (!online.href.kernel) fail("页面里没有 as=fetch 的 preload：数值内核掉出了应用壳，断网后编不了");
+  else wanted.push(["数值内核", new URL(online.href.kernel).pathname]);
   for (const [src] of manifest?.icons ?? [])
     wanted.push([`manifest 图标 ${src}`, new URL(src, online.href.manifest!).pathname]);
 

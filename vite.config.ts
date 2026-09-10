@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { moonKernel } from "./scripts/moon.ts";
 import { serviceWorker } from "./scripts/sw.ts";
 
 const at = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
@@ -18,7 +19,7 @@ const at = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
  */
 export default defineConfig({
   base: "./",
-  plugins: [serviceWorker()],
+  plugins: [moonKernel(), serviceWorker()],
   // 端口与地址钉死：`bun dev` / `bun start` 原本都在 127.0.0.1:3000，评测台按它写。
   // 必须显式写 host —— Vite 默认只听 `[::1]`，而评测台与 PWA 只认 `127.0.0.1`
   // （回环上的 `http://` 才算安全上下文，Service Worker 才装得上）。

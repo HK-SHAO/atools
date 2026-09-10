@@ -8,6 +8,11 @@ dist
 *.zip
 bench/bundle*.js
 
+# MoonBit 内核产物与依赖缓存（由 scripts/moon.ts 编译，源头在 moon/）
+moon/_build/
+moon/dsp.wasm
+moon/.mooncakes/
+
 # coverage
 coverage
 *.lcov
