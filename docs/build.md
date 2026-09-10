@@ -29,7 +29,7 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 | `primitives.css` | 卡片与五种控件共用的几何（`act` / `chip` / `num` / `icon-btn` / `drop-act`）、图标、焦点环、状态注记 |
 | `layout.css` | 外壳（`app` / `shell`）、页头、拖放区、页脚 |
 | `spectrogram.css` | 频谱图与播放头 |
-| `workbench.css` | 时间条、事实行、动作行、参数面板（区块按内容取宽、整行装不下才换行） |
+| `workbench.css` | 时间条、事实行、动作行、参数面板（一个参数一行，标签与控件两列） |
 
 不套 `@layer`：未分层的普通声明**无条件胜出**于任何层，分层与未分层混写会让层序静默失效。
 一个声明只写一遍；**控件高度只有一套**的落点是 `primitives.css` 里那组共用选择器，
@@ -61,27 +61,25 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 - 五种控件（`act` / `chip` / `num` / `icon-btn` / `drop-act`）在 `primitives.css` 里共用同一组选择器
   —— 同高、同一种玻璃表面，各自只调 `padding-inline`。新增控件必须并入这一组，不得自带高度或字号。
   注意 `button` 的 UA 样式带 `padding: 1px 6px`，只写 `padding-inline` 会漏掉上下。
-- `.params` 是 `flex-wrap`：每个 `.prow`（标签 + 一组 chip）**按内容取宽**，整行装不下才换行 —— 桌面
-  宽度下（卡片 1145、面板 1112）六块恰好合成一行，900 及以下折成两行。**不要用等宽栅格**：曾经用
-  `repeat(auto-fit, minmax(11em, 1fr))` 会把列宽拉平，宽区块（频宽、区间）就被挤到内部换行。
-  也不再设断点 —— `container-type` 因此从 `.card` 上撤掉。
-- 间距是 0.25 / 0.5 / 1em 三级分组：区块内 chip 之间 0.25em，标签到 chip 0.5em，区块之间 1em。
-  取过 1.25em，桌面下六块差 6px 就折行。
-- `.params` 是 `justify-content: space-between`：**换行余量分到块之间，不许堆在行尾**。堆着的时候
-  最后一行的最后一块离右内边距还差上百 px（可逆档只有四块 —— `位深`/`频宽` 在 `ParamPanel` 里
-  是 `compact &&`，1145 宽下内容才 620px、余 409px），于是左内边距 16.5px 而右内边距 16.5+余量，
-  看着就是「右边空一大块、左右不对称」。它只在有富余时生效：挤满的行（340 宽下余 3.7px）缝宽仍是 1em。
-  `scale.ts` 有一条盯着它 —— 逐行量「最后一块的右缘到右内边距」，> 0.5px 判红，且**实测到 0 个
-  多块行也判红**（否则断言会变成空集）：正常时覆盖 7 个多块行、空隙 0.00px，把它改回 `flex-start`
-  抓到 183.5px。单块行本就左对齐，不参与。
-- 评测台比对行数前要先确认参数状态一致：`scale.ts` 投喂 `voice/greeting.mp3`（采样 8k，频宽只有两个
-  选项），`smoke.ts` 点「演示」（采样=原，频宽五个选项），两者的段落数本来就不同。
+- `.params` 是两列网格（`max-content minmax(0, 1fr)`）：**一个参数一行**，标签在第 1 列、控件在第 2 列。
+  标签因此共享一条竖线。控件列必须写 `minmax(0, 1fr)` 而不是 `1fr` —— 后者的 `auto` 下限会被
+  区块内容顶住，网格装不下就往外溢。
+  这里换过两茬：最早是 `repeat(auto-fit, minmax(11em, 1fr))` 等宽栅格（把宽区块挤到内部换行，已废），
+  后来是 `flex-wrap` + `space-between`（**按内容取宽**，余量分到块之间）。后者只是把右缘凑齐，
+  标签仍旧随整块在换行流里漂移 —— 同一列的标签对不齐，而行尾那笔死区（可逆档四块、1145 宽下余
+  409px）也是同一套绕法的产物。改成网格后两者一起消失。
+- 代价写在明处：桌面下参数面板从两行变六行（≈224px），换来标签对齐与不再有行尾死区。
+- 间距是 0.25 / 0.5em 两级：行内 chip 之间 0.25em，标签到控件、行与行之间 0.5em（网格的 `gap`）。
+- 标签数量随模式变：`位深` / `频宽` 在 `ParamPanel` 里是 `compact &&`，可逆档只有四个标签
+  （`levelToDb` 在 exact 分支走固定电平标度，`bits` 不参与）。评测台比对标签数前先确认参数状态一致 ——
+  `scale.ts` 投喂 `voice/greeting.mp3`（紧凑态，6 个），`smoke.ts` 点「演示」后同为紧凑态。
 
 ## 评测台按语义类名取样
 
-`bench/scale.ts` 与 `bench/smoke.ts` 直接用类选择器取元素（`.act` / `.params .chip` /
-`.params .num` / `.icon-btn` / `.drop-act` / `.spec` / `.spec-head` / `.facts` / `.app` /
-`.shell` / `.head h1`）。不给组件加 `data-*` 中转：类名本身就是稳定的语义钩子，
+`bench/` 直接用类选择器取元素：`scale.ts` 用 `.app` / `.shell` / `.head h1` / `.act` /
+`.params .chip` / `.params .num` / `.params .plabel` / `.icon-btn` / `.drop-act`，
+`smoke.ts` 用 `.params` / `.spec` / `.spec-head` / `.facts` / `.icon-btn`，`offline.ts` 用
+`.drop` / `.params`。不给组件加 `data-*` 中转：类名本身就是稳定的语义钩子，
 多一层只会让同一件事有两个出处。反过来说，这些类名是**契约**，改名要同步改 `bench/`。
 
 ## PWA 与离线

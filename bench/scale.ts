@@ -5,6 +5,7 @@ const SAMPLE = "voice/greeting.mp3";
 const PORT = Number(process.env.PORT ?? 4390);
 const CDP = PORT + 700;
 
+/** 覆盖曲线的两段与封顶：桌面、窄卡片、手机、极窄。 */
 const SIZES: [number, number][] = [
   [1500, 950],
   [1200, 900],
@@ -13,6 +14,11 @@ const SIZES: [number, number][] = [
   [340, 700],
 ];
 
+/**
+ * 令牌 → 与 `--u` 的比值。逐条都要在**计算值**里解析成锚在当前 `--u` 的 px：
+ * `@property` 注册一丢，`cqi` 就留在令牌里、到使用点才被最近的容器抢走，
+ * 而截图上看不出区别（实测控件高 24.5 → 20.3、字号 → 7.98）。
+ */
 const RATIOS: Record<string, number> = {
   "--fs-lead": 0.9375,
   "--fs-hi": 0.75,
@@ -22,8 +28,8 @@ const RATIOS: Record<string, number> = {
   "--r-lg": 1,
 };
 
+/** `--u = min(14×eff/340, 14+(eff−340)/280, 16.5)`，`eff = min(100cqi, 160cqb)`。 */
 const CURVE = { ref: 340, base: 14, slope: 1 / 280, ceil: 16.5 };
-
 const curveU = (w: number, h: number): number => {
   const eff = Math.min(w, h * 1.6);
   const raw =
@@ -31,17 +37,12 @@ const curveU = (w: number, h: number): number => {
   return Math.min(CURVE.ceil, raw);
 };
 
-const CONTROLS = ["act", "chip", "num", "icon-btn", "drop-act"];
-const SELECTORS = [
-  '.act',
-  '.params .chip',
-  '.params .num',
-  '.icon-btn',
-  '.drop-act',
-];
+/** 四种控件共用 `primitives.css` 里同一组几何，逐种量高度以确认没谁自带高度。
+ *  `drop-act` 只在空态存在，单独量。 */
+const CONTROLS = [".act", ".params .chip", ".params .num", ".icon-btn"];
 
 const PROBE = `
-  const px = (v) => parseFloat(v);
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const app = document.querySelector('.app');
   const shell = document.querySelector('.shell');
   const chip = document.querySelector('.params .chip');
@@ -51,16 +52,22 @@ const PROBE = `
   };
   const font = (sel) => {
     const el = document.querySelector(sel);
-    return el ? px(getComputedStyle(el).fontSize) : null;
+    return el ? parseFloat(getComputedStyle(el).fontSize) : null;
   };
   return {
-    u: px(getComputedStyle(shell).getPropertyValue('--u')),
+    u: parseFloat(getComputedStyle(shell).getPropertyValue('--u')),
     box: { w: app.clientWidth, h: app.clientHeight },
     title: font('.head h1'),
     chip: font('.params .chip'),
-    heights: ${JSON.stringify(SELECTORS)}.map(height),
+    heights: ${JSON.stringify(CONTROLS)}.map(height),
+    labels: [...document.querySelectorAll('.params .plabel')].map(
+      (el) => +el.getBoundingClientRect().left.toFixed(2),
+    ),
     tokens: Object.fromEntries(
-      ${JSON.stringify(Object.keys(RATIOS))}.map((k) => [k, getComputedStyle(chip).getPropertyValue(k).trim()]),
+      ${JSON.stringify(Object.keys(RATIOS))}.map((k) => [
+        k,
+        getComputedStyle(chip).getPropertyValue(k).trim(),
+      ]),
     ),
   };
 `;
@@ -81,36 +88,28 @@ const DROP = `
   return false;
 `;
 
-const SWEEP = `
+/**
+ * 容器 vs 视口的判别探针：视口固定，只把 `.app` 压窄。若 `--u` 仍等于视口口径，
+ * 说明 `cqi` 没锚在 `.app` 上 —— 在任何单一视口下都看不出来。
+ */
+const SHRINK = `
   const app = document.querySelector('.app');
   const shell = document.querySelector('.shell');
-  const params = document.querySelector('.params');
   const style = document.createElement('style');
   document.head.append(style);
   const out = [];
-  for (const w of [1500, 900, 800, 600, 520]) {
+  for (const w of [1500, 900, 600, 520]) {
     style.textContent = '.app{width:' + w + 'px}';
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const cs = getComputedStyle(params);
-    const pr = params.getBoundingClientRect();
-    const blocks = [...params.querySelectorAll('.prow')].map((el) => {
-      const r = el.getBoundingClientRect();
-      return { w: +r.width.toFixed(2), top: +r.top.toFixed(1), l: +r.left.toFixed(2), r: +r.right.toFixed(2) };
-    });
     out.push({
       w,
+      bw: app.clientWidth,
+      bh: app.clientHeight,
       u: parseFloat(getComputedStyle(shell).getPropertyValue('--u')),
-      box: { w: app.clientWidth, h: app.clientHeight },
-      card: params.parentElement.clientWidth,
-      display: getComputedStyle(params).display,
-      paramsW: params.clientWidth,
-      innerR: +(pr.right - parseFloat(cs.paddingRight)).toFixed(2),
-      justify: cs.justifyContent,
-      blocks,
     });
   }
   style.remove();
-  return { rows: out, viewport: innerWidth };
+  return out;
 `;
 
 interface Probe {
@@ -119,33 +118,29 @@ interface Probe {
   title: number | null;
   chip: number | null;
   heights: (number | null)[];
+  labels: number[];
   tokens: Record<string, string>;
 }
 
-interface SweepRow {
+interface Shrink {
   w: number;
-  u: number | null;
-  box: { w: number; h: number };
-  card: number;
-  display: string;
-  paramsW: number;
-  innerR: number;
-  justify: string;
-  blocks: { w: number; top: number; l: number; r: number }[];
+  bw: number;
+  bh: number;
+  u: number;
 }
 
 const failures: string[] = [];
-const fail = (msg: string) => failures.push(msg);
+const fail = (msg: string): void => void failures.push(msg);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 const cssFiles = [...new Bun.Glob("*.css").scanSync({ cwd: `${project}/dist` })];
 if (cssFiles.length !== 1) {
-  console.error(`dist/ 里应当只有一个 css 产物，实际 ${cssFiles.length} 个：先 bun run build:web`);
+  console.error(`dist/ 里应当只有一个 css 产物，实际 ${cssFiles.length} 个 —— 先 bun run build:web`);
   process.exit(1);
 }
 const css = await Bun.file(`${project}/dist/${cssFiles[0]}`).text();
 for (const [needle, why] of [
-  ["@property --u", "尺度令牌会被最近的内联容器抢走"],
+  ["@property --u", "尺度令牌会被使用点最近的容器抢走"],
   ["-webkit-backdrop-filter", "Safari 的毛玻璃会静默失效"],
 ] as const)
   if (!css.includes(needle)) fail(`${cssFiles[0]} 丢了 ${needle}：${why}`);
@@ -155,7 +150,42 @@ const session = await open({ port: CDP, size: SIZES[0]!, url: `http://127.0.0.1:
 const seen: { w: number; u: number }[] = [];
 
 try {
-  console.log("视口      容器        u        字号 标题/控件   控件高度 ×5                              令牌锚定");
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: SIZES[0]![0],
+    height: SIZES[0]![1],
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await session.goto(`http://127.0.0.1:${PORT}/`, ".app");
+  await sleep(400);
+
+  // 空态：量 drop-act（载入音频后它就不在文档里了），并把「跟容器而非视口」证掉
+  const bare = await session.ev<{ u: number; h: number | null }>(`
+    const el = document.querySelector('.drop-act');
+    return {
+      u: parseFloat(getComputedStyle(document.querySelector('.shell')).getPropertyValue('--u')),
+      h: el ? +el.getBoundingClientRect().height.toFixed(3) : null,
+    };
+  `);
+  const wantBare = bare.u * RATIOS["--h-ctl"]!;
+  if (!finite(bare.h) || Math.abs(bare.h - wantBare) > 0.05)
+    fail(`.drop-act 高 ${bare.h} ≠ ${RATIOS["--h-ctl"]}×u = ${wantBare.toFixed(3)}`);
+
+  const shrink = await session.ev<Shrink[]>(SHRINK);
+  const pure = curveU(SIZES[0]![0], SIZES[0]![1]);
+  if (!shrink.some((r) => Math.abs(r.u - pure) > 0.5))
+    fail(`收缩探针区分不出容器与视口：四行都是视口口径 ${pure.toFixed(3)} —— 断言是空的`);
+  for (const r of shrink) {
+    const want = curveU(r.bw, r.bh);
+    if (!finite(r.u)) fail(`.app ${r.bw}px 时 --u 读不到有限数（${r.u}）—— 令牌没解析成具体长度`);
+    else if (Math.abs(r.u - want) > 0.01)
+      fail(`.app ${r.bw}px 宽时 u=${r.u}，容器曲线应给 ${want.toFixed(3)} —— cq 单位没锚在容器上`);
+  }
+
+  if (!(await session.ev<boolean>(DROP))) throw new Error("样例音频未载入");
+  await sleep(250);
+
+  console.log("视口      容器        u        字号 标题/控件   控件高度                           令牌");
   for (const [w, h] of SIZES) {
     await session.send("Emulation.setDeviceMetricsOverride", {
       width: w,
@@ -163,165 +193,72 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await session.goto(`http://127.0.0.1:${PORT}/`, '.app');
-    await sleep(400);
-
-    const bare = await session.ev<number | null>(
-      `const el = document.querySelector('.drop-act');
-       return el ? +el.getBoundingClientRect().height.toFixed(3) : null;`,
-    );
-    if (!(await session.ev<boolean>(DROP))) throw new Error(`${w}px：样例音频未载入`);
-    await sleep(250);
-
     const r = await session.ev<Probe>(PROBE);
-    const heights = r.heights.map((v, i) => (v === null && CONTROLS[i] === "drop-act" ? bare : v));
-    const shown = CONTROLS.map((name, i) => `${name} ${heights[i] ?? "缺失"}`).join(" / ");
+    const shown = CONTROLS.map((name, i) => `${name} ${r.heights[i] ?? "缺失"}`).join(" / ");
 
-    const { u, title, chip } = r;
-    if (!finite(u) || !finite(title) || !finite(chip)) {
-      fail(`${w}px：尺寸读不到有限数（u=${u} 标题=${title} 控件=${chip}）—— 令牌没解析成具体长度`);
-      console.log(`${String(w).padEnd(8)} 尺寸读取失败`);
+    if (!finite(r.u) || !finite(r.title) || !finite(r.chip)) {
+      fail(`${w}px：尺寸读不到有限数（u=${r.u} 标题=${r.title} 控件=${r.chip}）—— 令牌没解析成具体长度`);
+      console.log(`${String(w).padEnd(9)} 尺寸读取失败`);
       continue;
     }
-
     console.log(
-      `${String(w).padEnd(8)} ${`${r.box.w}x${r.box.h}`.padEnd(10)} ${u.toFixed(3).padEnd(8)} ` +
-        `${title.toFixed(2).padEnd(6)}/${chip.toFixed(2).padEnd(6)} ${shown.padEnd(40)} ` +
+      `${String(w).padEnd(9)} ${`${r.box.w}x${r.box.h}`.padEnd(10)} ${r.u.toFixed(3).padEnd(8)} ` +
+        `${r.title.toFixed(2).padEnd(6)}/${r.chip.toFixed(2).padEnd(6)} ${shown.padEnd(34)} ` +
         `${Object.values(r.tokens)[0]}`,
     );
-
-    seen.push({ w, u });
+    seen.push({ w, u: r.u });
 
     const want = curveU(r.box.w, r.box.h);
-    if (Math.abs(u - want) > 0.01)
-      fail(`${w}x${h}：u = ${u}，容器 ${r.box.w}x${r.box.h} 的曲线应给出 ${want.toFixed(3)}`);
+    if (Math.abs(r.u - want) > 0.01)
+      fail(`${w}x${h}：u = ${r.u}，容器 ${r.box.w}x${r.box.h} 的曲线应给 ${want.toFixed(3)}`);
 
-    const known = heights.filter(finite);
-    if (known.length !== 5) {
-      fail(`${w}px：只量到 ${known.length} 种控件，应有 5 种（${shown}）`);
+    const known = r.heights.filter(finite);
+    if (known.length !== CONTROLS.length) {
+      fail(`${w}px：只量到 ${known.length}/${CONTROLS.length} 种控件（${shown}）`);
     } else {
       const spread = Math.max(...known) - Math.min(...known);
       if (spread > 0.05) fail(`${w}px：控件高度不一致，极差 ${spread.toFixed(3)}px（${shown}）`);
-      if (Math.abs(known[0]! - u * RATIOS["--h-ctl"]!) > 0.05)
-        fail(`${w}px：控件高度 ${known[0]} ≠ 1.75×u = ${(u * 1.75).toFixed(3)}`);
+      if (Math.abs(known[0]! - r.u * RATIOS["--h-ctl"]!) > 0.05)
+        fail(`${w}px：控件高 ${known[0]} ≠ 1.75×u = ${(r.u * 1.75).toFixed(3)}`);
     }
 
     for (const [name, got, ratio] of [
-      ["标题", title, RATIOS["--fs-lead"]!],
-      ["控件", chip, RATIOS["--fs-lo"]!],
-    ] as [string, number, number][]) {
-      if (Math.abs(got - u * ratio) > 0.01)
-        fail(`${w}px：${name}字号 ${got} ≠ ${ratio}×u = ${(u * ratio).toFixed(3)}`);
-    }
+      ["标题", r.title, RATIOS["--fs-lead"]!],
+      ["控件", r.chip, RATIOS["--fs-lo"]!],
+    ] as const)
+      if (Math.abs(got - r.u * ratio) > 0.01)
+        fail(`${w}px：${name}字号 ${got} ≠ ${ratio}×u = ${(r.u * ratio).toFixed(3)}`);
 
     for (const name of Object.keys(RATIOS)) {
       const got = r.tokens[name]!;
-      if (/var\(/.test(got)) {
-        fail(`${name} 在 ${w}px 下仍是未替换的 var()：${got}`);
-        continue;
-      }
-      const anchor = got.match(/([\d.]+)px/)?.[1];
-      if (anchor === undefined) {
-        fail(`${name} 在 ${w}px 下没解析出 px 锚点：${got}`);
-        continue;
-      }
-      if (Math.abs(parseFloat(anchor) - u) > 0.01)
-        fail(`${name} 锚在 ${anchor}px，当前 u 是 ${u}px —— 令牌被算死在别的元素上了（${got}）`);
+      const anchor = /var\(/.test(got) ? null : (got.match(/([\d.]+)px/)?.[1] ?? null);
+      if (anchor === null) fail(`${name} 在 ${w}px 下没解析成 px（${got}）—— 锚在别的元素上`);
+      else if (Math.abs(parseFloat(anchor) - r.u) > 0.01)
+        fail(`${name} 锚在 ${anchor}px，当前 u 是 ${r.u}px（${got}）`);
+    }
+
+    // 参数面板：一个参数一行，标签共享同一条竖线 —— 这是它唯一的结构承诺
+    if (r.labels.length < 4)
+      fail(`${w}px：只找到 ${r.labels.length} 个参数标签 —— 标签对齐那条断言是空的`);
+    else {
+      const spread = Math.max(...r.labels) - Math.min(...r.labels);
+      if (spread > 0.5) fail(`${w}px：参数标签左缘极差 ${spread.toFixed(1)}px —— 不在同一列`);
     }
   }
 
-  await session.send("Emulation.setDeviceMetricsOverride", {
-    width: 1500,
-    height: 950,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
-  await session.goto(`http://127.0.0.1:${PORT}/`, '.shell');
-  await session.ev(DROP);
-  await sleep(250);
-
-  const sweep = await session.ev<{ rows: SweepRow[]; viewport: number }>(SWEEP);
-  console.log(`\n容器相对：视口固定 ${sweep.viewport}px，压窄 .app 看 u 与参数区跟谁走`);
-  console.log("  .app 宽   卡片宽    u         期望       参数区布局        块宽");
-  for (const row of sweep.rows) {
-    const want = curveU(row.box.w, row.box.h);
-    const widths = row.blocks.map(b => b.w);
-    const lines = new Set(row.blocks.map(b => b.top)).size;
-    const shape = `${row.display} ${lines}行/${row.blocks.length}块`;
-    const span = `${Math.min(...widths).toFixed(0)}~${Math.max(...widths).toFixed(0)}px`;
-    console.log(
-      `  ${String(row.w).padEnd(9)} ${String(row.card).padEnd(9)} ${String(row.u).padEnd(10)} ` +
-        `${want.toFixed(3).padEnd(10)} ${shape.padEnd(15)} ${span}`,
-    );
-    if (!finite(row.u)) {
-      fail(`.app ${row.box.w}px 时 --u 读不到有限数（${row.u}）—— 令牌没解析成具体长度`);
-      continue;
-    }
-    if (Math.abs(row.u - want) > 0.01)
-      fail(`.app ${row.box.w}px 时 u=${row.u}，应为容器曲线 ${want.toFixed(3)} —— cq 单位没锚在容器上`);
-    if (row.display !== "flex")
-      fail(`.app ${row.box.w}px 时参数区为 ${row.display}，应为按内容换行的 flex —— 面板不该有断点`);
-    if (Math.max(...widths) > row.paramsW + 0.5)
-      fail(`.app ${row.box.w}px 时最宽区块 ${Math.max(...widths)}px 溢出参数区 ${row.paramsW}px`);
+  const narrowest = seen[seen.length - 1];
+  const widest = seen[0];
+  if (seen.length === SIZES.length && narrowest && widest) {
+    if (Math.abs(narrowest.u - CURVE.base) > 0.01)
+      fail(`最窄档 u=${narrowest.u}，应等于基准 ${CURVE.base}（被别处钳住，或下限没去干净）`);
+    if (widest.u < CURVE.ceil - 0.01) fail(`最宽档 u=${widest.u} 未触到上限 ${CURVE.ceil}：上限是死代码`);
+    for (let i = 1; i < seen.length; i++)
+      if (seen[i]!.u > seen[i - 1]!.u + 1e-6)
+        fail(`u 不随容器单调：${seen[i - 1]!.w}px → ${seen[i]!.w}px 反而变大`);
   }
-
-  // 换行的余量要分到块之间（space-between），不能堆在行尾。堆着的时候最后一块的右缘离右内边距
-  // 还差几百 px，于是左内边距 16.5px、右内边距 16.5+余量 —— 就是「右边空一大块、左右不对称」。
-  // 单块行本就左对齐、没有可分的余量，跳过。
-  let slack = 0;
-  let slackAt = "";
-  let checkedLines = 0;
-  for (const row of sweep.rows)
-    for (const top of new Set(row.blocks.map(b => b.top))) {
-      const line = row.blocks.filter(b => b.top === top);
-      if (line.length < 2) continue;
-      checkedLines++;
-      const gap = row.innerR - Math.max(...line.map(b => b.r));
-      if (gap > slack) {
-        slack = gap;
-        slackAt = `.app ${row.box.w}px 的 ${line.length} 块行`;
-      }
-    }
-  if (checkedLines === 0)
-    fail("收缩探针一个多块行都没覆盖到 —— 行尾余量那条断言是空的");
-  else if (slack > 0.5)
-    fail(
-      `参数区把换行余量堆在行尾（${slackAt}，右缘差 ${slack.toFixed(1)}px）` +
-        ` —— 右内边距比左内边距宽这么多`,
-    );
-  console.log(
-    `\n参数区换行余量：实测 ${checkedLines} 个多块行，最大的行尾空隙 ${slack.toFixed(2)}px` +
-      (slackAt ? `（${slackAt}）` : ""),
-  );
-
-  const wide = sweep.rows[0]!;
-  const wideWidths = wide.blocks.map(b => b.w);
-  const wideLines = new Set(wide.blocks.map(b => b.top)).size;
-  const spread = Math.max(...wideWidths) - Math.min(...wideWidths);
-  if (spread < 20)
-    fail(`参数区块几乎等宽（极差 ${spread.toFixed(1)}px）—— 按内容取宽退回了等宽栅格`);
-  if (wideLines >= wide.blocks.length)
-    fail(`参数区 ${wide.blocks.length} 块占了 ${wideLines} 行 —— 没有自适应换行`);
-
-  const narrow = sweep.rows[sweep.rows.length - 1]!;
-  const pure = curveU(1500, 950);
-  if (finite(narrow.u) && Math.abs(narrow.u - pure) < 0.5)
-    fail(`收缩探针无法区分容器与视口：${narrow.u} ≈ 视口口径 ${pure}`);
-  if (narrow.box.w >= 1500) fail(`收缩探针无效：.app 仍是 ${narrow.box.w}px，未窄于视口 1500px`);
 } finally {
   await session.stop();
   server.stop(true);
-}
-
-if (seen.length === SIZES.length) {
-  const narrowest = seen[seen.length - 1]!;
-  const widest = seen[0]!;
-  if (Math.abs(narrowest.u - CURVE.base) > 0.01)
-    fail(`最窄档 u=${narrowest.u}，应等于基准 ${CURVE.base}（被别处钳住，或下限没去干净）`);
-  if (widest.u < CURVE.ceil - 0.01) fail(`最宽档 u=${widest.u} 未触到上限 ${CURVE.ceil}：上限是死代码`);
-  for (let i = 1; i < seen.length; i++)
-    if (seen[i]!.u > seen[i - 1]!.u + 1e-6)
-      fail(`u 不随容器单调：${seen[i - 1]!.w}px → ${seen[i]!.w}px 反而变大`);
 }
 
 if (failures.length) {

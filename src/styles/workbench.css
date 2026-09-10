@@ -25,31 +25,18 @@
   border-top: 1px solid var(--line);
 }
 
-/* 区块各按内容取宽、整行装不下才换行 —— 等宽栅格会把宽区块挤断 */
+/* 一个参数一行：标签在第 1 列、控件在第 2 列。标签因此共享同一条竖线，
+   不再随前一块的宽度漂移。grid 也顺手替掉了旧的换行流 + 余量分配。 */
 .params {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
-  /* space-between 是这里唯一能「用掉」余量的办法：余量要么堆在行尾（右缘参差、与左内边距不对称），
-     要么分到块之间（右缘贴齐内边距）。实测可逆档只有四块，1145 宽下内容才 620px、余 409px，
-     堆在行尾时左边距 16.5px 而右边距 16.5+409 —— 也就是「右边空一大块」的来由。
-     它只在有富余时生效：挤满的行（340 宽下余 3.7px）缝宽仍是 1em，看着没区别。 */
-  justify-content: space-between;
-  column-gap: 1em;
-  row-gap: 0.5em;
+  gap: 0.5em;
   padding-top: 0.5em;
   border-top: 1px solid var(--line);
 }
 
-.prow {
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  min-width: 0;
-}
-
 .plabel {
-  flex: none;
   font-size: var(--fs-lo);
   letter-spacing: 0.1em;
   color: var(--soft);
@@ -60,5 +47,4 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25em;
-  min-width: 0;
 }

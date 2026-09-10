@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
+/** 直接吐给 `.params` 网格的两个格子：标签进第 1 列，控件进第 2 列。 */
 export function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="prow">
+    <>
       <span className="plabel">{label}</span>
       <div className="chips">{children}</div>
-    </div>
+    </>
   );
 }
 
