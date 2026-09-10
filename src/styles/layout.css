@@ -108,6 +108,7 @@
 
 .credit {
   margin-left: auto;
+  text-align: right;
   font-size: var(--fs-lo);
   letter-spacing: 0.04em;
   color: var(--soft);
