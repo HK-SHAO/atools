@@ -95,15 +95,15 @@ describe("stubBits / drawStub / decodeStub", () => {
   });
 
   test("位流参数放不下时返回 null", () => {
-    expect(stubBits(400, 12345, 512, false)).toBeNull(); // sr 不在表
-    expect(stubBits(400, 44100, 300, false)).toBeNull(); // win 不在表
+    expect(stubBits(400, 12345, 512, false)).toBeNull();
+    expect(stubBits(400, 44100, 300, false)).toBeNull();
     expect(stubBits(1, 44100, 512, false)).toBeNull();
   });
 
   test("太窄的图不写票根", () => {
-    expect(stubFits(100)).toBe(true); // 2px/bit：窄图也能写下了
+    expect(stubFits(100)).toBe(true);
     expect(stubFits(160)).toBe(true);
-    expect(stubFits(42)).toBe(true); // 1px/bit：极窄图也能写下
-    expect(stubFits(30)).toBe(false); // 30px 连 33bit×1px 都放不下
+    expect(stubFits(42)).toBe(true);
+    expect(stubFits(30)).toBe(false);
   });
 });

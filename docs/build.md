@@ -18,6 +18,16 @@
 
 留在 `src/styles/` 的只有 CSS 自定义属性、`@property` 注册、reset 与容器查询尺度系统——
 这些是「令牌」而非组件样式，本就不该由 StyleX 表达。
+`primitives.css` 里的共享控件几何（`.act` / `.chip` / `.num` / `.icon-btn` / `.drop-act`）
+同样属于这一层：它是「控件高度只有一套」这条约定的**单一落点**，也是评测台的取样锚点，
+迁走会同时丢掉唯一性和可测性。
+
+## 评测台按类名取样
+
+`bench/scale.ts` 与 `bench/smoke.ts` 用 `.act` / `.chip` / `.num` / `.icon-btn` / `.drop-act` /
+`.params` / `.spec` 这类**语义类名**取元素。StyleX 把类名换成原子哈希，一旦把这些类迁进
+`stylex.create`，两个评测台会当场找不到元素 —— 迁移组件样式前先确认取样点，
+要么保留该类的语义落点，要么先把评测台改成走稳定的 `data-*` 钩子。
 
 ## Bun 的三处硬约束
 

@@ -211,7 +211,6 @@ describe("compact round trip", () => {
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
     jpegish(spec, 48);
 
-    // 模拟读端：逐 bin 归一化并存置信度权重；弱相位只作锚，不作真值
     const n = spec.phaseCos!.length;
     const w = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
@@ -288,7 +287,7 @@ describe("reversible round trip", () => {
     const sr = 44100;
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
-    jpegish(spec, 12); // 量化到 12 级 + 轻微分块，模拟一轮很狠的有损重编码
+    jpegish(spec, 12);
 
     const back = await synthesise(spec);
     expect(snr(pcm, back)).toBeGreaterThan(9);
@@ -300,7 +299,7 @@ describe("reversible round trip", () => {
     const sr = 44100;
     const pcm = signal(sr * 2, sr);
     const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr: 0, fineness: 1 });
-    jpegish(spec, 24); // 常见的"画质还行"的 JPEG 重编码
+    jpegish(spec, 24);
 
     const back = await synthesise(spec);
     expect(snr(pcm, back)).toBeGreaterThan(11);
@@ -442,8 +441,8 @@ describe("png", () => {
       at += 12 + len;
     }
     expect(seen).toEqual(["IHDR", "PLTE", "tEXt", "IDAT", "IEND"]);
-    expect(bytes[24]).toBe(4); // 位深
-    expect(bytes[25]).toBe(3); // 索引色
+    expect(bytes[24]).toBe(4);
+    expect(bytes[25]).toBe(3);
     expect(readMeta(bytes)).toBe("hello");
   });
 
@@ -632,7 +631,7 @@ describe("reads our images with no metadata at all", () => {
 
   test("geometry meta keeps win/bins consistent", () => {
     const m = metaFromGeometry(620, 257, true, 0);
-    expect(m.win).toBe(512); // 257 bins → (257-1)*2 = 512
+    expect(m.win).toBe(512);
     expect(m.bins).toBeLessThanOrEqual(m.win / 2 + 1);
     expect(m.hop).toBe(m.win / 2);
     expect(m.sr).toBe(8000);

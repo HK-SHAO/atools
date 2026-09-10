@@ -53,8 +53,6 @@ export interface Spectrum {
   phaseCos: Uint8Array | null;
   phaseSin: Uint8Array | null;
 
-  // 读图端才有：逐 bin 相位置信度（0-255，圆矢量长度）；weak = 低于强保留阈值、
-  // 只作锚定参考不作真值。
   phaseW?: Uint8Array | null;
   phaseWeak?: boolean;
 
@@ -459,8 +457,6 @@ async function glRefine(
         let pr = (cr / d) * m;
         let pi = (ci / d) * m;
 
-        // 锚定投影：向存储相位凸混合，权 = 逐 bin 置信度 × 全局强度。
-        // 等价于最小化 ‖|STFT x|−A‖² + λΣw·(1−cos∠(x,φ_ref)) 的交替步。
         if (anchor && b < bins) {
           const wv = (anchor.w[base + b]! / 255) * TUNE.anchorLambda;
           if (wv > 0.01) {
@@ -555,7 +551,6 @@ export async function synthesise(
   quality: Quality = "fast",
 ): Promise<Samples> {
   const { meta, phaseCos, phaseSin } = spec;
-  // 强相位直逆（最快最准）；精修档一律走可锚定的迭代路径（弱相位默认快速幅度重建）。
   if (meta.exact && phaseCos && phaseSin && !spec.phaseWeak && quality !== "fine")
     return synthesiseExact(spec, alive, onProgress);
   return invert(spec, alive, onProgress, quality === "fine");

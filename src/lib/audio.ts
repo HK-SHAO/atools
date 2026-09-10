@@ -58,8 +58,6 @@ const WASM_DECODERS = {
 
 type Engine = keyof typeof WASM_DECODERS;
 
-// 原生 decodeAudioData 各家支持参差（Safari 不认 OGG、部分安卓 WebView 不认 ALAC 等），
-// 按嗅探结果落到对应 WASM 引擎；Ogg 容器按首包魔数定序，另一编码留作次选兜底。
 const FALLBACKS: Record<string, Engine[]> = {
   "M4A/MP4": ["aac"],
   "AAC（ADTS 裸流）": ["aac"],
@@ -83,7 +81,7 @@ async function decodeNative(data: ArrayBuffer): Promise<Decoded | null> {
       ? undefined
       : (window.AudioContext ??
         (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
-  if (!Ctor) return null; // 非浏览器环境（Bun 测试），直接走 WASM
+  if (!Ctor) return null;
   let ctx: AudioContext | null = null;
   try {
     ctx = new Ctor();

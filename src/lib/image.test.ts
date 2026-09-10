@@ -5,7 +5,7 @@ import { RAMP } from "./palette";
 
 const ftyp = (major: string) => {
   const b = new Uint8Array(16);
-  b.set([0x66, 0x74, 0x79, 0x70], 4); // "ftyp"
+  b.set([0x66, 0x74, 0x79, 0x70], 4);
   b.set([major.charCodeAt(0), major.charCodeAt(1), major.charCodeAt(2), major.charCodeAt(3)], 8);
   return b;
 };
@@ -74,7 +74,7 @@ describe("recognizeExact（可逆图像素签名）", () => {
 
   test("缩放后的奇数高度也命中（回归：旧版 h%2 直接否掉）", () => {
     const w = 64;
-    const h = 97; // 缩放 0.5× 后的典型奇高
+    const h = 97;
     expect(recognizeExact(exactPixels(w, h) as Pixels, w, h)).toBe(true);
   });
 
@@ -101,7 +101,7 @@ describe("recognizeExact（可逆图像素签名）", () => {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
       px[i * 4] = seed & 255;
       px[i * 4 + 1] = (seed >> 8) & 255;
-      px[i * 4 + 2] = (seed >> 16) & 255; // B 随机，通常远大于 48
+      px[i * 4 + 2] = (seed >> 16) & 255;
       px[i * 4 + 3] = 255;
     }
     expect(recognizeExact(px as Pixels, w, h)).toBe(false);

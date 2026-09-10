@@ -59,3 +59,14 @@ RTISI-LA 逐帧推进 + 前瞻共识反转，是零爆音的关键；GL 打磨�
 ## 条码票根
 
 原理见 `format-spec.md`。游程边沿随等比缩放同速移动，故用「前导四游程总长」估比例尺即可自校准；大块黑白对 JPEG 色度重压稳健。
+
+## 解码链路与覆盖面
+
+原生 `decodeAudioData` 各家支持参差（Safari 不认 OGG、部分安卓 WebView 不认 ALAC 等），
+故一律「原生优先、失败按嗅探落 WASM 引擎」。Ogg 容器无可靠嗅探特征时按**首包魔数**定序
+（Opus 头 / Vorbis 头），同一容器里的另一种编码留作次选兜底 —— 见 `audio.ts` 的 `FALLBACKS`。
+
+**Bun 没有 Web Audio**：`window.AudioContext` 不存在，`decodeNative` 恒返回 `null`。
+于是 `bun test` 里每个解码夹具都只走到 WASM 兜底引擎，**等价于「最坏浏览器」（原生全拒）下的链路**。
+原生成功路径、以及「原生失败 → 落到正确引擎」这段切换，测试覆盖不到，只由评测台
+（`bun bench/run.ts`）在真实浏览器里端到端覆盖 —— 动解码链时这一条要跑评测台，别只看单测。

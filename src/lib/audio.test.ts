@@ -106,8 +106,6 @@ describe("decodeAudioFile（AMR 专用解码）", () => {
 });
 
 describe("decodeAudioFile（M4A 兜底解码）", () => {
-  // Bun 无 Web Audio，原生路径恒失败 —— 走到的都是 WASM 兜底引擎（FAAD2 / ALAC）。
-  // 浏览器里的原生路径与兜底切换由评测台端到端覆盖。
   async function load(name: string): Promise<ArrayBuffer> {
     return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
   }
@@ -140,8 +138,6 @@ describe("decodeAudioFile（M4A 兜底解码）", () => {
 });
 
 describe("decodeAudioFile（全格式兜底矩阵）", () => {
-  // Bun 无 Web Audio，原生路径恒失败 —— 下面每个夹具都只走 WASM 兜底引擎，
-  // 等价于「最坏浏览器」（原生全拒）下的解码链路。
   async function load(name: string): Promise<ArrayBuffer> {
     return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
   }

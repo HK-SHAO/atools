@@ -125,9 +125,6 @@ export function metaFromGeometry(frames: number, bins: number, exact: boolean, b
   };
 }
 
-// 真图结构律：相位带像素落在半径 ≈127.5 的圆上（圆心 127.5,127.5，B=0），
-// 电平带像素满足 (RAMP[3L], L, RAMP[3L+2])。JPEG 混叠只会把相位半径往内拉，
-// 黑图 (0,0,0) 落在半径 ≈180 处，两条律都过不了。
 const PHASE_R2_LO = 96 * 96;
 const PHASE_R2_HI = 160 * 160;
 const RAMP_TOL = 32;
@@ -439,8 +436,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         const scaled = w < stub.width * 0.95;
         const th = scaled ? READ_TUNE.phaseReliable : READ_TUNE.phaseReliableJpeg;
         const strong = ph.reliability >= th;
-        // 缩放混合对相位的损伤是系统性的（方向有偏），迭代纠不回来；JPEG 损伤近似随机。
-        // 故缩放过狠（<0.6×）时相位只能整体丢弃。
         const weak =
           !strong && w >= stub.width * 0.6 && ph.reliability >= READ_TUNE.phaseAnchor;
         const keep = strong || weak;
