@@ -91,9 +91,11 @@ const SWEEP = `
   for (const w of [1500, 900, 800, 600, 520]) {
     style.textContent = '.app{width:' + w + 'px}';
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const cs = getComputedStyle(params);
+    const pr = params.getBoundingClientRect();
     const blocks = [...params.querySelectorAll('.prow')].map((el) => {
       const r = el.getBoundingClientRect();
-      return { w: +r.width.toFixed(2), top: +r.top.toFixed(1) };
+      return { w: +r.width.toFixed(2), top: +r.top.toFixed(1), l: +r.left.toFixed(2), r: +r.right.toFixed(2) };
     });
     out.push({
       w,
@@ -102,6 +104,8 @@ const SWEEP = `
       card: params.parentElement.clientWidth,
       display: getComputedStyle(params).display,
       paramsW: params.clientWidth,
+      innerR: +(pr.right - parseFloat(cs.paddingRight)).toFixed(2),
+      justify: cs.justifyContent,
       blocks,
     });
   }
@@ -125,7 +129,9 @@ interface SweepRow {
   card: number;
   display: string;
   paramsW: number;
-  blocks: { w: number; top: number }[];
+  innerR: number;
+  justify: string;
+  blocks: { w: number; top: number; l: number; r: number }[];
 }
 
 const failures: string[] = [];
@@ -258,6 +264,35 @@ try {
     if (Math.max(...widths) > row.paramsW + 0.5)
       fail(`.app ${row.box.w}px 时最宽区块 ${Math.max(...widths)}px 溢出参数区 ${row.paramsW}px`);
   }
+
+  // 换行的余量要分到块之间（space-between），不能堆在行尾。堆着的时候最后一块的右缘离右内边距
+  // 还差几百 px，于是左内边距 16.5px、右内边距 16.5+余量 —— 就是「右边空一大块、左右不对称」。
+  // 单块行本就左对齐、没有可分的余量，跳过。
+  let slack = 0;
+  let slackAt = "";
+  let checkedLines = 0;
+  for (const row of sweep.rows)
+    for (const top of new Set(row.blocks.map(b => b.top))) {
+      const line = row.blocks.filter(b => b.top === top);
+      if (line.length < 2) continue;
+      checkedLines++;
+      const gap = row.innerR - Math.max(...line.map(b => b.r));
+      if (gap > slack) {
+        slack = gap;
+        slackAt = `.app ${row.box.w}px 的 ${line.length} 块行`;
+      }
+    }
+  if (checkedLines === 0)
+    fail("收缩探针一个多块行都没覆盖到 —— 行尾余量那条断言是空的");
+  else if (slack > 0.5)
+    fail(
+      `参数区把换行余量堆在行尾（${slackAt}，右缘差 ${slack.toFixed(1)}px）` +
+        ` —— 右内边距比左内边距宽这么多`,
+    );
+  console.log(
+    `\n参数区换行余量：实测 ${checkedLines} 个多块行，最大的行尾空隙 ${slack.toFixed(2)}px` +
+      (slackAt ? `（${slackAt}）` : ""),
+  );
 
   const wide = sweep.rows[0]!;
   const wideWidths = wide.blocks.map(b => b.w);
