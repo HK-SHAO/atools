@@ -374,6 +374,50 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
   return out;
 }
 
+/** 幅度投影的目标区间：真值落在「档中心 ± 半档」内，最低档一侧无下界。 */
+export interface Band {
+  lo: Float64Array;
+  hi: Float64Array;
+}
+
+/**
+ * 幅度是**量化**存下来的，level 说的是「落在第 q 档」，不是「等于档中心」。
+ * 绝大多数假约束出现在**最低那一档**：`q = 0` 的真值含义是「在这个地板以下」，
+ * 可硬投影把它钉在地板上 —— 于是整张频谱里所有安静的地方都被填成同一个非零值，
+ * 等于凭空铺一层等高的噪声地板。位深越浅，地板越高（2bit 只到峰值下 24 dB），
+ * 这层假噪声就越响。
+ *
+ * 这里只放宽这一档：让它可以往 0 走（上界仍是档中心，不让它盖过邻近档）。
+ * 最高那一档同理给到 +∞。其余档位仍钉在中心 —— **试过把每一档都放宽 ±半档，
+ * 收益为零甚至略负**：2bit 相关只到 0.179（本版 0.198）、包络 13/18（本版 18/18），
+ * 而 8bit 的谱差反而显著变差。地板这一档是唯一真正被钉错的地方。
+ *
+ * 交给迭代的语义是「幅度落在 [lo, hi] 内就不动它，出界才夹回来」，
+ * 即 ADMM 类相位重建里的幅度软约束；训练无关、零依赖、零额外耗时。
+ * 可逆档（exact）没有量化这一步，返回 null。
+ */
+function bandOf(spec: Spectrum, scale: number): Band | null {
+  const { meta, levels } = spec;
+  const span = dbSpanOf(meta.bits);
+  // 地板落在峰值下 span dB。span 大到地板已经在感知地板（−80 dB）之下时，
+  // 钉不钉它都听不出来 —— 实测 8bit（−96 dB）上放宽之后各项指标只是在噪声里摆动，
+  // 而 4bit（−48 dB）与 2bit（−24 dB）上这层假噪声又响又脏，放宽是巨赢。
+  if (meta.exact || !TUNE.relaxFloor || span >= 80) return null;
+  const steps = stepsOf(meta.bits);
+  const floorDb = meta.ref - span;
+  const lo = new Float64Array(levels.length);
+  const hi = new Float64Array(levels.length);
+  for (let i = 0; i < levels.length; i++) {
+    const q = Math.round((levels[i]! * steps) / 255);
+    const c = Math.exp((floorDb + (q / steps) * span) * DB_TO_LIN) * scale;
+    lo[i] = q <= 0 ? 0 : c;
+    hi[i] = q >= steps ? Infinity : c;
+  }
+  return { lo, hi };
+}
+
+const clampBand = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+
 function finish(x: Float64Array, win: number, samples: number): Samples {
   let peak = 0;
   for (let i = 0; i < samples; i++) {
@@ -407,6 +451,7 @@ async function glRefine(
   onProgress?: (p: number) => void,
   budgetMs: number = GL_BUDGET_MS,
   anchor?: Anchor | null,
+  band?: Band | null,
 ): Promise<void> {
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
@@ -432,10 +477,12 @@ async function glRefine(
       const at = f * full;
       core.analyse(x, f * hop);
       for (let b = 0; b < full; b++) {
-        const m = b < bins ? target[base + b]! : 0;
         const cr = core.re[b]!;
         const ci = core.im[b]!;
         const d = Math.sqrt(cr * cr + ci * ci) || 1e-30;
+        // 硬投影：幅度一律改写成档中心。软约束：已在 [lo, hi] 内就原样留着。
+        const m =
+          b >= bins ? 0 : band ? clampBand(d, band.lo[base + b]!, band.hi[base + b]!) : target[base + b]!;
         let pr = (cr / d) * m;
         let pi = (ci / d) * m;
 
@@ -527,6 +574,7 @@ async function invert(
   const { win, hop, bins, frames, samples } = meta;
   const scale = win / 4;
   const target = targetOf(spec, scale);
+  const band = bandOf(spec, scale);
   const padded = samples + win;
 
   const warm = TUNE.pghi ? phaseFromMagnitude(target, frames, bins, win, hop) : null;
@@ -540,6 +588,8 @@ async function invert(
         iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
         budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
         warm,
+        lo: band?.lo ?? null,
+        hi: band?.hi ?? null,
         tick: (m, total) => {
           if (Date.now() < next) return;
           if (alive && !alive()) throw new Aborted();
@@ -572,6 +622,7 @@ async function invert(
       onProgress,
       fine ? TUNE.fine.glBudgetMs : undefined,
       anchor,
+      band,
     );
   return finish(x, win, samples);
 }

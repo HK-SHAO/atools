@@ -133,10 +133,14 @@ const CASES: { enc: Encode; double?: boolean }[] = [
   { enc: { mode: "compact", sr: 8000, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 }, double: true },
 ];
 
+// 阈值来自基线实测加余量。算法真实提升后把阈值提到新基线；变红先当退步查。
 const GATE: [string, string, number, number, number][] = [
   ["严苛", "可逆 8k", 0.99, 3.5, -10],
   ["人声", "紧凑 8k 8bit", 0.15, 9, -8],
   ["严苛", "紧凑 8k 8bit", 0.05, 12, -3.5],
+  // 这条盯的是「地板那一档不被钉死」（TUNE.relaxFloor）：它落地之前，
+  // 乐声 4bit 的谱差是 26.6（远超 ≤10），所以这条会当场判红，不是摆设。
+  ["乐声", "紧凑 8k 4bit", 0.5, 10, -8],
 ];
 
 function gate(rows: Row[]): boolean {

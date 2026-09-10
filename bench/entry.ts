@@ -367,6 +367,7 @@ export function setTune(
     rtisi: boolean;
     rtisiIters: number;
     rtisiGl: number;
+    relaxFloor: boolean;
     phaseReliable: number;
     phaseDeadZone: number;
     anchorLambda: number;
@@ -379,6 +380,7 @@ export function setTune(
   if (t.rtisi !== undefined) TUNE.rtisi = t.rtisi;
   if (t.rtisiIters !== undefined) TUNE.rtisiIters = t.rtisiIters;
   if (t.rtisiGl !== undefined) TUNE.rtisiGl = t.rtisiGl;
+  if (t.relaxFloor !== undefined) TUNE.relaxFloor = t.relaxFloor;
   if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;
   if (t.phaseDeadZone !== undefined) SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
   if (t.anchorLambda !== undefined) TUNE.anchorLambda = t.anchorLambda;

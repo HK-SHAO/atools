@@ -4,6 +4,9 @@ interface RtisiOptions {
   iters?: number;
   warm?: Float64Array | null;
   budget?: number;
+  /** 幅度软约束的下/上界（逐 bin）；不给就退化成硬投影（钉在目标幅度上） */
+  lo?: Float64Array | null;
+  hi?: Float64Array | null;
   tick?: (m: number, frames: number) => Promise<void> | void;
 }
 
@@ -43,8 +46,16 @@ export async function rtisiLa(
   const im = new Float64Array(L);
   const cos = new Float64Array((K + 1) * bins);
   const sin = new Float64Array((K + 1) * bins);
+  const amp = new Float64Array((K + 1) * bins);
   const prevCos = new Float64Array((K + 1) * bins);
   const prevSin = new Float64Array((K + 1) * bins);
+  const prevAmp = new Float64Array((K + 1) * bins);
+  const lo = opts.lo ?? null;
+  const hi = opts.hi ?? null;
+  // 给了区间：幅度落在区间内就不动它，出界才夹回来。
+  // 没给：退回硬投影 —— 幅度一律写成目标值，与加这套之前逐位相同。
+  const fit = (d: number, i: number): number =>
+    lo && hi ? (d < lo[i]! ? lo[i]! : d > hi[i]! ? hi[i]! : d) : mag[i]!;
 
   const load = (at: number): void => {
     local.fill(0);
@@ -57,6 +68,10 @@ export async function rtisiLa(
       const p = warm[from + b]!;
       cos[k * bins + b] = Math.cos(p);
       sin[k * bins + b] = Math.sin(p);
+      // 只定相位。幅度如实填 0 —— 这一步覆盖的那些位置，local 里本来就还是空的。
+      // 硬投影下幅度恒取目标值、不看 amp，所以这与加软约束之前逐位相同；
+      // 软约束下则让它从 0 起步，地板那一档这才真的能落到 0。
+      amp[k * bins + b] = 0;
     }
   };
 
@@ -64,7 +79,7 @@ export async function rtisiLa(
     const base = f * bins;
     const at = k * bins;
     for (let b = 0; b < bins; b++) {
-      const g = mag[base + b]!;
+      const g = fit(amp[at + b]!, base + b);
       re[b] = g * cos[at + b]!;
       im[b] = g * sin[at + b]!;
     }
@@ -92,6 +107,7 @@ export async function rtisiLa(
       const d = Math.sqrt(rr * rr + ii * ii);
       cos[at + b] = d > 0 ? rr / d : 1;
       sin[at + b] = d > 0 ? ii / d : 0;
+      amp[at + b] = d;
     }
   };
 
@@ -113,10 +129,12 @@ export async function rtisiLa(
         if (k <= K - 1) {
           cos.set(prevCos.subarray(next, next + bins), here);
           sin.set(prevSin.subarray(next, next + bins), here);
+          amp.set(prevAmp.subarray(next, next + bins), here);
         } else if (warm) put(k, warm, (m + k) * bins);
         else {
           cos.fill(1, here, here + bins);
           sin.fill(0, here, here + bins);
+          amp.fill(0, here, here + bins);
         }
       }
       // 第 0 帧的相位从已经写进 out 的过去帧重读：逐帧推进才不会在帧界上出爆音。
@@ -131,7 +149,7 @@ export async function rtisiLa(
 
     const base = m * bins;
     for (let b = 0; b < bins; b++) {
-      const g = mag[base + b]!;
+      const g = fit(amp[b]!, base + b);
       re[b] = g * cos[b]!;
       im[b] = g * sin[b]!;
     }
@@ -146,6 +164,7 @@ export async function rtisiLa(
 
     prevCos.set(cos);
     prevSin.set(sin);
+    prevAmp.set(amp);
     if (tick) await tick(m + 1, frames);
   }
 

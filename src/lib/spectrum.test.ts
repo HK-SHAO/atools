@@ -7,6 +7,7 @@ import { RAMP } from "./palette";
 import { BANDS, encode, fitEncode, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { STUB_ROWS, stubFits } from "./stub";
+import { TUNE } from "./phase";
 import { resample, silenceBounds, slice, trimRange } from "./resample";
 
 function signal(samples: number, sr: number): Samples {
@@ -908,6 +909,61 @@ describe("level bytes", () => {
       const y = await synthesise(spec);
       expect(y.every(Number.isFinite)).toBe(true);
     }
+  });
+});
+
+describe("floor relaxation", () => {
+  // 最低那一档（level 0）的真值含义是「在这个地板以下」。硬投影把它钉在地板上，
+  // 于是一张**全零**的频谱重建出来不是静音，而是铺满整张图的一层等高噪声 ——
+  // 位深越浅地板越高（2bit 只在峰值下 24 dB），这层假噪声越响。
+  // 放宽之后 level 0 可以往 0 走，全零频谱就该还原成静音。
+  const rms = (x: Samples): number => {
+    let acc = 0;
+    for (const v of x) acc += v * v;
+    return Math.sqrt(acc / x.length);
+  };
+
+  const quiet = async (bits: number, relax: boolean): Promise<number> => {
+    TUNE.relaxFloor = relax;
+    try {
+      const frames = 40;
+      const hop = 128;
+      const meta = {
+        sr: 8000,
+        win: 512,
+        hop,
+        frames,
+        bins: 257,
+        samples: frames * hop,
+        bits,
+        ref: 0,
+        exact: false,
+      };
+      const spec: Spectrum = {
+        meta,
+        levels: new Uint8Array(frames * meta.bins),
+        phaseCos: null,
+        phaseSin: null,
+      };
+      return rms(await synthesise(spec));
+    } finally {
+      TUNE.relaxFloor = true;
+    }
+  };
+
+  test("a flat-zero spectrum comes back silent at low bit depths", async () => {
+    const off = await quiet(4, false);
+    const on = await quiet(4, true);
+    expect(off).toBeGreaterThan(1e-4);
+    expect(on).toBeLessThan(off / 1000);
+  });
+
+  // 地板在 −80 dB 以下时（8bit 是 −96 dB）钉不钉都听不出来，放宽只会在噪声里摆动。
+  // 这条把「span ≥ 80 就完全不放宽」钉住 —— 8bit 的输出必须与放宽前一模一样。
+  test("leaves high bit depths alone", async () => {
+    const off = await quiet(8, false);
+    const on = await quiet(8, true);
+    expect(on).toBe(off);
   });
 });
 

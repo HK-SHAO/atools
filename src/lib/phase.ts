@@ -1,5 +1,7 @@
 export const TUNE = {
   pghi: true,
+  /** 幅度投影时，最低那一档是否允许往 0 走（不再钉在噪声地板上）。见 docs/algorithms.md */
+  relaxFloor: true,
   momentum: 0.99,
   gamma: 0.25645,
   tol: [0.1, 1e-10] as [number, number],
