@@ -7,7 +7,7 @@ const LIGHT = 230;
 
 const CRC_POLY = 0x07;
 
-export const STUB_SR = [
+const STUB_SR = [
   8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 176400, 192000,
 ] as const;
 

@@ -1,32 +1,19 @@
-const root = import.meta.dir;
-const project = `${root}/..`;
-const BUNDLE = `bundle-${process.env.PORT ?? 4330}.js`; // 并行实例各用各的 bundle
+import { contentType } from "./cdp";
 
-const TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-  ".ogg": "audio/ogg",
-  ".wav": "audio/wav",
-  ".png": "image/png",
-};
+const root = import.meta.dir;
+const PORT = Number(process.env.PORT ?? 4330);
 
 Bun.serve({
-  port: Number(process.env.PORT ?? 4330),
+  port: PORT,
   async fetch(req) {
-    const url = new URL(req.url);
-    let path = url.pathname === "/" ? "/index.html" : url.pathname;
+    const path = new URL(req.url).pathname;
     let file: string;
-    if (path === "/index.html") file = `${root}${path}`;
-    else if (path === "/bundle.js") file = `${root}/${BUNDLE}`;
-    else if (path.startsWith("/audio/")) file = `${project}/docs/${path.slice(7)}`;
+    if (path === "/") file = `${root}/index.html`;
+    else if (path === "/bundle.js") file = `${root}/bundle-${PORT}.js`;
+    else if (path.startsWith("/audio/")) file = `${root}/../docs/${path.slice(7)}`;
     else if (path.startsWith("/pcm/")) {
-      // 解码缓存（见 cache.ts），未命中返回 404，页面回退到 /audio/ 现场解码
       try {
-        file = (await import("./cache")).cachePath(
-          decodeURIComponent(path.slice(5)),
-        );
+        file = (await import("./cache")).cachePath(decodeURIComponent(path.slice(5)));
       } catch {
         return new Response("missing", { status: 404 });
       }
@@ -34,11 +21,8 @@ Bun.serve({
 
     const body = Bun.file(file);
     if (!(await body.exists())) return new Response("missing", { status: 404 });
-    const ext = file.slice(file.lastIndexOf("."));
-    return new Response(body, {
-      headers: { "content-type": TYPES[ext] ?? "application/octet-stream" },
-    });
+    return new Response(body, { headers: { "content-type": contentType(file) } });
   },
 });
 
-console.log(`bench server on http://127.0.0.1:${process.env.PORT ?? 4330}`);
+console.log(`bench 服务 http://127.0.0.1:${PORT}`);

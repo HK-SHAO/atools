@@ -5,7 +5,7 @@ import { BANDS, DEFAULT_SR, MAX_FRAMES, paramsForImage, type Meta, type Spectrum
 import { stepsOf } from "./params";
 import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
 
-export const FORMAT_VERSION = 4;
+const FORMAT_VERSION = 4;
 
 export function metaToText(meta: Meta): string {
   return JSON.stringify([

@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "./styles/index.css";
+import "./styles/base.css";
 import { App } from "./App";
 
 if (process.env.NODE_ENV !== "production") {

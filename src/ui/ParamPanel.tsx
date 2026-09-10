@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import * as stylex from "@stylexjs/stylex";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -9,7 +10,23 @@ import {
   type Encode,
   type Mode,
 } from "../lib/params";
-import { OptionRow, type Option } from "./OptionRow";
+import { kit } from "./kit";
+import { OptionRow, Row, type Option } from "./OptionRow";
+
+const params = stylex.create({
+  panel: {
+    display: { default: "flex", "@container (min-width: 800px)": "grid" },
+    flexDirection: "column",
+    gridTemplateColumns: { "@container (min-width: 800px)": "repeat(auto-fit, minmax(11em, 1fr))" },
+    rowGap: "0.125em",
+    columnGap: { "@container (min-width: 800px)": "1.25em" },
+    alignItems: { "@container (min-width: 800px)": "center" },
+    paddingTop: "0.5em",
+    borderTopWidth: "1px",
+    borderTopStyle: "solid",
+    borderTopColor: "var(--line)",
+  },
+});
 
 const MODE_OPTIONS: readonly Option<Mode>[] = [
   { value: "compact", label: "紧凑" },
@@ -61,14 +78,35 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
     hz => ({ value: hz, label: hzLabel(hz) }),
   );
 
-  return (
-    <div className="params">
-      <OptionRow<Mode>
-        label="模式"
-        value={enc.mode}
-        options={MODE_OPTIONS}
-        onPick={v => set("mode", v)}
+  const field = (side: "start" | "end", aria: string, placeholder?: string) => (
+    <label data-el="num" {...stylex.props(kit.num)}>
+      <span aria-hidden="true">{side === "start" ? "起" : "止"}</span>
+      <input
+        {...stylex.props(kit.numInput)}
+        type="number"
+        aria-label={aria}
+        min={0}
+        max={duration}
+        step={0.1}
+        placeholder={placeholder}
+        value={range ? range[side] : side === "start" ? String(enc.start) : endShown(enc.end)}
+        onChange={e =>
+          setRange({
+            start: side === "start" ? e.target.value : (range?.start ?? String(enc.start)),
+            end: side === "end" ? e.target.value : (range?.end ?? endShown(enc.end)),
+          })
+        }
+        onBlur={commitRange}
+        onKeyDown={e => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
       />
+    </label>
+  );
+
+  return (
+    <div data-el="params" {...stylex.props(params.panel)}>
+      <OptionRow<Mode> label="模式" value={enc.mode} options={MODE_OPTIONS} onPick={v => set("mode", v)} />
       <OptionRow<number>
         label="采样"
         value={enc.sr}
@@ -76,12 +114,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
         onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
       />
       {compact && (
-        <OptionRow<number>
-          label="位深"
-          value={enc.bits}
-          options={BIT_OPTS}
-          onPick={v => set("bits", v)}
-        />
+        <OptionRow<number> label="位深" value={enc.bits} options={BIT_OPTS} onPick={v => set("bits", v)} />
       )}
       <OptionRow<Encode["fineness"]>
         label="窗长"
@@ -90,56 +123,15 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
         onPick={v => set("fineness", v)}
       />
       {compact && (
-        <OptionRow<number>
-          label="频宽"
-          value={enc.fmax}
-          options={fmaxOptions}
-          onPick={v => set("fmax", v)}
-        />
+        <OptionRow<number> label="频宽" value={enc.fmax} options={fmaxOptions} onPick={v => set("fmax", v)} />
       )}
-      <div className="prow">
-        <span className="plabel">区间</span>
-        <div className="chips">
-          <label className="num">
-            <span aria-hidden="true">起</span>
-            <input
-              type="number"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={range ? range.start : String(enc.start)}
-              onChange={e =>
-                setRange({ start: e.target.value, end: range ? range.end : endShown(enc.end) })
-              }
-              onBlur={commitRange}
-              onKeyDown={e => {
-                if (e.key === "Enter") e.currentTarget.blur();
-              }}
-            />
-          </label>
-          <label className="num">
-            <span aria-hidden="true">止</span>
-            <input
-              type="number"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={range ? range.end : endShown(enc.end)}
-              placeholder="结尾"
-              onChange={e =>
-                setRange({ start: range ? range.start : String(enc.start), end: e.target.value })
-              }
-              onBlur={commitRange}
-              onKeyDown={e => {
-                if (e.key === "Enter") e.currentTarget.blur();
-              }}
-            />
-          </label>
-          <button type="button" className="chip" onClick={onTrim}>
-            裁静音
-          </button>
-        </div>
-      </div>
+      <Row label="区间">
+        {field("start", "起点秒数")}
+        {field("end", "终点秒数", "结尾")}
+        <button type="button" data-el="chip" {...stylex.props(kit.chip, kit.chipHover)} onClick={onTrim}>
+          裁静音
+        </button>
+      </Row>
     </div>
   );
 }

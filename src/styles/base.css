@@ -1,0 +1,42 @@
+@property --u {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 16px;
+}
+
+@property --c-vh {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 6.67px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+button,
+input,
+label {
+  font: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

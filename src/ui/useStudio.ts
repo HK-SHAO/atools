@@ -7,13 +7,13 @@ import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params"
 import { resample, silenceBounds, slice } from "../lib/resample";
 import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "../lib/spectrum";
 
-export interface Source {
+interface Source {
   pcm: Samples;
   sr: number;
   name: string;
 }
 
-export interface Job {
+interface Job {
   spec: Spectrum;
   pcm: Samples;
   png: Blob;
@@ -25,7 +25,7 @@ const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
 const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
 
-function adoptMeta(meta: Meta, e: Encode): Encode {
+function adoptMeta(meta: Meta): Encode {
   const at = FINENESS.findIndex(f => f.win >= meta.win);
   return {
     mode: meta.exact ? "exact" : "compact",
@@ -128,7 +128,7 @@ export function useStudio() {
         if (!alive()) return;
 
         setMode(readMode);
-        setEnc(e => adoptMeta(spec.meta, reopen(e)));
+        setEnc(() => adoptMeta(spec.meta));
         setSource({ pcm, sr: spec.meta.sr, name: file.name });
         if (guessed)
           setHint(

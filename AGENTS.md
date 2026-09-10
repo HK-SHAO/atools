@@ -20,10 +20,11 @@ bun bench/scale.ts       # 尺度门禁：字号随容器等比、五种控件�
 
 ```
 src/lib/     算法层（纯函数，无 DOM 依赖，可被 Bun 直接测试）
-src/styles/  只剩令牌与地基：自定义属性、`@property` 注册、reset、容器查询尺度；组件样式一律 StyleX，不放这里
+src/styles/  唯一的 CSS：base.css，只装 `@property` 注册与宿主文档归零（StyleX 够不到这两件事）
+src/ui/kit.ts 控件库：设计令牌、玻璃表面、五种控件共用的同一套几何
 src/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
-src/ui/      组件与 hooks；组件样式用 StyleX（`stylex.create`）同模块表达，编译期抽原子类
-bench/       无头 Chromium + CDP 驱动真实页面的评测台（run.ts 每次重打 bundle.js，scale.ts 守尺度）
+src/ui/      组件与 hooks；样式用 StyleX（`stylex.create`）在各自模块里表达，编译期抽原子类
+bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，smoke.ts 冒烟）
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建与样式管线）
 ```
 
@@ -38,7 +39,9 @@ docs/        format-spec.md（图片格式契约）· algorithms.md（算法原�
 
 ## 样式
 
-组件样式写进 StyleX，dev 与生产**都**显式 `useCSSLayers: false`。StyleX 默认开 `@layer`，而未分层规则无条件胜过分层规则——两边一旦不一致，同一份样式在 dev 和 prod 的胜负关系会整个反过来。构建侧另有三处 Bun 硬约束（outdir 用绝对路径、不传 metafile、二进制资源必须前置 onLoad 截胡），见 `docs/build.md`。
+组件样式、设计令牌、控件几何全在 StyleX 里：令牌与控件在 `src/ui/kit.ts`（`stylex.create` 会把 `--*` 原样透传，尺度令牌就写在那儿），组件私有样式在各自模块里。仓库里唯一保留的 CSS 是 `src/styles/base.css`，只有 `@property` 注册与宿主文档归零——前者 StyleX 没有对应 API，后者需要元素选择器而 StyleX 只产类选择器。dev 与生产**都**显式 `useCSSLayers: false`：StyleX 默认开 `@layer`，而未分层规则无条件胜过分层规则，两边一旦不一致，同一份样式在 dev 和 prod 的胜负关系会整个反过来。构建侧另有三处 Bun 硬约束（outdir 用绝对路径、不传 metafile、非代码资源必须前置 onLoad 截胡），见 `docs/build.md`。
+
+组件上不再有语义类名，评测台一律按 `data-el="<名字>"` 取元素（清单见 `docs/build.md`）。
 
 ## 尺度系统
 

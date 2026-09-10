@@ -1,11 +1,7 @@
-// docs 音频的解码缓存：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走
-// WASM 解码要几分钟，且每次评测重复付出。这里用 bun 侧解码一次、按文件内容
-// （路径 + mtime + size）落盘 f32 PCM，之后评测直接读缓存。只缓存前
-// PRECACHE_SEC 秒（评测只用开头若干秒）。
 import { mkdirSync, statSync } from "node:fs";
 import { decodeAudioFile } from "../src/lib/audio";
 
-export const CACHE_DIR = `${import.meta.dir}/.cache`;
+const CACHE_DIR = `${import.meta.dir}/.cache`;
 const PRECACHE_SEC = Number(process.env.PRECACHE_SEC ?? 30);
 
 export function cachePath(rel: string): string {

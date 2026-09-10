@@ -273,7 +273,7 @@ function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): 
   return out;
 }
 
-export interface IndexedRamp {
+interface IndexedRamp {
   width: number;
   height: number;
   levels: Uint8Array;

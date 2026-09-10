@@ -1,6 +1,6 @@
 import { FFT, hannWindow, mirrorSpectrum } from "./fft";
 
-export interface RtisiOptions {
+interface RtisiOptions {
   lookahead?: number;
   iters?: number;
   warm?: Float64Array | null;

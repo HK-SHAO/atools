@@ -2,17 +2,12 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import stylex from "@stylexjs/unplugin";
 
-/* 两种产物，同一份源码共用 dist/：
-   —— web  dist/ 目录（默认），多文件，交给任意静态服务器；引用全为相对路径，
-            兼容 B站 Toy 的 /toy/<slug>/ 子路径部署
-   —— toy  web 产物原样压成 toy.zip，index.html 在包根，配 build:toy 发布 */
-
-const ASSET = /\.(ogg|opus|mp3|m4a|aac|wav|flac|png|jpe?g|gif|webp|svg|ico|woff2?|ttf)$/;
+const NOT_CODE = /\.(?!html?$|[cm]?[jt]sx?$|css$|json$|map$|txt$)[^.]+$/;
 
 const asset: Bun.BunPlugin = {
   name: "asset",
   setup(build) {
-    build.onLoad({ filter: ASSET }, async (args) => ({
+    build.onLoad({ filter: NOT_CODE }, async (args) => ({
       contents: new Uint8Array(await Bun.file(args.path).arrayBuffer()),
       loader: "file",
     }));
@@ -50,8 +45,6 @@ if (!result.success) {
 }
 
 if (toy) {
-  // zip 是「更新」语义：已存在的包不会自动剔除消失的文件，先删干净再压；
-  // 压的是目录里的东西而不是目录本身，index.html 必须在包根
   const zipPath = path.join(process.cwd(), "toy.zip");
   await rm(zipPath, { force: true });
   await Bun.$`cd ${outdir} && zip -qr ${zipPath} . -x '*.DS_Store'`;

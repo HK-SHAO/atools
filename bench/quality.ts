@@ -62,8 +62,8 @@ function harsh(sr: number, seconds: number): Samples {
   for (let i = 0; i < n; i++) {
     const t = i / sr;
     let v = 0;
-    if (t % 1 < 0.18) v += 0.5 * noise(); // 白噪爆发
-    if (Math.abs((t % 0.5) - 0.25) < 0.0015) v += 0.9 * (i % 2 ? 1 : -1); // 点击
+    if (t % 1 < 0.18) v += 0.5 * noise();
+    if (Math.abs((t % 0.5) - 0.25) < 0.0015) v += 0.9 * (i % 2 ? 1 : -1);
     const sweepT = t % 1.3;
     if (sweepT < 0.9)
       v += 0.3 * Math.sin(2 * Math.PI * (200 + (3300 * sweepT * sweepT) / 0.81) * sweepT);
@@ -99,7 +99,7 @@ async function runCase(name: string, gen: (sr: number, sec: number) => Samples, 
   const y1 = await synthesise(spec1);
   const t1 = performance.now();
   const got = doublePass
-    ? await synthesise(await encode(y1, sr, enc)) // 来回转换两趟：量累积损失
+    ? await synthesise(await encode(y1, sr, enc))
     : y1;
   const m = compare(ref, got);
   const conv = spectral(magnitudes(ref, 1024, 256), magnitudes(got, 1024, 256)).conv;

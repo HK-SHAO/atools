@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FFT, hannWindow } from "./fft";
 import { align, magnitudes, spectral } from "./metric";
-import { levelToDb } from "./spectrum";
 import type { Samples } from "./arrays";
 import { rtisiLa } from "./rtisi";
 

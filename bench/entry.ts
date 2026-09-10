@@ -1,21 +1,19 @@
 import { decodeAudioFile } from "../src/lib/audio";
 import { FFT, hannWindow } from "../src/lib/fft";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
-import { dbSpanOf, FINENESS, hopOf, winOf, VOICE, type Encode, type Mode } from "../src/lib/params";
+import { FINENESS, type Encode, type Mode } from "../src/lib/params";
 import { SYNTH_TUNE } from "../src/lib/spectrum";
 import { resample, slice } from "../src/lib/resample";
 import { encode, synthesise, type Spectrum } from "../src/lib/spectrum";
 import { phaseFromMagnitude, TUNE } from "../src/lib/phase";
 import type { Samples } from "../src/lib/arrays";
 
-export interface Case {
-
+interface Case {
   sr: number;
   bits: number;
   fineness: 0 | 1 | 2;
   fmax: number;
   mode: Mode;
-
   via:
     | "png"
     | "jpeg"
@@ -28,18 +26,12 @@ export interface Case {
     | "none";
 }
 
-export interface Metrics {
-
+interface Metrics {
   snr: number;
-
   corr: number;
-
   conv: number;
-
   lsd: number;
-
   magSnr: number;
-
   levelErr: number;
 }
 
@@ -52,16 +44,13 @@ export interface Row {
   frames: number;
   bins: number;
   seconds: number;
-
   rel: number | null;
-
   readMode: string;
   m: Metrics;
 }
 
 const log10 = Math.log10;
 
-// 实验开关：相位修正小网络（bench/ml/train.py 训练，NEURAL=weights.json 启用）
 interface NeuralWeights {
   c1w: number[][][][];
   c1b: number[];
@@ -77,10 +66,6 @@ export function setNeural(w: NeuralWeights | null): void {
   NEURAL = w;
 }
 
-// 对读回的相位通道逐 bin 跑修正网络（残差式：输出 = 归一化(损伤矢量+修正量)），
-// 只处理幅度显著且 w>0 的 bin 以控制耗时。返回处理 bin 数。
-// 结构与 bench/ml/train.py 一致：c1 5×5 valid + ReLU → c2 3×3 valid + ReLU → fc 2，
-// patch=7 时 c1 输出 3×3、c2 输出 1×1。
 function neuralRefine(spec: Spectrum): number {
   if (!NEURAL || !spec.phaseCos || !spec.phaseSin || !spec.phaseW) return 0;
   if (NEURAL.patch !== 7) throw new Error("neuralRefine 仅支持 patch=7");
@@ -160,8 +145,6 @@ function neuralRefine(spec: Spectrum): number {
   return done;
 }
 
-// 真值相位：与 encode 相同的加窗网格上算 STFT，输出 uint8（127.5 圆心）。
-// 幅度近零的 bin 相位无意义，写 127 居中值（训练侧按幅度加权即可屏蔽）。
 function stftPhase(x: Samples, win: number, hop: number, frames: number): { cos: Uint8Array; sin: Uint8Array } {
   const bins = win / 2 + 1;
   const fft = new FFT(win);
@@ -193,8 +176,6 @@ function stftPhase(x: Samples, win: number, hop: number, frames: number): { cos:
   return { cos, sin };
 }
 
-// 把真值相位按归一化位置双线性重采样到读回网格（缩放损伤后两网格不同），
-// 单位矢量插值后重新归一化半径。
 function resamplePhase(
   cos: Uint8Array,
   sin: Uint8Array,
@@ -261,12 +242,11 @@ export async function dumpPair(srcPcm: Samples, srcSr: number, c: Case): Promise
   dv.setUint32(24, exact ? 1 : 0, true);
   dv.setFloat32(28, ref, true);
   dv.setUint32(36, read.spec.phaseW ? 1 : 0, true);
-  // levels 统一存 uint16（exact 编码本身即 uint16，compact 由 uint8 升位，无损）
   const lv = new Uint16Array(read.spec.levels.length);
   for (let i = 0; i < lv.length; i++) lv[i] = read.spec.levels[i]!;
   const parts: BlobPart[] = [head, lv];
   for (const arr of [read.spec.phaseCos, read.spec.phaseSin, read.spec.phaseW]) {
-    if (!arr) return ""; // 无相位通道，无法成对
+    if (!arr) return "";
     parts.push(Uint8Array.from(arr));
   }
   parts.push(aligned.cos as BlobPart, aligned.sin as BlobPart);
@@ -451,7 +431,6 @@ async function degrade(blob: Blob, via: Case["via"]): Promise<Blob> {
 }
 
 export async function loadAudio(url: string): Promise<{ pcm: Samples; sr: number }> {
-  // 优先读评测端预解码缓存（4 字节 sr 头 + f32 PCM），未命中再现场解码
   const cached = await fetch(url.replace(/^\/audio\//, "/pcm/")).catch(() => null);
   if (cached?.ok) {
     const buf = await cached.arrayBuffer();
@@ -649,7 +628,6 @@ export async function runCase(
     const degraded = await degrade(png, viaKey);
     bytes = degraded.size;
     const read = await imageToSpectrum(degraded, fileName);
-    console.error(`[diag] ${fileName} ${read.width}x${read.height} mode=${read.mode} guessed=${read.guessed} frames=${read.spec.meta.frames} bins=${read.spec.meta.bins} sr=${read.spec.meta.sr} dur=${(read.spec.meta.samples/read.spec.meta.sr).toFixed(2)}s`);
     back = read.spec;
     rel = read.phaseReliability;
     readMode = read.mode;
@@ -698,7 +676,7 @@ function levelErr(a: Spectrum, b: Spectrum): number {
   return worst;
 }
 
-export async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none" });
   const w = bitmap.width;
   const h = bitmap.height;
@@ -1000,7 +978,6 @@ export function reconProbe(
   const ref = x as Samples;
   const show = (label: string, y: Float64Array) => {
     const a = align(ref, Float32Array.from(y) as Samples, Math.min(2048, Math.floor(x.length / 4)));
-    const s = spectral(magnitudes(ref, 1024, 256), magnitudes(Float32Array.from(y) as Samples, 1024, 256));
     return `${label} ${a.snr.toFixed(1)}dB/${a.corr.toFixed(3)}/谱拟合${fit(y).toFixed(1)}`;
   };
 
@@ -1076,12 +1053,3 @@ export function gradProbe(pcm: Samples, sr: number, win: number, hop: number): s
     (cT * (slog[f * bins + b + 1]! - slog[f * bins + b - 1]!) / 2 + (2 * Math.PI * hop * b) / win);
   return [stat("频率方向 Δb", dF), stat("时间方向 Δf", dT)];
 }
-
-export const DEFAULTS = {
-  VOICE,
-  hopOf,
-  winOf,
-  dbSpanOf,
-};
-
-export const CASE_TAGS = { FINENESS };

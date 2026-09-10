@@ -1,52 +1,9 @@
-const root = import.meta.dir;
-const project = `${root}/..`;
+import { open, serveDir, sleep } from "./cdp";
+
+const project = `${import.meta.dir}/..`;
+const SAMPLE = "voice/greeting.mp3";
 const PORT = Number(process.env.PORT ?? 4390);
 const CDP = PORT + 700;
-const CHROME =
-  "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
-const SAMPLE = "voice/greeting.mp3";
-
-const TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".ogg": "audio/ogg",
-  ".mp3": "audio/mpeg",
-  ".m4a": "audio/mp4",
-};
-
-const cssFiles = [...new Bun.Glob("*.css").scanSync({ cwd: `${project}/dist` })];
-let server: ReturnType<typeof Bun.serve> | null = null;
-const viaUrl = process.env.URL;
-
-if (!viaUrl) {
-  if (cssFiles.length !== 1) {
-    console.error(`dist/ 里应当只有一个 css 产物，实际 ${cssFiles.length} 个：重建后再跑`);
-    process.exit(1);
-  }
-  const dist = `${project}/dist`;
-  server = Bun.serve({
-    port: PORT,
-    async fetch(req) {
-      const path = new URL(req.url).pathname;
-      const file =
-        path === "/"
-          ? `${dist}/index.html`
-          : path.startsWith("/audio/")
-            ? `${project}/docs/${path.slice(7)}`
-            : `${dist}${path}`;
-      const body = Bun.file(file);
-      if (!(await body.exists())) return new Response("missing", { status: 404 });
-      const ext = file.slice(file.lastIndexOf("."));
-      return new Response(body, { headers: { "content-type": TYPES[ext] ?? "text/plain" } });
-    },
-  });
-}
-
-const target = viaUrl ?? `http://127.0.0.1:${PORT}/`;
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 const SIZES: [number, number][] = [
   [1500, 950],
@@ -70,30 +27,26 @@ const CURVE = { ref: 340, base: 14, slope: 1 / 280, ceil: 16.5 };
 const curveU = (w: number, h: number): number => {
   const eff = Math.min(w, h * 1.6);
   const raw =
-    eff < CURVE.ref
-      ? (CURVE.base * eff) / CURVE.ref
-      : CURVE.base + (eff - CURVE.ref) * CURVE.slope;
+    eff < CURVE.ref ? (CURVE.base * eff) / CURVE.ref : CURVE.base + (eff - CURVE.ref) * CURVE.slope;
   return Math.min(CURVE.ceil, raw);
 };
 
-const CONTROLS = [".act", ".params .chip", ".params .num", ".icon-btn", ".drop-act"];
-
-const CHECKS: string[] = [];
-const fail = (msg: string) => CHECKS.push(msg);
-const seen: { w: number; u: number; box: { w: number; h: number } }[] = [];
+const CONTROLS = ["act", "chip", "num", "icon-btn", "drop-act"];
+const SELECTORS = [
+  '[data-el="act"]',
+  '[data-el="params"] [data-el="chip"]',
+  '[data-el="params"] [data-el="num"]',
+  '[data-el="icon-btn"]',
+  '[data-el="drop-act"]',
+];
 
 const PROBE = `
   const px = (v) => parseFloat(v);
-  const appEl = document.querySelector('.app');
-  const shellEl = document.querySelector('.shell');
-  const u = px(getComputedStyle(shellEl).getPropertyValue('--u'));
-  const box = { w: appEl.clientWidth, h: appEl.clientHeight };
-  const view = {
-    inner: innerWidth + 'x' + innerHeight,
-    app: box.w + 'x' + box.h,
-    root: (document.getElementById('root')?.clientHeight ?? -1) + '',
-  };
-  const boxH = (sel) => {
+  const app = document.querySelector('[data-el="app"]');
+  const shell = document.querySelector('[data-el="shell"]');
+  const params = document.querySelector('[data-el="params"]');
+  const chip = document.querySelector('[data-el="params"] [data-el="chip"]');
+  const height = (sel) => {
     const el = document.querySelector(sel);
     return el ? +el.getBoundingClientRect().height.toFixed(3) : null;
   };
@@ -101,181 +54,154 @@ const PROBE = `
     const el = document.querySelector(sel);
     return el ? px(getComputedStyle(el).fontSize) : null;
   };
-  const ref = document.querySelector('.params .chip') ?? document.querySelector('.drop-act');
-  const tokens = Object.fromEntries(
-    ${JSON.stringify(Object.keys(RATIOS))}.map((k) => [k, getComputedStyle(ref).getPropertyValue(k).trim()]),
-  );
-  const probeEl = document.createElement('div');
-  probeEl.style.cssText = 'width:600px;position:absolute;left:-9999px;top:0';
-  probeEl.innerHTML = '<div class="card"><div class="params"><div class="prow">x</div></div></div>';
-  document.body.append(probeEl);
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  const narrow = getComputedStyle(probeEl.querySelector('.params')).display;
-  probeEl.style.width = '900px';
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  const wide = getComputedStyle(probeEl.querySelector('.params')).display;
-  probeEl.remove();
   return {
-    u,
-    box,
-    view,
-    h1: font('.head h1'),
-    chip: font('.params .chip'),
-    heights: ${JSON.stringify(CONTROLS)}.map(boxH),
-    tokens,
-    beforeLoad: {
-      params: getComputedStyle(document.querySelector('.params')).display,
-      wide,
-      narrow,
-    },
+    u: px(getComputedStyle(shell).getPropertyValue('--u')),
+    box: { w: app.clientWidth, h: app.clientHeight },
+    params: getComputedStyle(params).display,
+    title: font('[data-el="title"]'),
+    chip: font('[data-el="params"] [data-el="chip"]'),
+    heights: ${JSON.stringify(SELECTORS)}.map(height),
+    tokens: Object.fromEntries(
+      ${JSON.stringify(Object.keys(RATIOS))}.map((k) => [k, getComputedStyle(chip).getPropertyValue(k).trim()]),
+    ),
   };
 `;
 
 const DROP = `
-  if (!document.querySelector('.params .chip')) {
-    const res = await fetch('/audio/${SAMPLE}');
-    const blob = await res.blob();
+  if (!document.querySelector('[data-el="params"]')) {
+    const blob = await (await fetch('/audio/${SAMPLE}')).blob();
     const dt = new DataTransfer();
     dt.items.add(new File([blob], 'sample.mp3', { type: blob.type }));
-    document.querySelector('.app').dispatchEvent(
+    document.querySelector('[data-el="app"]').dispatchEvent(
       new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }),
     );
   }
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 150; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    if (document.querySelector('.params .chip')) break;
+    if (document.querySelector('[data-el="params"]')) return true;
   }
-  return !!document.querySelector('.params .chip');
+  return false;
 `;
 
-const proc = Bun.spawn(
-  [
-    CHROME,
-    "--headless=new",
-    `--remote-debugging-port=${CDP}`,
-    "--no-first-run",
-    "--no-sandbox",
-    "--disable-gpu",
-    "--mute-audio",
-    "--window-size=1500,950",
-    `--user-data-dir=/tmp/cdp-scale-${Date.now()}`,
-    "about:blank",
-  ],
-  { stdout: "ignore", stderr: "ignore" },
-);
+const SWEEP = `
+  const app = document.querySelector('[data-el="app"]');
+  const shell = document.querySelector('[data-el="shell"]');
+  const params = document.querySelector('[data-el="params"]');
+  const style = document.createElement('style');
+  document.head.append(style);
+  const out = [];
+  for (const w of [1500, 900, 800, 600, 520]) {
+    style.textContent = '[data-el="app"]{width:' + w + 'px}';
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    out.push({
+      w,
+      u: parseFloat(getComputedStyle(shell).getPropertyValue('--u')),
+      box: { w: app.clientWidth, h: app.clientHeight },
+      card: params.parentElement.clientWidth,
+      params: getComputedStyle(params).display,
+    });
+  }
+  style.remove();
+  return { rows: out, viewport: innerWidth };
+`;
+
+interface Probe {
+  u: number;
+  box: { w: number; h: number };
+  params: string;
+  title: number | null;
+  chip: number | null;
+  heights: (number | null)[];
+  tokens: Record<string, string>;
+}
+
+interface SweepRow {
+  w: number;
+  u: number | null;
+  box: { w: number; h: number };
+  card: number;
+  params: string;
+}
+
+const failures: string[] = [];
+const fail = (msg: string) => failures.push(msg);
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+const cssFiles = [...new Bun.Glob("*.css").scanSync({ cwd: `${project}/dist` })];
+if (cssFiles.length !== 1) {
+  console.error(`dist/ 里应当只有一个 css 产物，实际 ${cssFiles.length} 个：先 bun run build:web`);
+  process.exit(1);
+}
+const css = await Bun.file(`${project}/dist/${cssFiles[0]}`).text();
+if (css.includes("@layer")) fail(`${cssFiles[0]} 含 @layer：dev 与生产级联口径不一致`);
+if (!css.includes("@property --u")) fail(`${cssFiles[0]} 丢了 @property --u：尺度令牌会被最近的内联容器抢走`);
+
+const server = serveDir(PORT, `${project}/dist`, { "/audio/": `${project}/docs/` });
+const session = await open({ port: CDP, size: SIZES[0]!, url: `http://127.0.0.1:${PORT}/` });
+const seen: { w: number; u: number }[] = [];
 
 try {
-  await sleep(1200);
-  const list = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()) as {
-    type: string;
-    webSocketDebuggerUrl?: string;
-  }[];
-  const ws = new WebSocket(list.find(x => x.type === "page")!.webSocketDebuggerUrl!);
-  await new Promise(ok => (ws.onopen = ok));
-
-  let seq = 0;
-  const pending = new Map<number, (v: unknown) => void>();
-  ws.onmessage = e => {
-    const m = JSON.parse(String(e.data)) as { id?: number; result?: unknown };
-    if (m.id !== undefined) pending.get(m.id)?.(m.result);
-  };
-  const send = (method: string, params: Record<string, unknown> = {}) =>
-    new Promise<unknown>(res => {
-      const id = ++seq;
-      pending.set(id, res);
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-  const ev = async (expression: string) => {
-    const r = (await send("Runtime.evaluate", {
-      expression: `(async () => { ${expression} })()`,
-      awaitPromise: true,
-      returnByValue: true,
-    })) as {
-      result?: { value?: unknown };
-      exceptionDetails?: { exception?: { description?: string } };
-    };
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "eval");
-    return r.result?.value as any;
-  };
-
-  await send("Runtime.enable");
-  await send("Page.enable");
-
-  if (!viaUrl) {
-    for (const f of cssFiles) {
-      const css = await Bun.file(`${project}/dist/${f}`).text();
-      if (css.includes("@layer"))
-        fail(`产物 ${f} 含 @layer：本方案靠 @import 顺序决定层叠，不接受分层`);
-    }
-  }
-
-  console.log("容器宽度   u        字号（标题/控件）    控件高度 ×5                              令牌锚定");
+  console.log("视口      容器        u        字号 标题/控件   控件高度 ×5                              令牌锚定");
   for (const [w, h] of SIZES) {
-    await send("Emulation.setDeviceMetricsOverride", {
+    await session.send("Emulation.setDeviceMetricsOverride", {
       width: w,
       height: h,
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await send("Page.navigate", { url: target });
-    for (let i = 0; i < 100; i++) {
-      await sleep(100);
-      if (await ev(`return !!document.querySelector('.app')`)) break;
-    }
+    await session.goto(`http://127.0.0.1:${PORT}/`, '[data-el="app"]');
     await sleep(400);
 
-    const pristine = await ev(`
-      const el = document.querySelector('.drop-act');
-      return { dropAct: el ? +el.getBoundingClientRect().height.toFixed(3) : null };
-    `);
-    const loaded = await ev(DROP);
-    if (!loaded) throw new Error(`${w}px：样例音频未能载入，量不到参数区`);
+    const bare = await session.ev<number | null>(
+      `const el = document.querySelector('[data-el="drop-act"]');
+       return el ? +el.getBoundingClientRect().height.toFixed(3) : null;`,
+    );
+    if (!(await session.ev<boolean>(DROP))) throw new Error(`${w}px：样例音频未载入`);
     await sleep(250);
 
-    const r = await ev(PROBE);
-    const heights: (number | null)[] = r.heights.map((v: number | null, i: number) =>
-      v === null && CONTROLS[i] === ".drop-act" ? pristine.dropAct : v,
-    );
-    const shown = CONTROLS.map(
-      (sel, i) => `${sel.split(" ").pop()} ${heights[i] ?? "缺失"}`,
-    ).join(" / ");
-    if (![r.u, r.h1, r.chip].every(finite)) {
-      fail(`${w}px：尺寸读不到有限数（u=${r.u} 标题=${r.h1} 控件=${r.chip}）—— 令牌没解析成具体长度`);
-      console.log(`${String(w).padEnd(9)} 尺寸读取失败：${shown}`);
+    const r = await session.ev<Probe>(PROBE);
+    const heights = r.heights.map((v, i) => (v === null && CONTROLS[i] === "drop-act" ? bare : v));
+    const shown = CONTROLS.map((name, i) => `${name} ${heights[i] ?? "缺失"}`).join(" / ");
+
+    const { u, title, chip } = r;
+    if (!finite(u) || !finite(title) || !finite(chip)) {
+      fail(`${w}px：尺寸读不到有限数（u=${u} 标题=${title} 控件=${chip}）—— 令牌没解析成具体长度`);
+      console.log(`${String(w).padEnd(8)} 尺寸读取失败`);
       continue;
     }
+
     console.log(
-      `${String(w).padEnd(9)} ${r.u.toFixed(3).padEnd(8)} ${r.h1.toFixed(2).padEnd(6)}/${r.chip
-        .toFixed(2)
-        .padEnd(6)} ${shown.padEnd(40)} ${Object.values(r.tokens)[0]}`,
+      `${String(w).padEnd(8)} ${`${r.box.w}x${r.box.h}`.padEnd(10)} ${u.toFixed(3).padEnd(8)} ` +
+        `${title.toFixed(2).padEnd(6)}/${chip.toFixed(2).padEnd(6)} ${shown.padEnd(40)} ` +
+        `${Object.values(r.tokens)[0]}`,
     );
-    console.log(
-      `         视口 ${r.view.inner}  容器 ${r.view.app}  #root 高 ${r.view.root}`,
-    );
+
+    seen.push({ w, u });
+
+    const want = curveU(r.box.w, r.box.h);
+    if (Math.abs(u - want) > 0.01)
+      fail(`${w}x${h}：u = ${u}，容器 ${r.box.w}x${r.box.h} 的曲线应给出 ${want.toFixed(3)}`);
 
     const known = heights.filter(finite);
-    const want = curveU(r.box.w, r.box.h);
-    seen.push({ w, u: r.u, box: r.box });
-    if (Math.abs(r.u - want) > 0.01)
-      fail(
-        `${w}x${h}：u = ${r.u}，容器 ${r.box.w}x${r.box.h} 的曲线应给出 ${want.toFixed(3)}（曲线常量被改过？）`,
-      );
-    if (known.length !== 5) fail(`${w}px：只量到 ${known.length} 种控件，应有 5 种（${shown}）`);
-    else {
+    if (known.length !== 5) {
+      fail(`${w}px：只量到 ${known.length} 种控件，应有 5 种（${shown}）`);
+    } else {
       const spread = Math.max(...known) - Math.min(...known);
-      if (spread > 0.05)
-        fail(`${w}px：控件高度不一致，极差 ${spread.toFixed(3)}px（${shown}）`);
-      if (Math.abs(known[0]! - r.u * RATIOS["--h-ctl"]!) > 0.05)
-        fail(`${w}px：控件高度 ${known[0]} ≠ 1.75×u = ${(r.u * 1.75).toFixed(3)}`);
+      if (spread > 0.05) fail(`${w}px：控件高度不一致，极差 ${spread.toFixed(3)}px（${shown}）`);
+      if (Math.abs(known[0]! - u * RATIOS["--h-ctl"]!) > 0.05)
+        fail(`${w}px：控件高度 ${known[0]} ≠ 1.75×u = ${(u * 1.75).toFixed(3)}`);
     }
 
-    if (Math.abs(r.h1 - r.u * RATIOS["--fs-lead"]!) > 0.01)
-      fail(`${w}px：标题字号 ${r.h1} ≠ 0.9375×u = ${(r.u * 0.9375).toFixed(3)}`);
-    if (Math.abs(r.chip - r.u * RATIOS["--fs-lo"]!) > 0.01)
-      fail(`${w}px：控件字号 ${r.chip} ≠ 0.6875×u = ${(r.u * 0.6875).toFixed(3)}`);
+    for (const [name, got, ratio] of [
+      ["标题", title, RATIOS["--fs-lead"]!],
+      ["控件", chip, RATIOS["--fs-lo"]!],
+    ] as [string, number, number][]) {
+      if (Math.abs(got - u * ratio) > 0.01)
+        fail(`${w}px：${name}字号 ${got} ≠ ${ratio}×u = ${(u * ratio).toFixed(3)}`);
+    }
 
-    for (const [name, ratio] of Object.entries(RATIOS)) {
-      const got: string = r.tokens[name];
+    for (const name of Object.keys(RATIOS)) {
+      const got = r.tokens[name]!;
       if (/var\(/.test(got)) {
         fail(`${name} 在 ${w}px 下仍是未替换的 var()：${got}`);
         continue;
@@ -285,74 +211,65 @@ try {
         fail(`${name} 在 ${w}px 下没解析出 px 锚点：${got}`);
         continue;
       }
-      if (Math.abs(parseFloat(anchor) - r.u) > 0.01)
-        fail(
-          `${name} 锚在 ${anchor}px，当前 u 是 ${r.u}px —— 令牌被算死在别的元素上了（${got}）`,
-        );
+      if (Math.abs(parseFloat(anchor) - u) > 0.01)
+        fail(`${name} 锚在 ${anchor}px，当前 u 是 ${u}px —— 令牌被算死在别的元素上了（${got}）`);
     }
-
-    if (r.beforeLoad.params !== "grid" && w >= 900)
-      fail(`${w}px：参数区应为 grid，实际 ${r.beforeLoad.params}`);
-    if (r.beforeLoad.wide !== "grid")
-      fail(`${w}px：900px 容器下参数区应为 grid，实际 ${r.beforeLoad.wide}`);
-    if (r.beforeLoad.narrow !== "flex")
-      fail(`${w}px：600px 容器下参数区应为 flex，实际 ${r.beforeLoad.narrow}`);
   }
 
-  await send("Emulation.setDeviceMetricsOverride", {
+  await session.send("Emulation.setDeviceMetricsOverride", {
     width: 1500,
     height: 950,
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await send("Page.navigate", { url: target });
-  for (let i = 0; i < 100; i++) {
-    await sleep(100);
-    if (await ev(`return !!document.querySelector('.shell')`)) break;
-  }
-  await sleep(300);
+  await session.goto(`http://127.0.0.1:${PORT}/`, '[data-el="shell"]');
+  await session.ev(DROP);
+  await sleep(250);
 
-  const cq = await ev(`
-    const app = document.querySelector('.app');
-    const shrink = document.createElement('style');
-    shrink.textContent = '.app{width:520px}';
-    document.head.append(shrink);
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const box = { w: app.clientWidth, h: app.clientHeight };
-    const u = parseFloat(getComputedStyle(document.querySelector('.shell')).getPropertyValue('--u'));
-    shrink.remove();
-    return { box, u, vw: innerWidth };
-  `);
-  const wantCq = curveU(cq.box.w, cq.box.h);
-  const wantVp = curveU(cq.vw, cq.box.h);
-  console.log(
-    `容器相对  .app 收到 ${cq.box.w}px（视口 ${cq.vw}px）  u=${cq.u}  期望 ${wantCq.toFixed(3)}（视口口径会给出 ${wantVp.toFixed(3)}）`,
-  );
-  if (cq.box.w >= cq.vw) fail(`收缩探针无效：.app 仍是 ${cq.box.w}px，未小于视口 ${cq.vw}px`);
-  if (Math.abs(wantCq - wantVp) < 0.5)
-    fail(`收缩探针无法区分容器与视口（${wantCq.toFixed(3)} vs ${wantVp.toFixed(3)}）`);
-  else if (Math.abs(cq.u - wantCq) > 0.01)
-    fail(`.app 收窄到 ${cq.box.w}px 后 u=${cq.u}，应为容器曲线 ${wantCq.toFixed(3)} —— cq 单位没锚在容器上`);
+  const sweep = await session.ev<{ rows: SweepRow[]; viewport: number }>(SWEEP);
+  console.log(`\n容器相对：视口固定 ${sweep.viewport}px，压窄 .app 看 u 与参数区跟谁走`);
+  console.log("  .app 宽   卡片宽    u         期望       参数区");
+  for (const row of sweep.rows) {
+    const want = curveU(row.box.w, row.box.h);
+    const wantGrid = row.card >= 800 ? "grid" : "flex";
+    console.log(
+      `  ${String(row.w).padEnd(9)} ${String(row.card).padEnd(9)} ${String(row.u).padEnd(10)} ` +
+        `${want.toFixed(3).padEnd(10)} ${row.params}`,
+    );
+    if (!finite(row.u)) {
+      fail(`.app ${row.box.w}px 时 --u 读不到有限数（${row.u}）—— 令牌没解析成具体长度`);
+      continue;
+    }
+    if (Math.abs(row.u - want) > 0.01)
+      fail(`.app ${row.box.w}px 时 u=${row.u}，应为容器曲线 ${want.toFixed(3)} —— cq 单位没锚在容器上`);
+    if (row.params !== wantGrid)
+      fail(`.app ${row.box.w}px（卡片 ${row.card}px）时参数区为 ${row.params}，应为 ${wantGrid}`);
+  }
+
+  const narrow = sweep.rows[sweep.rows.length - 1]!;
+  const pure = curveU(1500, 950);
+  if (finite(narrow.u) && Math.abs(narrow.u - pure) < 0.5)
+    fail(`收缩探针无法区分容器与视口：${narrow.u} ≈ 视口口径 ${pure}`);
+  if (narrow.box.w >= 1500) fail(`收缩探针无效：.app 仍是 ${narrow.box.w}px，未窄于视口 1500px`);
 } finally {
-  proc.kill();
-  server?.stop(true);
+  await session.stop();
+  server.stop(true);
 }
 
-if (seen.length) {
-  const narrowest = seen.find(s => s.w === SIZES[SIZES.length - 1]![0]);
-  const widest = seen[0];
-  if (narrowest && Math.abs(narrowest.u - CURVE.base) > 0.01)
-    fail(`最窄档 u=${narrowest.u}，应等于基准 ${CURVE.base}（下限没去干净，或被别处钳住）`);
-  if (widest && widest.u < CURVE.ceil - 0.01)
-    fail(`最宽档 u=${widest.u} 未触到上限 ${CURVE.ceil}：上限是死代码`);
+if (seen.length === SIZES.length) {
+  const narrowest = seen[seen.length - 1]!;
+  const widest = seen[0]!;
+  if (Math.abs(narrowest.u - CURVE.base) > 0.01)
+    fail(`最窄档 u=${narrowest.u}，应等于基准 ${CURVE.base}（被别处钳住，或下限没去干净）`);
+  if (widest.u < CURVE.ceil - 0.01) fail(`最宽档 u=${widest.u} 未触到上限 ${CURVE.ceil}：上限是死代码`);
   for (let i = 1; i < seen.length; i++)
     if (seen[i]!.u > seen[i - 1]!.u + 1e-6)
-      fail(`u 不随容器单调：${seen[i - 1]!.w}px 时 ${seen[i - 1]!.u}，${seen[i]!.w}px 时 ${seen[i]!.u}`);
+      fail(`u 不随容器单调：${seen[i - 1]!.w}px → ${seen[i]!.w}px 反而变大`);
 }
 
-if (CHECKS.length) {
-  console.error(`\n不合格 ${CHECKS.length} 项：`);
-  for (const c of CHECKS) console.error(`  - ${c}`);
+if (failures.length) {
+  console.error(`\n不合格 ${failures.length} 项：`);
+  for (const f of failures) console.error(`  - ${f}`);
   process.exit(1);
 }
 console.log("\n样式尺度全部合格");

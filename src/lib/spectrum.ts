@@ -6,10 +6,10 @@ import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
 
 export const BANDS = 2;
 
-export const MIN_WIN = 256;
-export const MAX_WIN = 4096;
+const MIN_WIN = 256;
+const MAX_WIN = 4096;
 export const MAX_FRAMES = 20000;
-export const MAX_PIXELS = 8_000_000;
+const MAX_PIXELS = 8_000_000;
 export const DEFAULT_SR = 44100;
 
 const DB_MIN = -120;
@@ -59,7 +59,7 @@ export interface Spectrum {
   meta: Meta;
 }
 
-export interface Shape {
+interface Shape {
   win: number;
   hop: number;
   frames: number;
@@ -67,7 +67,7 @@ export interface Shape {
   samples: number;
 }
 
-export const yieldToUi = (): Promise<void> => new Promise(done => setTimeout(done, 0));
+const yieldToUi = (): Promise<void> => new Promise(done => setTimeout(done, 0));
 
 const pow2 = (n: number): number => {
   let v = MIN_WIN;
@@ -191,7 +191,7 @@ const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 const magToLevel = (db: number): number => clampByte(Math.round(((db - DB_MIN) / DB_SPAN) * 255));
 const levelToMagDb = (level: number): number => DB_MIN + (level / 255) * DB_SPAN;
 
-export function levelToDb(level: number, meta: Meta): number {
+function levelToDb(level: number, meta: Meta): number {
   if (meta.exact) return levelToMagDb(level);
   const bits = Math.max(1, meta.bits);
   const steps = stepsOf(bits);
@@ -217,7 +217,6 @@ export async function encode(
 ): Promise<Spectrum> {
   const { win, hop, frames, bins, samples } = shapeFor(enc, sr, pcm.length);
   const core = new Frames(win);
-  const full = core.bins;
   const padded = samples + win;
   const x = new Float64Array(padded);
   for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
@@ -410,7 +409,7 @@ function finish(x: Float64Array, win: number, samples: number): Samples {
   return out;
 }
 
-export interface Anchor {
+interface Anchor {
   cos: Uint8Array;
   sin: Uint8Array;
   w: Uint8Array;
@@ -542,7 +541,7 @@ async function invert(
   return finish(x, win, samples);
 }
 
-export type Quality = "fast" | "fine";
+type Quality = "fast" | "fine";
 
 export async function synthesise(
   spec: Spectrum,
