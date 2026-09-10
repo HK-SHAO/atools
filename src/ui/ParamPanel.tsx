@@ -61,7 +61,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
     hz => ({ value: hz, label: hzLabel(hz) }),
   );
 
-  const field = (side: "start" | "end", aria: string, placeholder?: string) => (
+  const field = (side: "start" | "end", aria: string) => (
     <label className="num">
       <span aria-hidden="true">{side === "start" ? "起" : "止"}</span>
       <input
@@ -70,7 +70,6 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
         min={0}
         max={duration}
         step={0.1}
-        placeholder={placeholder}
         value={range ? range[side] : side === "start" ? String(enc.start) : endShown(enc.end)}
         onChange={e =>
           setRange({
@@ -109,7 +108,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc, onTrim }: Props) {
       )}
       <Row label="区间">
         {field("start", "起点秒数")}
-        {field("end", "终点秒数", "结尾")}
+        {field("end", "终点秒数")}
         <button type="button" className="chip" onClick={onTrim}>
           裁静音
         </button>

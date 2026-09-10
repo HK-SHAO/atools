@@ -9,7 +9,6 @@
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
   box-shadow: var(--shadow-card);
-  container-type: inline-size;
 }
 
 /* 五种控件共用下面这一套几何与玻璃表面，各自只调内边距与光标 */
@@ -83,7 +82,7 @@
 }
 
 .num input {
-  width: 4em;
+  width: 3em;
   padding: 0;
   border: 0;
   background: none;

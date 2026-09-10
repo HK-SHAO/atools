@@ -1,6 +1,6 @@
 /* --u 与 --c-vh 必须注册成 <length>：注册后才在 .shell 上把 cqi/cqb 解析成绝对 px
-   再随继承下发；不注册则容器单位留在令牌里、到使用点才解析，会被最近的
-   container-type: inline-size 容器（.card）抢走，卡片内尺寸静默错位。 */
+   再随继承下发；不注册则容器单位留在令牌里、到使用点才解析，会被使用点最近的
+   container-type 容器抢走，卡片内尺寸静默错位。 */
 @property --u {
   syntax: "<length>";
   inherits: true;

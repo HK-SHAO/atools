@@ -25,10 +25,13 @@
   border-top: 1px solid var(--line);
 }
 
+/* 区块各按内容取宽、整行装不下才换行 —— 等宽栅格会把宽区块挤断 */
 .params {
   display: flex;
-  flex-direction: column;
-  gap: 0.125em;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 1em;
+  row-gap: 0.5em;
   padding-top: 0.5em;
   border-top: 1px solid var(--line);
 }
@@ -42,7 +45,6 @@
 
 .plabel {
   flex: none;
-  width: 3.625em;
   font-size: var(--fs-lo);
   letter-spacing: 0.1em;
   color: var(--soft);
@@ -54,14 +56,4 @@
   align-items: center;
   gap: 0.25em;
   min-width: 0;
-}
-
-@container (min-width: 800px) {
-  .params {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
-    column-gap: 1.25em;
-    row-gap: 0.125em;
-    align-items: center;
-  }
 }

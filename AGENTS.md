@@ -46,7 +46,7 @@ docs/        format-spec.md（图片格式契约）· algorithms.md（算法原�
 
 ## 尺度系统
 
-`.app` 是 `container-type: size` 的容器，`.shell` 是它上面的令牌根 —— 容器查询单位只认**祖先**容器，令牌根必须在容器下一层。`--u` 由 `cqi/cqb` 折线算出，并以 `@property --u { syntax: "<length>" }` 注册：注册后它才在 `.shell` 上解析成绝对 px 再随继承下发；不注册则 `cqi` 留在令牌里、到使用点才解析，会被最近的 `container-type: inline-size` 容器（`.card`）抢走，卡片内所有尺寸静默错位。`bun bench/scale.ts` 守这条链。
+`.app` 是 `container-type: size` 的容器，`.shell` 是它上面的令牌根 —— 容器查询单位只认**祖先**容器，令牌根必须在容器下一层。`--u` 由 `cqi/cqb` 折线算出，并以 `@property --u { syntax: "<length>" }` 注册：注册后它才在 `.shell` 上解析成绝对 px 再随继承下发；不注册则 `cqi` 留在令牌里、到使用点才解析，会被使用点最近的 `container-type` 容器抢走，卡片内所有尺寸静默错位。`bun bench/scale.ts` 守这条链。仓库里没有容器查询，`.app` 是唯一的查询容器。
 
 ## Rules
 

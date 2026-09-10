@@ -44,7 +44,6 @@ const PROBE = `
   const px = (v) => parseFloat(v);
   const app = document.querySelector('.app');
   const shell = document.querySelector('.shell');
-  const params = document.querySelector('.params');
   const chip = document.querySelector('.params .chip');
   const height = (sel) => {
     const el = document.querySelector(sel);
@@ -57,7 +56,6 @@ const PROBE = `
   return {
     u: px(getComputedStyle(shell).getPropertyValue('--u')),
     box: { w: app.clientWidth, h: app.clientHeight },
-    params: getComputedStyle(params).display,
     title: font('.head h1'),
     chip: font('.params .chip'),
     heights: ${JSON.stringify(SELECTORS)}.map(height),
@@ -93,12 +91,18 @@ const SWEEP = `
   for (const w of [1500, 900, 800, 600, 520]) {
     style.textContent = '.app{width:' + w + 'px}';
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const blocks = [...params.querySelectorAll('.prow')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { w: +r.width.toFixed(2), top: +r.top.toFixed(1) };
+    });
     out.push({
       w,
       u: parseFloat(getComputedStyle(shell).getPropertyValue('--u')),
       box: { w: app.clientWidth, h: app.clientHeight },
       card: params.parentElement.clientWidth,
-      params: getComputedStyle(params).display,
+      display: getComputedStyle(params).display,
+      paramsW: params.clientWidth,
+      blocks,
     });
   }
   style.remove();
@@ -108,7 +112,6 @@ const SWEEP = `
 interface Probe {
   u: number;
   box: { w: number; h: number };
-  params: string;
   title: number | null;
   chip: number | null;
   heights: (number | null)[];
@@ -120,7 +123,9 @@ interface SweepRow {
   u: number | null;
   box: { w: number; h: number };
   card: number;
-  params: string;
+  display: string;
+  paramsW: number;
+  blocks: { w: number; top: number }[];
 }
 
 const failures: string[] = [];
@@ -231,13 +236,16 @@ try {
 
   const sweep = await session.ev<{ rows: SweepRow[]; viewport: number }>(SWEEP);
   console.log(`\n容器相对：视口固定 ${sweep.viewport}px，压窄 .app 看 u 与参数区跟谁走`);
-  console.log("  .app 宽   卡片宽    u         期望       参数区");
+  console.log("  .app 宽   卡片宽    u         期望       参数区布局        块宽");
   for (const row of sweep.rows) {
     const want = curveU(row.box.w, row.box.h);
-    const wantGrid = row.card >= 800 ? "grid" : "flex";
+    const widths = row.blocks.map(b => b.w);
+    const lines = new Set(row.blocks.map(b => b.top)).size;
+    const shape = `${row.display} ${lines}行/${row.blocks.length}块`;
+    const span = `${Math.min(...widths).toFixed(0)}~${Math.max(...widths).toFixed(0)}px`;
     console.log(
       `  ${String(row.w).padEnd(9)} ${String(row.card).padEnd(9)} ${String(row.u).padEnd(10)} ` +
-        `${want.toFixed(3).padEnd(10)} ${row.params}`,
+        `${want.toFixed(3).padEnd(10)} ${shape.padEnd(15)} ${span}`,
     );
     if (!finite(row.u)) {
       fail(`.app ${row.box.w}px 时 --u 读不到有限数（${row.u}）—— 令牌没解析成具体长度`);
@@ -245,9 +253,20 @@ try {
     }
     if (Math.abs(row.u - want) > 0.01)
       fail(`.app ${row.box.w}px 时 u=${row.u}，应为容器曲线 ${want.toFixed(3)} —— cq 单位没锚在容器上`);
-    if (row.params !== wantGrid)
-      fail(`.app ${row.box.w}px（卡片 ${row.card}px）时参数区为 ${row.params}，应为 ${wantGrid}`);
+    if (row.display !== "flex")
+      fail(`.app ${row.box.w}px 时参数区为 ${row.display}，应为按内容换行的 flex —— 面板不该有断点`);
+    if (Math.max(...widths) > row.paramsW + 0.5)
+      fail(`.app ${row.box.w}px 时最宽区块 ${Math.max(...widths)}px 溢出参数区 ${row.paramsW}px`);
   }
+
+  const wide = sweep.rows[0]!;
+  const wideWidths = wide.blocks.map(b => b.w);
+  const wideLines = new Set(wide.blocks.map(b => b.top)).size;
+  const spread = Math.max(...wideWidths) - Math.min(...wideWidths);
+  if (spread < 20)
+    fail(`参数区块几乎等宽（极差 ${spread.toFixed(1)}px）—— 按内容取宽退回了等宽栅格`);
+  if (wideLines >= wide.blocks.length)
+    fail(`参数区 ${wide.blocks.length} 块占了 ${wideLines} 行 —— 没有自适应换行`);
 
   const narrow = sweep.rows[sweep.rows.length - 1]!;
   const pure = curveU(1500, 950);
