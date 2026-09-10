@@ -46,7 +46,7 @@ if (!viaUrl) {
 
 const target = viaUrl ?? `http://127.0.0.1:${PORT}/`;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-const round = (n: number) => +n.toFixed(3);
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 const SIZES: [number, number][] = [
   [1500, 950],
@@ -80,18 +80,20 @@ const CONTROLS = [".act", ".params .chip", ".params .num", ".icon-btn", ".drop-a
 
 const CHECKS: string[] = [];
 const fail = (msg: string) => CHECKS.push(msg);
-const seen: { w: number; u: number }[] = [];
+const seen: { w: number; u: number; box: { w: number; h: number } }[] = [];
 
 const PROBE = `
   const px = (v) => parseFloat(v);
   const appEl = document.querySelector('.app');
-  const u = px(getComputedStyle(appEl).fontSize);
+  const shellEl = document.querySelector('.shell');
+  const u = px(getComputedStyle(shellEl).getPropertyValue('--u'));
+  const box = { w: appEl.clientWidth, h: appEl.clientHeight };
   const view = {
     inner: innerWidth + 'x' + innerHeight,
-    app: appEl.clientWidth + 'x' + appEl.clientHeight,
+    app: box.w + 'x' + box.h,
     root: (document.getElementById('root')?.clientHeight ?? -1) + '',
   };
-  const box = (sel) => {
+  const boxH = (sel) => {
     const el = document.querySelector(sel);
     return el ? +el.getBoundingClientRect().height.toFixed(3) : null;
   };
@@ -115,10 +117,11 @@ const PROBE = `
   probeEl.remove();
   return {
     u,
+    box,
     view,
     h1: font('.head h1'),
     chip: font('.params .chip'),
-    heights: ${JSON.stringify(CONTROLS)}.map(box),
+    heights: ${JSON.stringify(CONTROLS)}.map(boxH),
     tokens,
     beforeLoad: {
       params: getComputedStyle(document.querySelector('.params')).display,
@@ -236,6 +239,11 @@ try {
     const shown = CONTROLS.map(
       (sel, i) => `${sel.split(" ").pop()} ${heights[i] ?? "缺失"}`,
     ).join(" / ");
+    if (![r.u, r.h1, r.chip].every(finite)) {
+      fail(`${w}px：尺寸读不到有限数（u=${r.u} 标题=${r.h1} 控件=${r.chip}）—— 令牌没解析成具体长度`);
+      console.log(`${String(w).padEnd(9)} 尺寸读取失败：${shown}`);
+      continue;
+    }
     console.log(
       `${String(w).padEnd(9)} ${r.u.toFixed(3).padEnd(8)} ${r.h1.toFixed(2).padEnd(6)}/${r.chip
         .toFixed(2)
@@ -245,11 +253,13 @@ try {
       `         视口 ${r.view.inner}  容器 ${r.view.app}  #root 高 ${r.view.root}`,
     );
 
-    const known = heights.filter((v): v is number => v !== null);
-    const want = curveU(w, h);
-    seen.push({ w, u: r.u });
+    const known = heights.filter(finite);
+    const want = curveU(r.box.w, r.box.h);
+    seen.push({ w, u: r.u, box: r.box });
     if (Math.abs(r.u - want) > 0.01)
-      fail(`${w}x${h}：u = ${r.u}，与曲线给出的 ${want.toFixed(3)} 不符（曲线常量被改过？）`);
+      fail(
+        `${w}x${h}：u = ${r.u}，容器 ${r.box.w}x${r.box.h} 的曲线应给出 ${want.toFixed(3)}（曲线常量被改过？）`,
+      );
     if (known.length !== 5) fail(`${w}px：只量到 ${known.length} 种控件，应有 5 种（${shown}）`);
     else {
       const spread = Math.max(...known) - Math.min(...known);
@@ -288,6 +298,41 @@ try {
     if (r.beforeLoad.narrow !== "flex")
       fail(`${w}px：600px 容器下参数区应为 flex，实际 ${r.beforeLoad.narrow}`);
   }
+
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1500,
+    height: 950,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await send("Page.navigate", { url: target });
+  for (let i = 0; i < 100; i++) {
+    await sleep(100);
+    if (await ev(`return !!document.querySelector('.shell')`)) break;
+  }
+  await sleep(300);
+
+  const cq = await ev(`
+    const app = document.querySelector('.app');
+    const shrink = document.createElement('style');
+    shrink.textContent = '.app{width:520px}';
+    document.head.append(shrink);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const box = { w: app.clientWidth, h: app.clientHeight };
+    const u = parseFloat(getComputedStyle(document.querySelector('.shell')).getPropertyValue('--u'));
+    shrink.remove();
+    return { box, u, vw: innerWidth };
+  `);
+  const wantCq = curveU(cq.box.w, cq.box.h);
+  const wantVp = curveU(cq.vw, cq.box.h);
+  console.log(
+    `容器相对  .app 收到 ${cq.box.w}px（视口 ${cq.vw}px）  u=${cq.u}  期望 ${wantCq.toFixed(3)}（视口口径会给出 ${wantVp.toFixed(3)}）`,
+  );
+  if (cq.box.w >= cq.vw) fail(`收缩探针无效：.app 仍是 ${cq.box.w}px，未小于视口 ${cq.vw}px`);
+  if (Math.abs(wantCq - wantVp) < 0.5)
+    fail(`收缩探针无法区分容器与视口（${wantCq.toFixed(3)} vs ${wantVp.toFixed(3)}）`);
+  else if (Math.abs(cq.u - wantCq) > 0.01)
+    fail(`.app 收窄到 ${cq.box.w}px 后 u=${cq.u}，应为容器曲线 ${wantCq.toFixed(3)} —— cq 单位没锚在容器上`);
 } finally {
   proc.kill();
   server?.stop(true);

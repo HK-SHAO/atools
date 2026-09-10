@@ -88,14 +88,13 @@ try {
 
   await ev(`
     const b = [...document.querySelectorAll('button')];
-    const t = b.find(x => /示例/.test(x.textContent ?? ""));
+    const t = b.find(x => /演示/.test(x.textContent ?? ""));
     t?.click();
     return t ? t.textContent.trim() : "";
   `);
   await sleep(3000);
   await shot("loaded");
 
-  const wide = await ev(`return document.querySelector('.app')?.dataset.wide ?? "0"`);
   const gridCols = await ev(
     `return getComputedStyle(document.querySelector('.params')).gridTemplateColumns`,
   );
@@ -137,7 +136,7 @@ try {
   await shot("audit");
 
   console.log(`── ${W}×${H}`);
-  console.log("  data-wide:", wide, " 参数列:", String(gridCols).slice(0, 90));
+  console.log("  参数列:", String(gridCols).slice(0, 90));
   console.log("  播放键状态:", playing, " 竖线[透明度,距左,距右]:", JSON.stringify(head));
   console.log("  自检:", String(facts).replace(/\s+/g, " ").slice(0, 320));
   console.log("  问题:", problems.length ? problems.slice(0, 4).join(" || ") : "(none)");

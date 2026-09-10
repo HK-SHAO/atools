@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import * as stylex from "@stylexjs/stylex";
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import { downloadName, type ReadMode } from "../lib/image";
@@ -9,6 +10,7 @@ import { ParamPanel } from "./ParamPanel";
 import { buildSheet } from "./raster";
 import { Spectrogram } from "./Spectrogram";
 import { StatusNote } from "./StatusNote";
+import { dim, tick } from "./styles";
 import { useAudit } from "./useAudit";
 import { clock, usePlayback } from "./usePlayback";
 import type { Stage } from "./useStudio";
@@ -133,9 +135,9 @@ export function Workbench({
         </button>
         <p className="time">
           <span ref={timeRef}>0:00</span>
-          <span className="dim"> / {clock(duration)}</span>
+          <span {...stylex.props(dim.text)}> / {clock(duration)}</span>
         </p>
-        {busy && <span className="dim tick">转换中</span>}
+        {busy && <span {...stylex.props(dim.text, tick.text)}>转换中</span>}
       </div>
 
       <p className="facts">

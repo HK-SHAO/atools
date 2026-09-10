@@ -1,10 +1,23 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import stylex from "@stylexjs/unplugin";
 
 /* 两种产物，同一份源码共用 dist/：
    —— web  dist/ 目录（默认），多文件，交给任意静态服务器；引用全为相对路径，
             兼容 B站 Toy 的 /toy/<slug>/ 子路径部署
    —— toy  web 产物原样压成 toy.zip，index.html 在包根，配 build:toy 发布 */
+
+const ASSET = /\.(ogg|opus|mp3|m4a|aac|wav|flac|png|jpe?g|gif|webp|svg|ico|woff2?|ttf)$/;
+
+const asset: Bun.BunPlugin = {
+  name: "asset",
+  setup(build) {
+    build.onLoad({ filter: ASSET }, async (args) => ({
+      contents: new Uint8Array(await Bun.file(args.path).arrayBuffer()),
+      loader: "file",
+    }));
+  },
+};
 
 const toy = process.argv.slice(2).includes("--toy");
 const outdir = path.join(process.cwd(), "dist");
@@ -18,6 +31,14 @@ const result = await Bun.build({
   sourcemap: "none",
   splitting: true,
   reactCompiler: true,
+  plugins: [
+    asset,
+    stylex.esbuild({
+      useCSSLayers: false,
+      importSources: ["@stylexjs/stylex"],
+      unstable_moduleResolution: { type: "commonJS" },
+    }),
+  ],
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },

@@ -3,6 +3,8 @@ import index from "./index.html";
 
 const server = serve({
   routes: {
+    "/stylex.dev.css": () =>
+      new Response(Bun.file(".cache/stylex.dev.css"), { headers: { "content-type": "text/css" } }),
     "/*": index,
   },
 

@@ -1,7 +1,16 @@
-:root {
-  --c-vh: 6.67px;
-  --c-max: 1180px;
+@property --u {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 16px;
+}
 
+@property --c-vh {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 6.67px;
+}
+
+:root {
   --bg-warm:
     radial-gradient(circle at 18% 12%, rgba(255, 196, 83, 0.3), transparent 44%),
     linear-gradient(180deg, #fff8ea 0%, #f8e6c4 100%);
@@ -21,8 +30,16 @@
   color-scheme: light;
 }
 
-.app {
-  --u: 16px;
+.shell {
+  --c-max: 1180px;
+  --c-eff: min(100cqi, 160cqb);
+  --c-vh: 1cqb;
+
+  --u: min(
+    calc(var(--c-eff) * 14 / 340),
+    calc(14px + (var(--c-eff) - 340px) / 280),
+    16.5px
+  );
 
   --fs-lead: calc(0.9375 * var(--u));
   --fs-hi: calc(0.75 * var(--u));

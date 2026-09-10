@@ -4,10 +4,10 @@
   overflow-y: auto;
   overflow-x: hidden;
   isolation: isolate;
+  container-type: size;
   background: var(--bg-warm);
   color: var(--ink);
   font-family: var(--font);
-  font-size: var(--u);
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
@@ -26,6 +26,7 @@
   padding-bottom: max(1.5em, env(safe-area-inset-bottom, 0px));
   padding-left: max(1em, env(safe-area-inset-left, 0px));
   padding-right: max(1em, env(safe-area-inset-right, 0px));
+  font-size: var(--u);
 }
 
 .head {

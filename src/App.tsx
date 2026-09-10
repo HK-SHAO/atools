@@ -1,23 +1,18 @@
-import { useRef } from "react";
 import { CREDIT_AUTHOR, CREDIT_NAME } from "./credit";
 import { Dropzone } from "./ui/Dropzone";
 import { StatusNote } from "./ui/StatusNote";
-import { useContainerScale } from "./ui/useContainerScale";
 import { useDragDrop } from "./ui/useDragDrop";
 import { useStudio } from "./ui/useStudio";
 import { Workbench } from "./ui/Workbench";
 
 export function App() {
-  const rootRef = useRef<HTMLDivElement>(null);
-  useContainerScale(rootRef);
-
   const studio = useStudio();
   const { dragging, handlers } = useDragDrop(studio.open);
   const { source, job } = studio;
   const live = source !== null && job !== null;
 
   return (
-    <div ref={rootRef} className={dragging ? "app is-dragging" : "app"} {...handlers}>
+    <div className={dragging ? "app is-dragging" : "app"} {...handlers}>
       <div className="shell">
         <header className="head">
           <h1>频谱 SPECTRUM</h1>

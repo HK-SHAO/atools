@@ -3,6 +3,13 @@ import { createRoot } from "react-dom/client";
 import "./styles/index.css";
 import { App } from "./App";
 
+if (process.env.NODE_ENV !== "production") {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "/stylex.dev.css";
+  document.head.append(link);
+}
+
 const elem = document.getElementById("root")!;
 const app = (
   <StrictMode>

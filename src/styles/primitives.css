@@ -144,44 +144,6 @@
   background: var(--glass);
 }
 
-.note {
-  display: flex;
-  align-items: center;
-  gap: 0.75em;
-  margin: 0;
-  font-size: var(--fs-lo);
-  letter-spacing: 0.04em;
-  color: var(--soft);
-}
-
-.note.is-error {
-  color: #96411f;
-}
-
-.note-bar {
-  flex: 1;
-  height: 0.1875em;
-  border-radius: var(--r-pill);
-  background: rgba(61, 52, 39, 0.1);
-  overflow: hidden;
-}
-
-.note-bar > span {
-  display: block;
-  height: 100%;
-  background: rgba(61, 52, 39, 0.42);
-  transition: width 0.12s linear;
-}
-
-.dim {
-  color: var(--soft);
-}
-
-.tick {
-  font-size: var(--fs-lo);
-  letter-spacing: 0.1em;
-}
-
 @supports (corner-shape: squircle) {
   .card {
     corner-shape: squircle;

@@ -60,9 +60,7 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
       onPointerDown={e => {
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-
-        }
+        } catch {}
         onSeek(ratioAt(e.clientX));
       }}
       onPointerMove={e => {
@@ -71,9 +69,7 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
       onPointerUp={e => {
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
-        } catch {
-
-        }
+        } catch {}
         onCommit();
       }}
       onPointerCancel={onCommit}

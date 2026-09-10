@@ -1,3 +1,5 @@
+import * as stylex from "@stylexjs/stylex";
+import { note } from "./styles";
 import type { Stage } from "./useStudio";
 
 interface Props {
@@ -10,15 +12,15 @@ export function StatusNote({ stage, hint, error }: Props) {
   return (
     <>
       {stage && (
-        <p className="note">
+        <p {...stylex.props(note.line)}>
           {stage.label}
-          <span className="note-bar">
-            <span style={{ width: `${Math.round(stage.value * 100)}%` }} />
+          <span {...stylex.props(note.bar)}>
+            <span {...stylex.props(note.fill(Math.round(stage.value * 100)))} />
           </span>
         </p>
       )}
-      {hint && <p className="note">{hint}</p>}
-      {error && <p className="note is-error">{error}</p>}
+      {hint && <p {...stylex.props(note.line)}>{hint}</p>}
+      {error && <p {...stylex.props(note.line, note.error)}>{error}</p>}
     </>
   );
 }
