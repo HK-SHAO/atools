@@ -150,6 +150,7 @@ export function serveDir(
   port: number,
   dir: string,
   mounts: Record<string, string> = {},
+  spa = false,
 ): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     port,
@@ -162,8 +163,19 @@ export function serveDir(
           ? `${dir}/index.html`
           : `${dir}${path}`;
       const body = Bun.file(file);
-      if (!(await body.exists())) return new Response("missing", { status: 404 });
-      return new Response(body, { headers: { "content-type": contentType(file) } });
+      if (await body.exists()) return new Response(body, { headers: { "content-type": contentType(file) } });
+
+      // spa=true 时与部署端 wrangler.jsonc 的 not_found_handling: single-page-application
+      // 同语义：任何不匹配实体文件的路径都拿回 200 的 index.html。
+      // 默认关掉 —— 其余评测台靠 404 暴露写错的资源路径，回落会把它们糊成 HTML。
+      if (spa) {
+        const fallback = Bun.file(`${dir}/index.html`);
+        if (await fallback.exists())
+          return new Response(fallback, {
+            headers: { "content-type": contentType("index.html") },
+          });
+      }
+      return new Response("missing", { status: 404 });
     },
   });
 }

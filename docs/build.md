@@ -64,8 +64,9 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
   各一张）。一次性产物，改图稿要重出，别把这套塞进构建。
 - **Service Worker**：`dist/index.html` 直接引用到的资源就是应用壳，`build.ts` 把这份清单注入
   `sw.js` 的 `__PRECACHE__`，缓存名取清单的哈希，改了哪块只换哪块。音频解码器是动态 import 的分包，
-  不进壳，改由运行期缓存兜住 —— 用过一次的格式此后离线可用。导航走网络优先（`sw.js` 每次导航都会被
-  重新校验，发新版即接管），其余同源 GET 走缓存优先；带 `Range` 的请求不碰，免得把半截响应写进缓存。
+  不进壳，改由运行期缓存兜住 —— 用过一次的格式此后离线可用。导航走网络优先，其余同源 GET 走缓存
+  优先但**只收非 HTML 响应**（理由见下面的 SPA 回落那条）；带 `Range` 的请求不碰，免得把半截响应
+  写进缓存。
   壳清单是**相对路径全链路**（manifest 的 `"./"`、`new URL(entry, sw.js 的位置)`、注册的 `"./sw.js"`），
   所以子路径部署天然成立，不需要任何一处写死应用根。
 - **构建期两道校验**。壳清单是从 `index.html` 里正则推出来的，引用写错只会让条目静默消失、不会让
@@ -75,15 +76,51 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 - **预缓存缺一项就不接管**：`install` 用 `Promise.all`，任一壳资源失败即安装失败，旧的 Worker 继续
   服役，浏览器下次导航重试。改用 `allSettled` 的话，缺一项的半壳照样激活，要等到断网白屏才暴露，
   而那时用户和日志之间已经隔了很远。
-- **取舍：接管是即时的，缓存是整代删的**。`skipWaiting` + `clients.claim` 让首次访问当场受控、当场
-  离线可用（门禁正是靠这条断言「注册完就受控」）；代价是发新版时，旧标签页里还没加载过的动态分包
-  会因为旧哈希随旧缓存一起删掉而取不到。本工具的用法是「拖进来、拿到图、关掉」，跨版本长期挂着的
-  标签页不是它的场景，所以选了即时接管。
+- **更新语义 = 下次启动接管**。`install` 里刻意**不调 `skipWaiting`**：新版装好就停在 `waiting`，
+  旧 Worker 与旧缓存继续服务，等标签页全关掉、下次启动才 `activate` 并清旧缓存。发了 `skipWaiting`
+  的话，新版一 `activate` 就整代删掉旧缓存，而正在用的页面还揣着旧的 HTML —— 它剩下没加载过的动态
+  分包会连同旧缓存一起消失。**首次安装没有旧 Worker，本来就直接 `activate`**，所以「首次访问即离线
+  可用」不靠 `skipWaiting`，靠 `clients.claim`；门禁断言「首次加载后就受控」钉的正是这条。
+- **SPA 回落出来的 HTML 不许进运行期缓存**。部署端配的是 `not_found_handling: single-page-application`：
+  任何不匹配实体文件的路径（**包括 `.js`**）都会拿回 200 的 `index.html`。这种响应一旦被缓存优先的
+  那一支写进缓存，一次偶发的缺文件就固化成永久坏死 —— 此后每次取到的都是这份 HTML，直到缓存换代。
+  所以运行期这一支只收 `response.ok` 且 `Content-Type` 不以 `text/html` 开头的响应；`index.html` 归
+  预缓存清单管，不从这条路走。
 - **只在生产注册**：`frontend.tsx` 以 `import.meta.hot` 为界，dev 下不注册，免得 HMR 被旧缓存顶着。
   dev 下 Bun 把 `manifest` 改写成 `/_bun/asset/<hash>.<ext>`，manifest 内部的相对图标路径因此解析不到；
   这是 dev 才有的现象，图标只在产物里成立，不必去修。
-- **门禁**：`bun bench/offline.ts`。其中的「断网」是直接关掉 HTTP 服务，不是 CDP 模拟 ——
-  实测 `Network.emulateNetworkConditions` 对回环不起作用，探针的对照地址照样拿到 404，整段断言会是空的。
+- **门禁**：`bun bench/offline.ts`。**只加载一次页面**，后面所有断言都建立在这一次之上 ——
+  若先加载第二遍再断网，安装期什么都没预热也照样能过（第一遍顺手就把壳填满了）。
+  其中的「断网」是直接关掉 HTTP 服务，不是 CDP 模拟 —— 实测 `Network.emulateNetworkConditions`
+  对回环不起作用，探针的对照地址照样拿到 404，整段断言会是空的。
   离线的 200 用 `fetch(url, { cache: 'reload' })` 判定：该模式强制绕过 HTTP 缓存，源又真的不可达，
   此时还能拿到 200 就只可能是 Service Worker 给的。预缓存是**逐项**对照的：从页面里现取 manifest 与
   两份图标，凑齐 8 项才算数（等凑齐再判，免得把「装到一半」误报成「漏装」），并钉住 `sw.js` 不在其中。
+  另外两条：服务端以 `serveDir(..., true)` 打开 SPA 回落、与部署端同语义，然后主动请求一个不存在的
+  `.js`，断言它确实拿回 200 的 `text/html`（否则这条断言是空的）**且没有进缓存**；更新语义则是就地给
+  `dist/sw.js` 追加一行注释制造「新版」，调 `registration.update()` 后断言 `registration.waiting`
+  非空、当前页面仍受控、壳仍完整。
+
+### 从 `shaofeng` 的 service worker 史里学到的
+
+那个仓库的 SW 前后有 **5 个提交**，最后随 Cloudflare 部署整体下线（不是 SW 本身出问题）：
+
+| 提交 | 做了什么 |
+| --- | --- |
+| `7bc2811` | 手写 78 行 `public/sw.js`：导航网络优先、`/assets/*` 缓存优先、其余 stale-while-revalidate；顺带写了 `/sw.js` 的 `Cache-Control: no-cache` |
+| `08497fa` | **主动降级成两策略**，删掉安装期预热、HTML 解析、清理与 SWR 分支 |
+| `5568702` | 换 vite-plugin-pwa（injectManifest + workbox 预缓存），导航统一回退应用壳 |
+| `6c5e949` | `autoUpdate` → `prompt`，**删掉 `skipWaiting` 与 `clientsClaim`** |
+| `3138ea7` | 整体移除 |
+
+同一条线上的三个位置，本仓库与它不同：
+
+- **更新语义抄它第 4 版**（不发 `skipWaiting`），因为「旧页面 + 新版」的撕裂状态在这里是真实可达的
+  （解码器走动态分包）。它的第 2 版则是反面教材：删掉安装期预热就等于丢掉了首次访问的离线能力，
+  所以本仓库的门禁改成**只加载一次**就必须全绿，不接受「第二遍才离线」。
+- **`_headers` 不需要**。它当年给 `/sw.js` 写 `Cache-Control: no-cache`；而 Cloudflare Workers 的静态
+  资源**默认**就是 `Cache-Control: public, max-age=0, must-revalidate` + `ETag`，每次回源校验，
+  `sw.js` 不会卡在旧版本。哈希资源同理不配 `immutable` —— 受控页面根本不走 HTTP，走的是 SW 缓存。
+  少一个文件，也少一条要与部署端对齐的规则。
+- **深链回退比它更直接**。它靠 `cache.match(req, { ignoreSearch: true })` 让 `/?lv=3` 命中缓存里的
+  `/`；本仓库是拿确定的 `HOME` 去匹配，不依赖「缓存键长什么样」。

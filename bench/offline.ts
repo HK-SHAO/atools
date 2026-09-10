@@ -50,7 +50,10 @@ const CACHED = `
   return out;
 `;
 
-const server = serveDir(PORT, `${project}/dist`);
+// 第四个参数打开 SPA 回落：部署端 wrangler.jsonc 配的是
+// not_found_handling: single-page-application，不存在的路径会拿回 200 的 index.html。
+// 门禁要验的正是「这种响应不许进运行期缓存」，服务端不同语义就验不到。
+const server = serveDir(PORT, `${project}/dist`, {}, true);
 let serving = true;
 const shutDown = (): void => {
   if (!serving) return;
@@ -77,16 +80,18 @@ try {
   if (!ready) fail("Service Worker 十秒内没就绪：没注册上，或浏览器拒绝了（非安全上下文？）");
   else console.log("已注册：dist/sw.js");
 
+  // 整个门禁只加载这一次。若先加载第二遍再断网，安装期什么都没预热也照样能过
+  // —— 第一遍顺手就把壳填满了。shaofeng 当年删掉安装期预热之后，离线正是退化成
+  // 「得访问两次」才成立；所以「一次访问就够」必须由门禁自己钉住。
   if (!(await session.ev<boolean>(`return !!navigator.serviceWorker.controller;`)))
-    fail("注册完成后当前页面仍未受控（clients.claim 没生效，首次访问要等下次加载才离线可用）");
+    fail("首次加载后当前页面未受控（clients.claim 没生效：首次访问拿不到离线能力，得再加载一次）");
 
-  await session.goto(APP, ".app");
   const online = await session.ev<{
     href: Record<string, string | null>;
     hook: string | null;
     controlled: boolean;
   }>(INSPECT);
-  if (!online.controlled) fail("二次加载后页面仍不受 Service Worker 控制");
+  if (!online.controlled) fail("页面不受 Service Worker 控制");
 
   const manifest = await session.ev<Manifest | null>(`
     const url = document.querySelector('link[rel="manifest"]').href;
@@ -182,6 +187,58 @@ try {
   if (!loaded) fail("演示没能载入");
   if (!demo.length) fail("演示音频没进运行期缓存：用过一次的素材应当离线可用");
   else console.log(`运行期缓存 +${grown!.length - shell.length} 项（含演示音频 ${demo.join(" ")}）`);
+
+  // 更新语义：新版装好必须停在 waiting，不能把正在用的页面抽掉。
+  // 就地给 dist/sw.js 追加一行注释来制造「新版」—— serveDir 每次请求都读盘，
+  // 浏览器比对字节就能发现它变了。真的发了 skipWaiting 的话，新版会当场 activate
+  // 并清掉旧缓存，waiting 会是空的 —— 这条断言正是冲着那个差别去的。
+  const swPath = path.join(project, "dist/sw.js");
+  const swBytes = await Bun.file(swPath).text();
+  try {
+    await Bun.write(swPath, `${swBytes}\n// 更新探针 ${Date.now()}\n`);
+    await session.ev(`
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg?.update();
+      return !!reg;
+    `);
+    const parked = await waitFor(
+      "新版停在 waiting",
+      () =>
+        session.ev<boolean>(`
+          const reg = await navigator.serviceWorker.getRegistration();
+          return !!reg?.waiting;
+        `),
+      8000,
+    ).then(() => true, () => false);
+    if (!parked) fail("新版 Service Worker 没停在 waiting：要么没被检测到，要么直接接管了正在用的页面");
+    else console.log("更新语义：新版停在 waiting，旧版继续服务");
+    if (!(await session.ev<boolean>(`return !!navigator.serviceWorker.controller;`)))
+      fail("更新检测之后当前页面丢了 Service Worker 控制");
+    const kept = await session.ev<string[]>(CACHED);
+    for (const [what, at] of wanted) if (!kept.includes(at)) fail(`更新检测之后壳里少了${what}（${at}）`);
+  } finally {
+    await Bun.write(swPath, swBytes);
+  }
+
+  // 部署端是 SPA 回落：不存在的路径拿回 200 的 index.html。这种响应绝不能进运行期缓存，
+  // 否则一次偶发缺文件就被固化成永久坏死，此后再取还是这份 HTML。
+  const ghost = "./__no-such-chunk__.js";
+  const ghostResp = await session.ev<{ status: number; type: string }>(`
+    const r = await fetch(${JSON.stringify(ghost)}).catch(() => null);
+    return r
+      ? { status: r.status, type: (r.headers.get('content-type') ?? '').split(';')[0] }
+      : { status: 0, type: '' };
+  `);
+  await sleep(300);
+  const poisoned = (await session.ev<string[]>(CACHED)).some(at => at.endsWith("__no-such-chunk__.js"));
+  if (ghostResp.status !== 200 || ghostResp.type !== "text/html")
+    fail(
+      `不存在的资源没走 SPA 回落（${ghostResp.status} ${ghostResp.type}）` +
+        "：服务端与部署端不同语义，下面这条断言是空的",
+    );
+  else if (poisoned)
+    fail(`SPA 回落出来的 index.html 被冻进了运行期缓存（${ghost}）：一次偶发缺文件会变成永久坏死`);
+  else console.log("SPA 回落不进运行期缓存：缺失资源拿回 200 的 HTML，但没被冻住");
 
   console.log("关掉 HTTP 服务：这个源真的不可达了");
   shutDown();

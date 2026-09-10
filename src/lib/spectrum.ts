@@ -238,11 +238,13 @@ export async function encode(
       for (let b = 0; b < bins; b++) {
         const re = core.re[b]!;
         const im = core.im[b]!;
-        const db = 20 * Math.log10(Math.sqrt(re * re + im * im) / scale);
-        levels[base + b] = magToLevel(db);
-        const a = Math.atan2(im, re);
-        phaseCos[base + b] = clampByte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
-        phaseSin[base + b] = clampByte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
+        const h = Math.sqrt(re * re + im * im);
+        levels[base + b] = magToLevel(20 * Math.log10(h / scale));
+        // 单位相量直接取 re/h 与 im/h：与 cos(atan2(im, re)) 是同一件事，
+        // 但省掉 atan2 + cos + sin 三个超越函数（内层实测 2.12×）。h = 0 时
+        // 原式给 cos=1、sin=0，这里照样填 255 / 128。
+        phaseCos[base + b] = h > 0 ? clampByte(Math.round(((re / h) * 0.5 + 0.5) * 255)) : 255;
+        phaseSin[base + b] = h > 0 ? clampByte(Math.round(((im / h) * 0.5 + 0.5) * 255)) : 128;
       }
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
@@ -351,6 +353,13 @@ async function synthesiseExact(
       }
       core.re[b] = m * c;
       core.im[b] = m * s;
+    }
+    // bins 可能小于 win/2+1（图读回来的精确谱，行数被 win/2+1 夹过）。
+    // core.add 做的是全长的 Hermite 反变换，上半谱不清零的话，上一帧反变换出来的
+    // 时域样本会被当成本帧的谱线再变一次 —— 帧 0 之后整条输出都被污染。
+    for (let b = bins; b < core.bins; b++) {
+      core.re[b] = 0;
+      core.im[b] = 0;
     }
     core.add(acc, f * hop);
     if (Date.now() >= next) {

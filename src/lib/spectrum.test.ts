@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Samples } from "./arrays";
-import { FFT } from "./fft";
+import { FFT, hannWindow } from "./fft";
 import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
@@ -381,6 +381,38 @@ function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   }
 }
 
+// 参照实现：精确档相位原本的写法（atan2 + cos + sin）。只用来钉住替换，别拿它当第二份真相。
+const exactPhaseInline = (
+  pcm: Samples,
+  win: number,
+  hop: number,
+  bins: number,
+): { cos: Uint8Array; sin: Uint8Array } => {
+  const fft = new FFT(win);
+  const w = hannWindow(win);
+  const frames = Math.floor(pcm.length / hop) + 1;
+  const x = new Float64Array(pcm.length + win);
+  for (let i = 0; i < pcm.length; i++) x[win / 2 + i] = pcm[i]!;
+  const re = new Float64Array(win);
+  const im = new Float64Array(win);
+  const cos = new Uint8Array(frames * bins);
+  const sin = new Uint8Array(frames * bins);
+  const byte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+  for (let f = 0; f < frames; f++) {
+    for (let m = 0; m < win; m++) {
+      re[m] = x[f * hop + m]! * w[m]!;
+      im[m] = 0;
+    }
+    fft.transform(re, im);
+    for (let b = 0; b < bins; b++) {
+      const a = Math.atan2(im[b]!, re[b]!);
+      cos[f * bins + b] = byte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
+      sin[f * bins + b] = byte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
+    }
+  }
+  return { cos, sin };
+};
+
 const clicks = (a: Samples): number => {
   let peak = 0;
   for (let i = 0; i < a.length; i++) peak = Math.max(peak, Math.abs(a[i]!));
@@ -453,6 +485,39 @@ describe("exact (2-band) mode", () => {
     expect(snr(pcm, back)).toBeGreaterThan(25);
     expect(localCorrelation(pcm, back, sr)).toBeGreaterThan(0.99);
     expect(clicks(back)).toBe(0);
+  });
+
+  // 精确档把相位存成单位相量：取 re/h、im/h，与 cos(atan2(im, re))、sin(atan2(im, re))
+  // 是同一件事，但省掉每 bin 三个超越函数（内层实测 2.12×）。钉住这条替换 ——
+  // 只有当两者量化到同一个字节时才是等价的，改量化或改写式子都必须让它继续成立。
+  test("exact phase bytes equal the atan2 definition they replace", async () => {
+    const sr = 32000;
+    const pcm = signal(sr, sr);
+    for (const fineness of [0, 1, 2] as const) {
+      const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr, fineness });
+      const ref = exactPhaseInline(pcm, spec.meta.win, spec.meta.hop, spec.meta.bins);
+      let differ = 0;
+      const n = spec.meta.frames * spec.meta.bins;
+      for (let i = 0; i < n; i++) {
+        if (spec.phaseCos![i] !== ref.cos[i]) differ++;
+        if (spec.phaseSin![i] !== ref.sin[i]) differ++;
+      }
+      expect([fineness, differ]).toEqual([fineness, 0]);
+    }
+  });
+
+  // synthesiseExact 的 core.add 做的是全长的 Hermite 反变换，所以「写满 bins」等于
+  // 「写满整个上半谱」这件事只成立于 bins === win/2+1。encode 恒满足（rowsFor 在全频段
+  // 就返回 win/2+1）；image 侧的 winFromBins 有 256 的下限，幅度带短于 129 行时会打破它 ——
+  // 那种输入由 synthesiseExact 里的清零点兜住。
+  test("exact encodes always fill the whole upper half", async () => {
+    const sr = 44100;
+    const pcm = signal(sr, sr);
+    for (const fineness of [0, 1, 2] as const) {
+      const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr, fineness });
+      expect([fineness, spec.meta.bins]).toEqual([fineness, spec.meta.win / 2 + 1]);
+      expect([fineness, rowsFor(spec.meta.win, sr, 0)]).toEqual([fineness, spec.meta.win / 2 + 1]);
+    }
   });
 
   test("filenames without _B are rejected", () => {
