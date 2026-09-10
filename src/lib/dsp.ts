@@ -15,6 +15,16 @@ interface Kernel {
   dsp_canary_len(): number;
   dsp_canary_set(index: number, value: number): void;
   dsp_canary_get(index: number): number;
+  dsp_plan(win: number): number;
+  dsp_plan_win(): number;
+  dsp_rev_ptr(): number;
+  dsp_tw_cos_ptr(): number;
+  dsp_tw_sin_ptr(): number;
+  dsp_hann_ptr(): number;
+  dsp_re_ptr(): number;
+  dsp_im_ptr(): number;
+  dsp_fft(): void;
+  dsp_ifft(): void;
 }
 
 /** 加载器与内核约定的 ABI 版本。错配时症状是「算出来的数不对」，所以这里直接拒绝。 */
@@ -71,3 +81,38 @@ export async function loadDsp(source: string | ArrayBuffer | Uint8Array): Promis
     u8: (ptr, len) => new Uint8Array(buffer(), ptr, len),
   };
 }
+
+/**
+ * 一次 FFT 计划。三张表是内核里的静态缓冲，视图在计划有效期内一直有效
+ * （建计划本身不分配堆内存，不会把已切出的视图顶掉）。
+ * **内核只有一份计划**：再立一次就会顶掉前一份，两份不能同时用。
+ */
+export interface Plan {
+  readonly win: number;
+  readonly rev: Int32Array;
+  readonly cos: Float64Array;
+  readonly sin: Float64Array;
+  readonly hann: Float64Array;
+  /** 内核的工作区，分析/合成都读写这里。 */
+  readonly re: Float64Array;
+  readonly im: Float64Array;
+  forward(): void;
+  inverse(): void;
+}
+
+export const planOf = (dsp: Dsp, win: number): Plan => {
+  const { kernel } = dsp;
+  if (kernel.dsp_plan(win) !== 0) throw new Error(`内核不接受窗长 ${win}`);
+  const half = win / 2;
+  return {
+    win,
+    rev: dsp.i32(kernel.dsp_rev_ptr(), win),
+    cos: dsp.f64(kernel.dsp_tw_cos_ptr(), half),
+    sin: dsp.f64(kernel.dsp_tw_sin_ptr(), half),
+    hann: dsp.f64(kernel.dsp_hann_ptr(), win),
+    re: dsp.f64(kernel.dsp_re_ptr(), win),
+    im: dsp.f64(kernel.dsp_im_ptr(), win),
+    forward: () => kernel.dsp_fft(),
+    inverse: () => kernel.dsp_ifft(),
+  };
+};
