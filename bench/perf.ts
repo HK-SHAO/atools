@@ -122,8 +122,13 @@ if (process.env.PAGE !== "0") {
   const session = await open({ port: CDP, size: [1200, 900], url: `http://127.0.0.1:${PORT}/` });
   try {
     await session.goto(`http://127.0.0.1:${PORT}/`, ".app");
+    // 素材先造好、表后开：合成那 ${SECS} s 的 sin 循环是**测量台自己**的开销（实测 55 ms 上下），
+    // 记进去会让「长任务」这项永远挂着一个与页面无关的底噪，读数就没法用了。
     await session.ev(`
-      window.__perf = { tasks: [], notes: [] };
+      window.__perf = { tasks: [], notes: [], file: (() => { ${WAV} })() };
+      return true;
+    `);
+    await session.ev(`
       new PerformanceObserver((list) => {
         for (const e of list.getEntries()) window.__perf.tasks.push([Math.round(e.startTime), Math.round(e.duration)]);
       }).observe({ entryTypes: ['longtask'] });
@@ -138,9 +143,8 @@ if (process.env.PAGE !== "0") {
     const from = await session.ev<number>(`return Math.round(performance.now());`);
 
     await session.ev(`
-      const file = (() => { ${WAV} })();
       const dt = new DataTransfer();
-      dt.items.add(file);
+      dt.items.add(window.__perf.file);
       document.querySelector('.app').dispatchEvent(
         new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }),
       );
@@ -158,7 +162,7 @@ if (process.env.PAGE !== "0") {
     const mark = (at: number) => `${String(at - from).padStart(6)}ms`;
     console.log(`\n真实页面：落一个 ${SECS}s 的 44.1k WAV，看默认参数（8k 紧凑）走完`);
     for (const [at, text] of perf.notes) console.log(`  ${mark(at)}  ${text || "（静默）"}`);
-    console.log("  长任务（>50ms，含测量脚本自己合成 WAV 的开销）");
+    console.log("  长任务（>50ms，素材已先造好，「读取」之前的不计入）");
     let total = 0;
     for (const [at, ms] of perf.tasks) {
       total += ms;

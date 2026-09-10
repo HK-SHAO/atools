@@ -4,8 +4,9 @@ import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "../lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
-import { resample, slice, trimRange } from "../lib/resample";
-import { Aborted, encode, fitEncode, synthesise, type Meta, type Spectrum } from "../lib/spectrum";
+import { slice, trimRange } from "../lib/resample";
+import { Aborted, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
+import { scope } from "./pipeline";
 
 interface Source {
   pcm: Samples;
@@ -58,7 +59,19 @@ export function useStudio() {
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const genRef = useRef(0);
+  const io = scope("studio");
   const enc = pick.enc;
+
+  /**
+   * 开新一段叙事：旧的还原 / 编码当场作废。
+   *
+   * 原先靠 `alive()` 闭包把「不是本代」这件事传到计算里，现在计算在别的线程上，
+   * 只能靠消息 —— 两边合起来是同一个代次守卫：主线程换代号 + 让 Worker 作废在算的活。
+   */
+  const generation = useCallback((): number => {
+    io.cancel();
+    return ++genRef.current;
+  }, [io]);
 
   const jobRef = useRef<Job | null>(null);
   const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
@@ -79,7 +92,7 @@ export function useStudio() {
   useEffect(() => {
     // 动参数 / 换素材 = 上一份还原（按播放、重建相位）**当场作废**。不作废的话它会一路算到底：
     // 结果被丢掉之外，它结束时的 setStage(null) 还会盖住这一轮的「转换中」，进度条闪一下没了。
-    genRef.current++;
+    generation();
     let released = false;
     let unlock!: () => void;
     readyRef.current = new Promise<void>(r => (unlock = r));
@@ -109,18 +122,19 @@ export function useStudio() {
           return;
         }
         const sr = enc.sr > 0 ? enc.sr : source.sr;
-        const tuned = resample(clipped, source.sr, sr, enc.mode === "compact" ? enc.fmax : 0);
+        const tuned = await io.resample(clipped, source.sr, sr, enc.mode === "compact" ? enc.fmax : 0);
         if (cancelled) return;
         await nextFrame();
 
-        const spec = await encode(tuned, sr, enc, alive, v => {
+        const spec = await io.encode(tuned, sr, enc, v => {
           if (!cancelled) setStage({ label: "生成图片", value: v });
         });
         if (cancelled) return;
 
         setStage({ label: "打包", value: 1 });
         await nextFrame();
-        const png = await spectrumToPng(spec);
+        // 紧凑档出图是纯函数，交给 Worker；可逆档要走 canvas 的 toBlob，只能留在主线程。
+        const png = spec.meta.exact ? await spectrumToPng(spec) : await io.png(spec);
         if (cancelled) return;
 
         putJob({ spec, png, ref: tuned, audio: null });
@@ -139,26 +153,22 @@ export function useStudio() {
     // 被换掉的那一轮也要放行，否则正在等它的 listen 会永远挂着。
     return () => {
       cancelled = true;
+      io.cancel();
       release();
     };
-  }, [source, enc, putJob]);
+  }, [source, enc, putJob, generation, io]);
 
   /** 还原一张图的声音。`fine` 走精修档（更多迭代 + GL 打磨），「重建相位」用。 */
   const render = useCallback(
     async (spec: Spectrum, fine: boolean): Promise<Samples | null> => {
-      const my = ++genRef.current;
+      const my = generation();
       const alive = () => genRef.current === my;
       const label = fine ? "精修" : "还原";
       setStage({ label, value: 0 });
       try {
-        const audio = await synthesise(
-          spec,
-          alive,
-          v => {
-            if (alive()) setStage({ label, value: v });
-          },
-          fine ? "fine" : "fast",
-        );
+        const audio = await io.synthesise(spec, fine, v => {
+          if (alive()) setStage({ label, value: v });
+        });
         if (!alive()) return null;
         const cur = jobRef.current;
         // 等的时候参数被改过：这一份已经不是当前这张图。
@@ -174,7 +184,7 @@ export function useStudio() {
         if (alive()) setStage(null);
       }
     },
-    [putJob],
+    [io, putJob, generation],
   );
 
   /**
@@ -205,7 +215,7 @@ export function useStudio() {
 
   const open = useCallback(
     async (file: File) => {
-      const my = ++genRef.current;
+      const my = generation();
       const alive = () => genRef.current === my;
       setError(null);
       setStage({ label: "读取", value: 0 });
@@ -227,7 +237,7 @@ export function useStudio() {
           const label = "还原声音";
           setStage({ label, value: 0 });
           await nextFrame();
-          const pcm = await synthesise(spec, alive, v => {
+          const pcm = await io.synthesise(spec, false, v => {
             if (alive()) setStage({ label, value: v });
           });
           if (!alive()) return;
@@ -260,7 +270,7 @@ export function useStudio() {
         if (alive()) setStage(null);
       }
     },
-    [setEnc],
+    [generation, io, setEnc],
   );
 
   const refine = useCallback(async () => {
@@ -273,7 +283,7 @@ export function useStudio() {
   const demo = useCallback(async () => {
     // 与 open / refine 同款代次守卫：演示在解码，用户中途点了「清空」或拖进新文件，
     // 这个 Promise 回来时不能再往界面上盖。
-    const my = ++genRef.current;
+    const my = generation();
     const alive = () => genRef.current === my;
     try {
       const buf = await (await fetch(DEMO_URL)).arrayBuffer();
@@ -287,15 +297,15 @@ export function useStudio() {
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
     }
-  }, [setEnc]);
+  }, [generation, setEnc]);
 
   const clear = useCallback(() => {
-    genRef.current++;
+    generation();
     pendingRef.current = null;
     setSource(null);
     setError(null);
     setHint(null);
-  }, []);
+  }, [generation]);
 
   // 自动降级那条是「当前设置的既定事实」，得一直挂着；hint 是「刚发生的事」。两者都留着。
   return {

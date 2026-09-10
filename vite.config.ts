@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { moonKernel } from "./scripts/moon.ts";
-import { serviceWorker } from "./scripts/sw.ts";
+import { WORKER_FILE, serviceWorker } from "./scripts/sw.ts";
 
 const at = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 
@@ -25,6 +25,16 @@ export default defineConfig({
   // （回环上的 `http://` 才算安全上下文，Service Worker 才装得上）。
   server: { host: "127.0.0.1", port: 3000 },
   preview: { host: "127.0.0.1", port: 3000 },
+  /**
+   * 数值流水线 Worker。产物名在这里钉死，`scripts/sw.ts` 按同一份声明把它认进应用壳
+   * （Vite 把 worker 子构建的产物当 **asset** 交上来，没有 `facadeModuleId`，认不出入口）。
+   *
+   * 不设 `format`：默认 iife —— 模块 Worker 要 Firefox 114+，而这里的产物是自包含的，
+   * 用不上 import，没必要为它收窄兼容性。
+   */
+  worker: {
+    rollupOptions: { output: { entryFileNames: WORKER_FILE } },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

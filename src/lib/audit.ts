@@ -1,7 +1,10 @@
 import type { Samples } from "./arrays";
 import { downloadName, imageToSpectrum } from "./image";
 import { compare } from "./metric";
-import { Aborted, synthesise, type Spectrum } from "./spectrum";
+import { Aborted, type Spectrum } from "./spectrum";
+
+/** 还原一段声音。调用方注入：这条链的还原跑在 Worker 上，但质检不该知道线程的事。 */
+export type Synth = (spec: Spectrum) => Promise<Samples>;
 
 export interface LossRow {
   label: string;
@@ -53,11 +56,12 @@ async function one(
   spec: Spectrum,
   blob: Blob,
   fileName: string,
+  synth: Synth,
   alive?: () => boolean,
 ): Promise<LossRow> {
   const back = (await imageToSpectrum(blob, fileName)).spec;
   if (alive && !alive()) throw new Aborted();
-  const y = await synthesise(back, alive);
+  const y = await synth(back);
   if (alive && !alive()) throw new Aborted();
   const m = compare(ref, y as Samples);
   return {
@@ -75,11 +79,12 @@ export async function audit(
   spec: Spectrum,
   png: Blob,
   name: string,
+  synth: Synth,
   alive?: () => boolean,
 ): Promise<LossRow[]> {
   const own = downloadName(name, spec.meta);
   const out: LossRow[] = [];
-  out.push(await one("原图", ref, spec, png, own, alive));
+  out.push(await one("原图", ref, spec, png, own, synth, alive));
 
   for (const [label, mode] of [
     ["有损", "jpeg"],
@@ -88,7 +93,7 @@ export async function audit(
     const blob = await recode(png, mode);
     if (alive && !alive()) throw new Aborted();
     const fileName = mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own;
-    out.push(await one(label, ref, spec, blob, fileName, alive));
+    out.push(await one(label, ref, spec, blob, fileName, synth, alive));
   }
   return out;
 }
