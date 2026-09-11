@@ -49,18 +49,19 @@ function best(rounds: number, iters: number, fn: () => void): number {
 const us = (ms: number): string => (ms * 1000).toFixed(2).padStart(9) + " µs";
 
 console.log(`产物 ${path.relative(root, artifact)}  ·  引擎 V8 (${process.versions.bun ? "Bun" : "Node"})`);
-console.log("name                       V8 读数      moon bench 里的同名读数");
+console.log("同一份产物换引擎跑：这一列是 V8，moonrun 那一列读 `moon bench`，两者只比比值");
+console.log("name                       V8");
 
 for (const win of [512, 4096]) {
   const s = k.dsp_slot_open!(win) as number;
-  const re = new Float64Array(k.memory.buffer, k.dsp_slot_ptr!(s) as number, win);
+  const re = new Float64Array(k.memory.buffer, k.dsp_slot_mem!(s) as number, win);
   for (let i = 0; i < win; i++) re[i] = Math.sin(i * 0.017);
   console.log(`forward-alone-${win}`.padEnd(24) + us(best(20, 400, () => k.dsp_fft!(s))));
   k.dsp_slot_close!(s);
 }
 
 for (const w of [2048, 65535]) {
-  const jh = k.dsp_job_open!(k.dsp_stub_paint_words!(w) as number) as number;
+  const jh = k.dsp_job_open!(0, k.dsp_stub_paint_bytes!(w) as number) as number;
   console.log(
     `paint-${w}`.padEnd(24) + us(best(20, 200, () => k.dsp_stub_paint!(jh, w, 44100, 512, 1))),
   );

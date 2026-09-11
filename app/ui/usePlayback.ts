@@ -8,14 +8,6 @@ export function clock(t: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-type Ctor = typeof AudioContext;
-
-function audioCtor(): Ctor | undefined {
-  return (
-    window.AudioContext ?? (window as unknown as { webkitAudioContext?: Ctor }).webkitAudioContext
-  );
-}
-
 export function usePlayback(
   audio: Samples | null,
   sr: number,
@@ -83,9 +75,7 @@ export function usePlayback(
     }
     let ctx = ctxRef.current;
     if (!ctx) {
-      const Ctor = audioCtor();
-      if (!Ctor) throw new Error("这个浏览器不支持 Web Audio");
-      ctx = new Ctor();
+      ctx = new AudioContext();
       ctxRef.current = ctx;
     }
     const buf = bufRef.current;

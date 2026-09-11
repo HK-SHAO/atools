@@ -116,25 +116,9 @@ async function decodeWasm(engine: Engine, bytes: Uint8Array): Promise<Decoded> {
   return { pcm: mixdown(channelData), sr: sampleRate };
 }
 
-function decodeContext(rate: number): BaseAudioContext {
-  const Ctor =
-    typeof OfflineAudioContext !== "undefined"
-      ? OfflineAudioContext
-      : (globalThis as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
-          .webkitOfflineAudioContext;
-  if (!Ctor) throw new Error("这个浏览器不支持离线音频上下文");
-  return new Ctor(1, 1, rate);
-}
-
 async function decodeNative(data: ArrayBuffer, rate: number | null): Promise<Decoded | null> {
-  let ctx: BaseAudioContext;
   try {
-    ctx = decodeContext(rate ?? DECODE_RATE);
-  } catch {
-    return null;
-  }
-
-  try {
+    const ctx = new OfflineAudioContext(1, 1, rate ?? DECODE_RATE);
     const buffer = await decodeRaw(ctx, data.slice(0));
     const channels: Float32Array[] = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
