@@ -25,11 +25,30 @@ bun start
 2. `app/index.html` → 应用、CSS 和按需加载的音频解码器，启用 React Compiler。
 3. `app/sw.ts` → `sw.js`，注入应用壳清单和内容指纹。
 
-产物为纯静态文件。应用与 Worker 位于 `dist/` 根目录，Worker 地址相对文档解析，Wasm 地址相对引用它的模块解析。部署到子路径时必须保留这个结构。Worker 使用固定文件名，其他打包资源使用内容哈希；无需 Worker 插件。
+产物为纯静态文件。应用与 Worker 位于 `dist/` 根目录，Worker 地址相对文档解析，Wasm 地址相对引用它的模块解析。部署到子路径时必须保留这个结构。Worker 使用固定文件名，其他打包资源使用内容哈希。
 
-构建验证入口不包含内核加载器、产物位置和预缓存文件完整性。数值计算与图片处理只在 Worker 内运行，主线程负责交互、音频解码和播放。
+构建自带四道校验，任一不过即退 1：
 
-应用壳包括 HTML、入口脚本、CSS、Worker、Wasm、manifest 和图标。音频解码器与演示音频按需下载。manifest 中的图标路径不经过打包器，构建脚本按原路径复制。
+1. 应用壳里的每一项真在 `dist/`。壳是推出来的（入口产物 ∪ HTML 里的 `./` 引用 ∪ manifest 图标 ∪ Worker 产物 ∪ `.wasm`），缺项就是引用或图标路径写错了。
+2. `sw.js` 里不许残留 `PRECACHE`。`define` 是文本替换，键名写错构建照过、只在浏览器炸。
+3. 所有产物必须在 `dist/` 根。这是**规则而不是清单**：Worker 按文档基准、Wasm 按模块基准解析，都只在「同级文件」下成立。
+4. 入口产物里不许出现 `dsp_abi`。数值计算与图片处理只跑在 Worker 内，主线程负责交互、音频解码和播放；主线程挂内核是构建期错误。
+
+应用壳包括 HTML、入口脚本、CSS、Worker、Wasm、manifest 和图标。音频解码器与演示音频按需下载：12 个解码分包合计约 1.6 MB，刻意不进壳，改由运行期缓存按需兜住。manifest 中的图标路径不经过打包器，构建脚本按原路径复制。
+
+契约与门禁的对应关系见 [architecture.md](architecture.md)。
+
+## Bun 打包器的几条事实
+
+下面这些是实测结论，不是文档承诺；换工具链或升级 Bun 时先重测：
+
+- **没有 `?url` / `?worker` 这类后缀。** `.wasm` 直接 import 拿到的是**路径字符串**：dev 下是 `/_bun/asset/<hash>.wasm`，产物里是与引用它的 chunk 同目录的相对路径。
+- **打包器不认 `new Worker(new URL(…))`。** 那个调用点被原样透传、Worker 文件根本不产出。所以 Worker 是**独立入口**、固定文件名，应用侧手写 `new URL("pipeline.worker.js", document.baseURI)`。
+- **dev 下 `import.meta.url` 被静态替换成源码的 `file://` 路径**，`new URL(x, import.meta.url)` 在产物里也不改写。Worker 地址一律以 `document.baseURI` 为基准——`new URL(绝对路径, 任意基准)` 直接返回那个绝对路径，于是 dev（根绝对路径）与产物（相对路径）用同一个表达式。
+- **扁平布局是 manifest 的硬约束**，不是审美：`manifest.webmanifest` 是手写件、不经打包器改写，`"scope": "./"` 与 `./icons/…` 都按它自己所在的位置解析，一挪就装不起来。
+- **`import.meta.hot` 就是「开发 / 生产」判据**：dev 是真对象，生产构建折叠成 `undefined`（`app/ui/pipeline.ts` 的 HMR 清理挂在它上面）。
+- **`@types/node` 删不得**：`bun-types/index.d.ts` 第一行就 `/// <reference types="node" />`，移走它连 `process` 与 `node:fs/promises` 都解析不出来。「移除 node」只落在运行时与脚本这一层。
+- **React Compiler 判「有没有生效」看产物里有没有 `react.memo_cache_sentinel`**，不能看见体积没变就下结论。`oxlint` 的 `react/*` 那组就是编译器自己的退让理由（认不出的写法会静默不优化），两边必须一起开。
 
 ## 开发服务
 
@@ -51,4 +70,31 @@ Service Worker 在生产环境注册。首次安装缓存应用壳；新版本�
 
 `.app` 提供尺寸查询容器，`.shell` 定义尺寸令牌。`--u` 和 `--c-vh` 用 `@property` 注册为长度，使容器单位在令牌根解析后继承。修改 tokens 后应同时检查窄屏、矮屏和嵌入容器。
 
-应用需要 WebAssembly、模块 Worker、OffscreenCanvas、CompressionStream / DecompressionStream、容器查询和 `@property`。当前自动化验证使用本机 Chrome；不能用特性支持表代替 Safari、Firefox 的实际端到端验证。
+应用需要 WebAssembly、模块 Worker、OffscreenCanvas、CompressionStream / DecompressionStream、容器查询与容器相对单位、`@property`。
+
+## 浏览器基线
+
+**Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+。**
+
+这三列由下面四条定下。**硬门**是缺了就进不来的，**软**是缺了只是不好看：
+
+| 特性 | 最晚满足的引擎 | 性质 |
+| --- | --- | --- |
+| `@property` | Firefox 128 · Safari 16.4 | **硬门**——令牌不注册，容器单位漏进继承的令牌并静默错缩放：界面能开、尺寸全错，比打不开更难查 |
+| Wasm v128（SIMD） | Safari 16.4 | **硬门**——模块直接编译不过 |
+| `container-type` + `cqi` / `cqb`、`:has()` | Chrome 105 | **硬门**——尺寸令牌的来源 |
+| `dvh`（`100vh` 兜底就写在它上一行） | Chrome 108 · Firefox 101 · Safari 15.4 | 软——缺了只是移动端拿不到动态视口高度 |
+
+Chrome 那一列因此取最晚的 108；取 105 也不算错，只是不承诺移动端视口高度正确。
+其余所需特性（Wasm bulk memory 与非陷阱转整、`OffscreenCanvas`、`CompressionStream`、
+`backdrop-filter`、`:focus-visible`、`color-scheme`）都远早于这四条；
+`@supports (corner-shape: squircle)` 只是渐进增强，不构成门槛。
+
+Wasm 侧的门槛取自内核的**指令集读数**（`moon build --output-wat` 的 wat）：`f64x2.splat` + `v128.store`
+是 v128，bulk memory 是 `memory.copy` / `memory.fill`，非陷阱转整是 `i32.trunc_sat_f64_s`；
+**导入面为空**，所以不需要 WASI。
+
+当前验证状态：Chromium（152）与 WebKit（26.6）上真实 `dist/` 都跑通，两边零控制台错误。
+**Firefox 没有实机测过**（Nightly 要往 `~/Library/Application Support/Firefox` 写 profile，
+本环境对该目录 `EPERM`，与代码无关），所以 Firefox 一列是门槛推导而非实测。
+自动化验证走本机 Chrome，不能用特性支持表代替真机端到端验证。

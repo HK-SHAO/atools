@@ -45,6 +45,8 @@ bun start            # 静态服务 dist/，本地就能验证 PWA 与离线
 
 ## 深入 / Going deeper
 
-- [docs/format-spec.md](docs/format-spec.md)：图片格式契约 / image format contract
+- [docs/architecture.md](docs/architecture.md)：工程架构与门禁 / architecture and the gates
 - [docs/algorithms.md](docs/algorithms.md)：算法原理与实测 / algorithm notes and benchmarks
-- [AGENTS.md](AGENTS.md)：工程架构 / engineering architecture
+- [docs/format-spec.md](docs/format-spec.md)：图片格式契约 / image format contract
+- [docs/build.md](docs/build.md)：构建、部署与离线 / build, deploy, offline
+- [AGENTS.md](AGENTS.md)：工程守则 / engineering rules
