@@ -4,7 +4,7 @@ import { compare } from "./metric";
 import { Aborted, type Spectrum } from "./spectrum";
 
 /** 还原一段声音。调用方注入：这条链的还原跑在 Worker 上，但质检不该知道线程的事。 */
-export type Synth = (spec: Spectrum) => Promise<Samples>;
+type Synth = (spec: Spectrum) => Promise<Samples>;
 
 export interface LossRow {
   label: string;

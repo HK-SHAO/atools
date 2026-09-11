@@ -108,7 +108,7 @@ export async function loadDsp(source: string | ArrayBuffer | Uint8Array): Promis
  * 一次 FFT 计划。三张表只依赖窗长、建成即只读，所以**按窗长缓存**在核心里
  * （见 `moon/plan.mbt`），可以同时持有多个 —— 宿主并发跑两件活不会互相顶掉。
  */
-export interface Plan {
+interface Plan {
   readonly win: number;
   readonly rev: Int32Array;
   readonly cos: Float64Array;
@@ -167,7 +167,7 @@ export const fftBuffers = (dsp: Dsp, slot: Slot): { re: Float64Array; im: Float6
 };
 
 /** 配对双实变换的六张表。**偏移一律问内核要**，宿主不自己算布局。 */
-export interface PairTables {
+interface PairTables {
   r1: Float64Array;
   i1: Float64Array;
   r2: Float64Array;

@@ -393,7 +393,7 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
 }
 
 /** 幅度投影的目标区间：真值落在「档中心 ± 半档」内，最低档一侧无下界。 */
-export interface Band {
+interface Band {
   lo: Float64Array;
   hi: Float64Array;
 }

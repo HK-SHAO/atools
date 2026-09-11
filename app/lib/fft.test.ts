@@ -55,7 +55,7 @@ const noise = (n: number, seed: number): Float64Array => {
 };
 
 const ULP_BOUND = 8;
-const WINS = [256, 512, 1024, 4096];
+const WINS = [256, 512, 1024, 2048, 4096];
 
 describe("FFT 内核与 TS 参照实现等价", () => {
   let dsp: Dsp;

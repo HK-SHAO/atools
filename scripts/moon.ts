@@ -45,7 +45,7 @@ const latestSource = (): number => {
   return latest;
 };
 
-export const wasmStale = (): boolean =>
+const wasmStale = (): boolean =>
   !existsSync(artifact) || latestSource() > statSync(artifact).mtimeMs;
 
 /** 编译内核并返回字节。失败即抛 —— 这是构建的前置条件，不允许带着旧产物往下走。 */
@@ -54,7 +54,10 @@ export function compileWasm(opts: { force?: boolean } = {}): Uint8Array<ArrayBuf
 
   rmSync(path.join(moonDir, "_build"), { recursive: true, force: true });
   const started = Date.now();
-  const done = spawnSync(moonBin(), ["build", "--release", "--target", "wasm"], {
+  // `--deny-warn`：警告当错误。数值内核里一条警告就是一处没读懂的代码（曾攒到 17 条：
+  // 4 个没人引用的 ffi 原语 + 13 条实验性 API），而构建不该替人攒着。真需要放行就在
+  // moon.pkg 的 `warn_list` 里显式写出来 —— 那是一次有人做过的决定，不是沉默的欠账。
+  const done = spawnSync(moonBin(), ["build", "--release", "--deny-warn", "--target", "wasm"], {
     cwd: moonDir,
     encoding: "utf8",
   });
@@ -146,7 +149,7 @@ if (import.meta.main) {
   // 与编译共用，免得在 package.json 里再写一遍裸 `moon`。
   const task = flags.includes("--bench") ? "bench" : flags.includes("--test") ? "test" : null;
   if (task) {
-    const done = spawnSync(moonBin(), [task, "--release", "--target", "wasm"], {
+    const done = spawnSync(moonBin(), [task, "--release", "--deny-warn", "--target", "wasm"], {
       cwd: moonDir,
       stdio: "inherit",
     });
