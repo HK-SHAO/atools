@@ -6,7 +6,7 @@
 
 ```bash
 bun install
-bun dev                  # 开发服务器 http://localhost:3000（Bun 的 HTML 路由 + HMR；必须走这条脚本，它带 scripts/dev.env）
+bun dev                  # 开发服务器 http://localhost:3000（Bun 的 HTML 路由 + HMR）
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
 bun run typecheck        # `tsc -b`：两个工程一起检查（app / bun，见下）
 bun run lint             # oxlint（含 React Compiler 那一组规则）
@@ -49,16 +49,15 @@ app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/style
              数值流水线走 Worker（`pipeline.ts` 代理 + `pipeline.worker.ts`）：模块被引入就建
              Worker，内核在 worker 里启动即加载 + 预热；**worker 与主线程各挂一份**（wasm 实例
              不跨线程），主线程那一份由 `frontend.tsx` 顶层同时起。主线程那份只用票根编解码。
-             Worker 的地址**只能由构建期告诉入口**（Bun 不打包 `new Worker(new URL(...))`）：
-             产物里是与入口同目录的哈希名，dev 里是 `serve.ts` 供的那条路由，两者都经由
-             `process.env.PIPELINE_WORKER` 这一处内联。
+             Worker 的地址由入口自己算：`new URL("./pipeline.worker.js", 入口脚本.src)`。名字不带
+             哈希是**必须的**（两边得算出同一个地址），拉动态路由见 `docs/build.md` 的「worker 是独立入口」。
+             别改成 `import.meta.url`：dev 下 Bun 把它内联成源码的 `file://` 路径，浏览器拉不动。
 moon/        数值内核（MoonBit → `moon/_build/…/dsp.wasm`，由 `app/lib/dsp.ts` 导入成产物里的
              一个普通资产）。零 import、只用标准库（`moon.pkg`），所以 js / native 也编得过
              （`bun run moon:ports` 盯着）。三层内存、边界约定、导出面与搬迁流程见 `moon/README.md`。
-scripts/     build.ts（五步：编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
+scripts/     build.ts（编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
              serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核：dev 期盯源码重编、构建前先编）、
-             toy.ts（压 toy.zip）、test-setup.ts（`bun test` 的 preload：先编一次内核）、
-             dev.env（dev 要内联给浏览器的常量）
+             toy.ts（压 toy.zip）、test-setup.ts（`bun test` 的 preload：先编一次内核）
 app/styles/  样式，`index.css` 一个 `@import` 入口，按 reset → tokens → primitives → layout →
              spectrogram → workbench 分层
 app/index.html  唯一入口（Bun 的 HTML loader 的入口约定），与 `frontend.tsx` 同级；它引到的

@@ -46,19 +46,28 @@
 
 ### worker 是独立入口
 
-Bun **不打包** `new Worker(new URL(…, import.meta.url))`（把它列成 entrypoint 也不改写），
-所以 worker 自己编，地址由外面告诉入口：
+Bun **不打包** `new Worker(new URL(…, import.meta.url))`（列成 entrypoint 也不改写，实测产物里
+原样留着 `"./w.ts"`、文件也不出），`?url` / `?worker` 两个后缀都不认。所以 worker 自己编，
+而它的地址由**入口自己算出来**，不经过任何注入：
 
-- **产物侧**：`naming: "pipeline.worker-[hash].[ext]"`，地址经 `define` 内联进
-  `process.env.PIPELINE_WORKER`，值是相对**入口脚本自己**的那一段（两者同目录，由一道构建期校验
-  兜住：不同目录即构建失败）。
-- **dev 侧**：`scripts/serve.ts` 现编现供（`/worker/*`），路由由 `scripts/dev.env` 给出。
-- 两侧都经 `process.env.PIPELINE_WORKER` 这**同一个式子**，所以 `app/` 里只有这一处依赖注入。
+```ts
+const WORKER = new URL("./pipeline.worker.js", entry.src);   // entry = <script type=module src>
+new Worker(WORKER, { type: "module" });
+```
+
+- **名字钉死、不带哈希**：dev 与产物两边必须算出同一个地址，所以 worker 只能有一个固定名字。
+  它的内容变化由 Service Worker 的壳指纹覆盖（那个指纹把每个字节都喂进了 `Bun.hash`）。
+- **不能写 `import.meta.url`**：dev 下 Bun 把它内联成**源码的 `file://` 路径**（实测产物里是
+  `new URL("./pipeline.worker.js", "file:///…/app/ui/pipeline.ts")`），浏览器拉不动；而入口脚本的
+  `src` 在 dev（`/_bun/client/index-*.js`）与产物里都指得对，深路径与子路径部署也成立 ——
+  按 `entry.src` 解析是这一族写法里唯一两边都对的那个。
+- **dev 侧**：`scripts/serve.ts` 把 worker 现编现供在 `/_bun/client/pipeline.worker.js`（Bun 的
+  dev 服务器把入口 bundle 供在那个前缀下，所以按入口脚本相对解析正好落到这里）。这是 Bun 的
+  **内部挂载点**，不是文档承诺，所以 dev 起来后当场 fetch 一次，供出来的不是 JS 就直接报错。
+  兄弟资产（内核 `.wasm`，dev 下钉成 `dsp.wasm`）同前缀、同路由表 —— 路由表由**真实产物名**推出来。
+- **产物侧**：`naming: "pipeline.worker.js"`，与入口 chunk 同在 `dist/` 根（一道构建期校验兜住
+  入口不在根的情况：不同目录即构建失败）。
 - 拉起方式是 `new Worker(url, { type: "module" })`，产物自包含（零顶层 `import`）。
-
-**那个值必须在进程启动前就存在**：`bunfig.toml` 的 `[serve.static] env` 在启动时就把匹配到的
-变量收进内联表，脚本里再 `process.env.X = …` 已经晚了（实测：产物里原样留着 `process.env.X`）。
-所以 dev 由 `bun --env-file=scripts/dev.env` 送进去 —— 见 `package.json` 的 `dev`。
 
 ### 应用壳：推出来，不是挑出来的
 
@@ -99,8 +108,8 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 
 `scripts/serve.ts` 一个文件两种模式，职责不重叠，合成一条不行：
 
-- `bun dev`：Bun 的 HTML 路由（源码直出 + HMR），另供一条 `/worker/*` —— worker 是独立入口，
-  dev 里没有构建期可注入的名字，索性现编现供（几毫秒），改完 worker 刷新即生效。
+- `bun dev`：Bun 的 HTML 路由（源码直出 + HMR），另按 `/_bun/client/*` 现编现供 worker 与它的
+  兄弟资产 —— 见「worker 是独立入口」。几毫秒一次，改完 worker 刷新即生效。
   它还盯着 `moon/`：`.mbt` 一改就重编内核；产物被重写后 Bun 自己的 dev 服务器看到那个 import
   变了，照常整页刷新。
 - `bun start`（`--dist`）：静态服务 `dist/`，**找不到实体文件就回落到 `index.html`**，与 Cloudflare 的
@@ -112,8 +121,7 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 `bun start` 存在的理由就是：在 localhost 这个安全上下文里，能用真浏览器验证安装与离线。
 
 端口与地址钉死在 `127.0.0.1:3000`：PWA 只认回环上的 `http://`（那才算安全上下文，Service Worker
-才装得上）。dev 那条路由的路径与内联给浏览器的值**同源**（都来自 `scripts/dev.env`），所以改一处
-就够。
+才装得上）。dev 那条 worker 路由的路径不是配出来的，而是入口脚本相对解析的**结果**（见上）。
 
 `dist/` 是默认产物，多文件，交给任意静态服务器。`scripts/toy.ts` 在原地产出 `dist/` 之后把它压成
 `toy.zip`，`index.html` 落在包根。zip 是「更新」语义（已存在的包不会自动剔除消失的文件），
@@ -335,7 +343,7 @@ workbox 的代价：`bun add` 装 319 个包、`node_modules` 94 MB → 162 MB�
 | --- | --- | --- | --- | --- |
 | `CompressionStream` / `DecompressionStream` | PNG 的 zlib | 80 | 113 | **16.4** |
 | `OfflineAudioContext` | 按容器速率建解码上下文（带 `webkit` 前缀兜底） | 14 | 25 | 6 |
-| `Worker`（**module**） | 数值流水线；`pipeline.worker-*.js` 零顶层 `import`，但按 `{ type: "module" }` 拉起 | 80 | **114** | 15 |
+| `Worker`（**module**） | 数值流水线；`pipeline.worker.js` 零顶层 `import`，但按 `{ type: "module" }` 拉起 | 80 | **114** | 15 |
 
 合起来是 **Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**。Safari 被 `@property` 与 `v128`
 同时钉在 16.4；Firefox 被 `@property` 钉在 128，是整条线里最新的一条（module Worker 的 114 更宽，

@@ -4,66 +4,69 @@ import index from "../app/index.html";
 import { ensureWasm } from "./moon.ts";
 
 const project = path.join(import.meta.dirname, "..");
-const port = Number(process.env.PORT ?? 3000);
 const dist = path.join(project, "dist");
+const workerOut = path.join(project, "node_modules/.tmp/dev-worker");
+const hostname = "127.0.0.1";
+const port = Number(process.env.PORT ?? 3000);
+const onDisk = process.argv.includes("--dist");
+const text = (body: string, status = 200): Response =>
+  new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+const fresh = (body: BodyInit): Response =>
+  new Response(body, { headers: { "cache-control": "no-store" } });
 
-const server = process.argv.includes("--dist")
-  ? Bun.serve({
-      port,
-      hostname: "127.0.0.1",
-      async fetch(request) {
-        const { pathname } = new URL(request.url);
-        const target = path.resolve(dist, `.${pathname}`);
-        if (target.startsWith(dist + path.sep)) {
-          const file = Bun.file(target);
-          if (await file.exists()) return new Response(file);
-        }
+const staticFetch = async (request: Request): Promise<Response> => {
+  const target = path.resolve(dist, `.${new URL(request.url).pathname}`);
+  if (target.startsWith(dist + path.sep)) {
+    const file = Bun.file(target);
+    if (await file.exists()) return new Response(file);
+  }
+  const home = Bun.file(path.join(dist, "index.html"));
+  return (await home.exists()) ? new Response(home) : text("dist/ 是空的：先跑 bun build:web。\n", 503);
+};
 
-        const fallback = Bun.file(path.join(dist, "index.html"));
-        if (await fallback.exists()) return new Response(fallback);
-        return new Response("dist/ 是空的：bun start 只服务构建产物，先跑 bun build:web。\n", {
-          status: 503,
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
-      },
-    })
-  : await dev();
+// Bun 的 dev 服务器把入口 bundle 供在 /_bun/client/ 下，app 里那句
+// `new URL("./pipeline.worker.js", 入口脚本.src)` 于是落到这个前缀上 —— worker 与它的兄弟资产
+// （内核 .wasm）都得能在那儿取到，所以名字钉死、不带内容哈希，路由才认得出来。
+const buildWorker = async (): Promise<string[]> => {
+  const built = await Bun.build({
+    entrypoints: [path.join(project, "app/ui/pipeline.worker.ts")],
+    outdir: workerOut,
+    target: "browser",
+    naming: { entry: "pipeline.worker.js", asset: "[name].[ext]" },
+  });
+  if (!built.success) for (const log of built.logs) console.error(log);
+  return built.outputs.map(output => path.basename(output.path));
+};
 
 async function dev(): Promise<ReturnType<typeof Bun.serve>> {
   ensureWasm();
 
-  const worker = process.env.PIPELINE_WORKER;
-  if (!worker)
-    throw new Error(
-      "PIPELINE_WORKER 没设：dev 要用 `bun dev` 起（它带 scripts/dev.env）；直接 `bun scripts/serve.ts` 会缺这一条。",
-    );
-  const dir = path.posix.dirname(worker);
-  const outdir = path.join(project, "node_modules/.tmp/dev-worker");
-
-  const bundle = async (): Promise<void> => {
-    const built = await Bun.build({
-      entrypoints: [path.join(project, "app/ui/pipeline.worker.ts")],
-      outdir,
-      target: "browser",
-      naming: "[name].[ext]",
-    });
-    if (!built.success) for (const log of built.logs) console.error(log);
-  };
-  await bundle();
-
-  const server = Bun.serve({
-    port,
-    hostname: "127.0.0.1",
-    routes: {
-      [`${dir}/*`]: async (request: Request) => {
-        await bundle();
-        const file = Bun.file(path.join(outdir, path.basename(new URL(request.url).pathname)));
-        return (await file.exists()) ? new Response(file) : new Response("dev: 没有这个文件", { status: 404 });
-      },
-      "/*": index,
+  const [entry, ...assets] = await buildWorker();
+  const under = (name: string): string => `/_bun/client/${name}`;
+  const routes = {
+    [under(entry!)]: async (): Promise<Response> => {
+      await buildWorker();
+      return fresh(Bun.file(path.join(workerOut, entry!)));
     },
-    development: { hmr: true, console: true },
-  });
+    ...Object.fromEntries(
+      assets.map(name => [
+        under(name),
+        () => fresh(Bun.file(path.join(workerOut, name))),
+      ]),
+    ),
+    "/*": index,
+  };
+
+  const server = Bun.serve({ port, hostname, routes, development: { hmr: true, console: true } });
+
+  // Bun 的 client 挂载点是它的内部约定，不是文档承诺：变了就当场说清楚，
+  // 别让 worker 静默地拿回 SPA 回落的 HTML。
+  for (const name of [entry!, ...assets]) {
+    const served = await fetch(new URL(under(name), server.url));
+    const type = served.headers.get("content-type") ?? "";
+    if (type.includes("html") || type === "")
+      throw new Error(`${under(name)} 供出来的是「${type}」：Bun 的 client 挂载点变了。`);
+  }
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   watch(path.join(project, "moon"), { recursive: true }, (_event, file) => {
@@ -82,4 +85,6 @@ async function dev(): Promise<ReturnType<typeof Bun.serve>> {
   return server;
 }
 
-console.log(`🚀 ${process.argv.includes("--dist") ? "dist" : "dev"}  ${server.url}`);
+const server = onDisk ? Bun.serve({ port, hostname, fetch: staticFetch }) : await dev();
+
+console.log(`🚀 ${onDisk ? "dist" : "dev"}  ${server.url}`);

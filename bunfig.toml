@@ -1,13 +1,4 @@
-# Bun 自己的配置。这里只有两件事需要它：把哪几个环境变量注进浏览器、以及测试开工前先干什么。
-
+# 单元测试开工前先把 MoonBit 内核编一次。放在 preload 而不是各文件的 `beforeAll`：多个测试文件
+# 同时判到 stale 就会互相 `rm -rf moon/_build`，而 preload 在整个测试进程里只跑一次。
 [test]
-# 单元测试开工前先把 MoonBit 内核编一次。
-# 放在这里而不是各文件的 `beforeAll`：`compileWasm` 判到 stale 会先 `rm -rf moon/_build` 再全量重编，
-# 多个测试文件同时判到 stale 就会互相删掉对方的中间产物。preload 在整个测试进程里只跑一次。
 preload = ["./scripts/test-setup.ts"]
-
-[serve.static]
-# dev 期注给浏览器的环境变量。**必须列出名字**：只有匹配的才被内联进浏览器产物，其余留在服务端。
-# `app/ui/pipeline.ts` 里那句 `process.env.PIPELINE_WORKER` 就是靠这一行才有值 —— 产物的同一处
-# 由 `scripts/build.ts` 的 `define` 换掉，两条路注入的是同一个名字。
-env = "PIPELINE_*"

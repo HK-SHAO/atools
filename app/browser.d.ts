@@ -1,9 +1,3 @@
-declare const process: {
-  readonly env: {
-    readonly PIPELINE_WORKER: string | undefined;
-  };
-};
-
 interface ImportMeta {
   readonly url: string;
 

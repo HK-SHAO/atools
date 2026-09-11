@@ -32,7 +32,7 @@ const worker = await built({
   minify: true,
   target: "browser",
   sourcemap: "none",
-  naming: "pipeline.worker-[hash].[ext]",
+  naming: "pipeline.worker.js",
 });
 const workerFile = rel(worker.outputs[0]!);
 
@@ -45,16 +45,16 @@ const app = await built({
   splitting: true,
   reactCompiler: true,
   naming: { chunk: "[name]-[hash].[ext]" },
-  define: {
-    "process.env.NODE_ENV": JSON.stringify("production"),
-    "process.env.PIPELINE_WORKER": JSON.stringify(`./${path.posix.basename(workerFile)}`),
-  },
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
 });
 
 const entryChunk = app.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
 if (!entryChunk) fail("应用产物里没有入口脚本：index.html 的 <script type=module> 没被认出来？");
-if (path.posix.dirname(rel(entryChunk)) !== path.posix.dirname(workerFile))
-  fail(`入口脚本与 worker 不在同一目录（${rel(entryChunk)} vs ${workerFile}）：注入的地址会解析到别处`);
+if (path.posix.dirname(rel(entryChunk)) !== ".")
+  fail(
+    `入口脚本落在了子目录（${rel(entryChunk)}）：worker 的地址是相对它自己解析的（./${workerFile}），` +
+      `换目录就会解析到别处 —— 见 naming.chunk 的 [dir] 标记。`,
+  );
 
 const html = await Bun.file(path.join(outdir, "index.html")).text();
 const pwa = (await Bun.file(path.join(staticDir, "manifest.webmanifest")).json()) as {
