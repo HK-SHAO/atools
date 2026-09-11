@@ -20,6 +20,7 @@
     "test:kernel": "bun scripts/moon.ts --test",
     "bench:kernel": "bun scripts/moon.ts --bench",
     "quality": "bun bench/quality.ts",
+    "kernel": "bun bench/kernel.ts",
     "offline": "bun bench/offline.ts",
     "perf": "bun bench/perf.ts",
     "bench": "bun bench/run.ts"

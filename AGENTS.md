@@ -15,6 +15,7 @@ bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run build:wasm       # 单独重编 MoonBit 数值内核（--force 全量重编，否则按 mtime 判 stale）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun run quality          # 算法消融：15 用例 × 6 指标，改数值层前后逐项比
+bun run kernel           # 内核 A/B：同一批用例在「内核挂上」与「摘掉（TS 参照）」两条路各跑一遍，比时间也比结果
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
 bun bench/offline.ts     # PWA 门禁：manifest 可装、iOS 头标签齐备、预缓存逐项入缓存、断网可用；只加载一次页面，另验 SPA 回落不投毒、新版 SW 停在 waiting（先 build:web）
 bun run perf             # 性能体检：重采样相位表倍数 + 相位数最多组合「不得慢于逐样点」的门禁 + 页面主线程长任务
@@ -28,7 +29,11 @@ bun run perf             # 性能体检：重采样相位表倍数 + 相位数�
 
 ```
 app/lib/     算法层（纯函数，无 DOM 依赖；单测跑在 vitest 上，不绑运行时）
-moon/        数值内核的 MoonBit 源（FFT 等密集计算），由 scripts/moon.ts 编成 wasm/dsp.wasm
+             密集计算的**两份实现**：内核（moon/，默认走它）与同文件的 TS 参照实现（内核没挂上、
+             或会话槽占满时退回）。逐位/ulp 等价由单测守，谁快由 `bun run kernel` 守。
+moon/        数值内核的 MoonBit 源，由 scripts/moon.ts 编成 wasm/dsp.wasm。
+             两根轴：**表组**（按窗长缓存、只读，plan.mbt）与**会话槽**（工作区，有限池，session.mbt）。
+             热循环一律 unsafe_get/unsafe_set —— `arr[i]` 编出来是两次不内联的调用（见 docs/algorithms.md）
 scripts/     moon.ts（编内核）· pwa.ts（核对预缓存清单）· toy.ts（压 toy.zip）；都是 Vite 插件或构建脚本
 app/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset/tokens/primitives/layout/spectrogram/workbench
 app/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
@@ -36,7 +41,7 @@ app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/style
 app/sw.ts    Service Worker（workbox：预缓存清单由 vite-plugin-pwa 构建期注入 + 运行期缓存）
 public/      原样复制进 dist/ 根的字面资源：manifest.webmanifest、logo.svg、icons/*.png
 fixtures/    单测的音频夹具（10 个真容器样本，三百多 KB）；`app/` 只放会进产物的东西
-bench/       评测台（cdp.ts 会话壳；quality.ts 是纯数值消融，不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
+bench/       评测台（cdp.ts 会话壳；quality.ts 纯数值消融、kernel.ts 内核 A/B，都不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）· migration.md（迁移里程碑与消融记录）
 ```
 
