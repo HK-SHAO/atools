@@ -30,7 +30,7 @@ bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 
 
 包管理、打包、本地服务、单元测试全在 Bun 内（`bun install` / `Bun.build` / `Bun.serve` / `bun test`），仓库里没有第二个打包器、也没有第二个测试运行时。`bench/` 那几个驱动也是 Bun 脚本，但它们要的浏览器控制（关掉 HTTP 服务再冷加载、按 device metrics 出图、注入自建 bundle）没有现成的壳，所以静态服务与进程拉起直接用 `node:http` / `node:child_process` —— 在 Bun 上照跑。
 
-**tsconfig 拆两个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` **留空**，只认 `app/assets.d.ts` 的资源声明与 `app/browser.d.ts` 的构建期常量）、`tsconfig.bun.json`（`scripts/` / `bench/` / 测试 / `app` 的其余部分，`types: ["bun"]`）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dirname`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。测试不再单列一个工程：它们与构建脚本跑在同一个运行时上、要同一套类型。
+**tsconfig 拆两个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` **留空**，只认 `app/assets.d.ts` 的资源声明与 `app/browser.d.ts` 的构建期常量）、`tsconfig.node.json`（`scripts/` / `bench/` / 测试 / `app` 的其余部分，`types: ["bun"]`。名字沿用生态惯用的「非浏览器那一侧」，**不是**说它跑在 Node 上 —— 它只认 Bun 的类型）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dirname`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。测试不再单列一个工程：它们与构建脚本跑在同一个运行时上、要同一套类型。
 
 **React Compiler 走 `Bun.build` 的 `reactCompiler: true`**（`scripts/build.ts`），不需要 `@vitejs/plugin-react` + `@rolldown/plugin-babel` 那一串。`.oxlintrc.json` 里那一组 `react/*` 规则是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 11 条 warn，全部落在 `set-state-in-effect` / 依赖数组上：那是几个 effect 有意「取消在飞的作业 + 重置派生状态」，要改得重排异步取消与 ref 生命周期，属于另一件事。
 
@@ -56,8 +56,8 @@ moon/        数值内核（MoonBit → `moon/_build/…/dsp.wasm`，由 `app/li
              一个普通资产）。零 import、只用标准库（`moon.pkg`），所以 js / native 也编得过
              （`bun run moon:ports` 盯着）。三层内存、边界约定、导出面与搬迁流程见 `moon/README.md`。
 scripts/     build.ts（编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
-             serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核：dev 期盯源码重编、构建前先编）、
-             test-setup.ts（`bun test` 的 preload：先编一次内核）
+             serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核；**被 import 就编一次** ——
+             构建、dev、`bun test` 的 preload 都靠这一条，所以没有单独的垫片文件）
 app/styles/  样式，`index.css` 一个 `@import` 入口，按 reset → tokens → primitives → layout →
              spectrogram → workbench 分层
 app/index.html  唯一入口（Bun 的 HTML loader 的入口约定），与 `frontend.tsx` 同级；它引到的

@@ -56,7 +56,7 @@ export function compileWasm(opts: { force?: boolean } = {}): Uint8Array<ArrayBuf
 export const ensureWasm = (opts: { force?: boolean } = {}): Uint8Array<ArrayBuffer> =>
   compileWasm(opts);
 
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (import.meta.main) {
   const flags = process.argv.slice(2);
   const task = flags.includes("--bench") ? "bench" : flags.includes("--test") ? "test" : null;
   if (task) {
@@ -89,4 +89,9 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
 
   const bytes = ensureWasm({ force: flags.includes("--force") });
   console.log(`[moon] 内核产物 ${(bytes.length / 1024).toFixed(1)} KB`);
+} else {
+  // 被 import 就等于「用我之前先确保产物是新的」：`build.ts` / `serve.ts` 靠它，`bunfig.toml`
+  // 的测试 preload 也靠它（原先为此单列了一个三行文件）。判 stale 的活只在真编的时候干，
+  // 所以这里不会与调用方那次 `ensureWasm()` 重复编译。
+  ensureWasm();
 }

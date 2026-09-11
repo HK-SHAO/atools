@@ -32,7 +32,7 @@
     "noFallthroughCasesInSwitch": true,
     "erasableSyntaxOnly": true
   },
-  // 测试不在这里：它们跑在 Bun 上，要 Bun 的类型（见 tsconfig.bun.json）。
+  // 测试不在这里：它们跑在 Bun 上，要 Bun 的类型（见 tsconfig.node.json）。
   "include": ["app"],
   "exclude": ["app/**/*.test.ts", "app/**/*.test.tsx"]
 }

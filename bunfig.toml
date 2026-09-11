@@ -1,4 +1,4 @@
-# 单元测试开工前先把 MoonBit 内核编一次。放在 preload 而不是各文件的 `beforeAll`：多个测试文件
-# 同时判到 stale 就会互相 `rm -rf moon/_build`，而 preload 在整个测试进程里只跑一次。
+# 测试开工前先把内核编一次。放在 preload 而不是各文件的 `beforeAll`：多个测试文件同时判到 stale
+# 就会互相 `rm -rf moon/_build`，而 preload 在整个测试进程里只跑一次（`moon.ts` 被 import 就编）。
 [test]
-preload = ["./scripts/test-setup.ts"]
+preload = ["./scripts/moon.ts"]
