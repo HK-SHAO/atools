@@ -1,4 +1,5 @@
 import type { Pixels } from "./arrays";
+import { sniff, type Container, type ReadMode } from "./container";
 import { kernelReady } from "./dsp";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
@@ -96,32 +97,6 @@ export function metaFromName(name: string): Meta | null {
   });
 }
 
-export function downloadName(base: string, meta: Meta): string {
-  const stem = base.replace(/\.[^.]+$/, "") || "spectrum";
-  return `${stem}_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}.png`;
-}
-
-export type Container = "png" | "bmp" | "webp-lossless" | "jpeg" | "webp" | "gif" | "avif" | "?";
-
-export function sniff(bytes: Uint8Array): Container {
-  const tag = (at: number, s: string) =>
-    s.split("").every((c, i) => bytes[at + i] === c.charCodeAt(0));
-  if (bytes[0] === 0x89 && tag(1, "PNG")) return "png";
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
-  if (tag(0, "BM")) return "bmp";
-  if (tag(0, "GIF8")) return "gif";
-  if (tag(0, "RIFF") && tag(8, "WEBP")) {
-    if (tag(12, "VP8L")) return "webp-lossless";
-    return "webp";
-  }
-  if (tag(4, "ftyp")) {
-    const major = String.fromCharCode(bytes[8]!, bytes[9]!, bytes[10]!, bytes[11]!);
-    if (major === "avif" || major === "avis" || major === "mif1") return "avif";
-    return "?";
-  }
-  return "?";
-}
-
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
 
@@ -190,12 +165,12 @@ export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
   );
 }
 
+// 离屏画布（不是 `document.createElement("canvas")`）：这一段整个跑在 worker 里。
+// 实测主线程 `toBlob` 与这里 `convertToBlob` 编出的 PNG / JPEG 逐字节相同。
 function surface(width: number, height: number) {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
-  if (!ctx) throw new Error("这个浏览器不支持 canvas");
+  if (!ctx) throw new Error("离屏画布不可用");
   return { canvas, ctx };
 }
 
@@ -295,8 +270,6 @@ function rescaled(meta: Meta, width: number, maxHop: number): Meta {
   const frames = Math.max(2, Math.min(maxFramesFor(meta.bins), Math.round(meta.samples / hop)));
   return { ...meta, frames, bins: meta.bins, hop, samples: frames * hop, exact: false };
 }
-
-export type ReadMode = "exact" | "compact" | "degraded" | "foreign";
 
 export interface Decoded {
   spec: Spectrum;
@@ -623,8 +596,7 @@ async function exactPng(spec: Spectrum): Promise<Blob> {
   const { canvas, ctx } = surface(width, height);
   ctx.putImageData(new ImageData(pixels, width, height), 0, 0);
 
-  const raw = await new Promise<Blob | null>(done => canvas.toBlob(done, "image/png"));
-  if (!raw) throw new Error("频谱图生成失败");
+  const raw = await canvas.convertToBlob({ type: "image/png" });
 
   canvas.width = 0;
   canvas.height = 0;

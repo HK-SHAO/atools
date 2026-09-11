@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DEMO_URL from "../assets/fade-demo.ogg";
 import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
-import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "../lib/image";
+import { sniff, type Container, type ReadMode } from "../lib/container";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
 import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
@@ -112,7 +112,7 @@ export function useStudio() {
 
         setStage({ label: "打包", value: 1 });
         await nextFrame();
-        const png = spec.meta.exact ? await spectrumToPng(spec) : await io.png(spec);
+        const png = await io.png(spec);
         if (cancelled) return;
 
         putJob({ spec, png, ref: tuned, audio: null });
@@ -193,7 +193,7 @@ export function useStudio() {
         if (looksImage) {
           setStage({ label: "读图", value: 0 });
           await nextFrame();
-          const { spec, mode: readMode, guessed, phaseReliability } = await imageToSpectrum(
+          const { spec, mode: readMode, guessed, phaseReliability } = await io.readImage(
             new Blob([bytes]),
             file.name,
           );

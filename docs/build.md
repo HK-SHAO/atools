@@ -42,8 +42,10 @@
   dev 下是根绝对路径 `/_bun/asset/<hash>.wasm`；产物里是 `dsp-<hash>.wasm`，与引用它的 chunk 同目录。
 - 拿到之后要**补成绝对地址再用**（`kernelUrl()`）：产物里给的是相对模块自身的路径，直接 `fetch`
   会按**文档**地址解析，深链（`/sub/path/a/b`）下就取错文件。dev 那条本来就是绝对路径，原样放行。
-- **谁进壳**：按 `.wasm` 后缀显式挑进壳。读图链在主线程上，每一步都要问内核，断网后编不了图
-  就等于应用废了。
+- **谁进壳**：按 `.wasm` 后缀显式挑进壳。worker 那一侧每一步都要问内核（读图、出图、编码、还原），
+  断网后取不到它，应用只剩个空壳。
+- **只有 worker 取它**：主线程从不加载内核（见「worker 是唯一挂内核的一侧」），所以入口产物里
+  不该有 `.wasm` 的导入，也不该有 `dsp_abi` 这个握手符号 —— 构建期盯着后者。
 - 首屏并不需要它**下载完成**：它在入口 chunk 执行时开始取，与 React 首次渲染并行，而真正用到它的
   动作（拖进文件）远在其后 —— 实测 `bench/perf.ts` 的六个时间点与长任务数都不受影响。
 
@@ -85,6 +87,40 @@ new PipelineWorker();          // 地址、`type: "module"` 都已就位
   构建期校验写成了**规则**：所有产物必须在 dist 根 —— worker 按文档解析、内核 `.wasm` 按模块自身
   解析，都只在「同级文件」这个前提下成立（实测把 `naming.chunk` 改成 `chunks/…` 即构建失败）。
 - 拉起方式是 `new Worker(url, { type: "module" })`，产物自包含（零顶层 `import`）。
+
+### worker 是唯一挂内核的一侧
+
+主线程**不** `startKernel`，也不 import 任何要问内核的模块。数值那一整片（读图 → 谱、谱 → 图、
+编码、还原、质检、重采样）全在 worker 里跑，主线程只递 `Blob` 与参数、接结果。
+
+早先不是这样：主线程曾经也挂一份内核，用途只有两处 —— `spectrumToPng` 的 **exact 档**（真彩图走
+canvas 编码）与 `imageToSpectrum`（读图；`audit` 一轮要连跑三次）。代价是主包白搭 20 KB 数值层
+（`image.ts` 9.3 + `png.ts` 4.5 + `dsp.ts` 2.2 + `spectrum.ts` 1.4 + `stub.ts` 0.7 + `palette.ts` 0.5
++ `resample.ts` 0.9 + `params.ts` 0.5 + `metric.ts` 0.2），而那两处计算是 O(像素) 与 O(帧×bin)
+的大循环，正好压在界面上。
+
+搬得动的根据是三条实测（真实 Chromium，headless）：
+
+| 判据 | 结果 |
+| --- | --- |
+| worker 侧有没有这些 API | `OffscreenCanvas` + 2d（含 `willReadFrequently` / `colorSpace: "srgb"`）、`ImageData`、`createImageBitmap`（含 `colorSpaceConversion: "none"` 与 `resizeWidth/Height`）、`convertToBlob`、`CompressionStream` / `DecompressionStream` —— 全有 |
+| 编出来的字节一样吗 | 主线程 `toBlob` 与 worker `convertToBlob`：PNG `485 = 485`、JPEG（q=0.72）`1259 = 1259`，**逐字节相同** |
+| 解出来的像素一样吗 | worker 编的 JPEG，主线程解与 worker 解的像素和 / 平方和 / 32 个采样点**逐值相同** |
+
+端到端复核不是看「跑通了」，而是**拿改动前的产物并排跑同一条链**：紧凑档与可逆档各走一遍
+「演示 → 质检」，`p.facts` 两行**逐字符相同**（紧凑 `PNG 800 KB`／还原度 `14% / 10% / 4%`，
+可逆 `PNG 5.2 MB`／`100% / 72% / 5%`）。可逆那一行正是 worker 里 `OffscreenCanvas` 编出来的
+5.2 MB 真彩图。
+
+主线程因此只剩三件读图相关的轻量件，单列在 `app/lib/container.ts`：`sniff`（**送 worker 之前**
+要判断拖进来的是图还是音频）、`ReadMode`、`downloadName`（交给浏览器的下载动作）。它们拖不进
+worker，其余连着 `png.ts` / `stub.ts` / 内核加载器一起不进主包。
+**结果：入口脚本 257.0 → 239.3 KB（−17.7 KB，−6.9%），worker 20.8 → 32.2 KB。**
+
+守住这条的是 `build.ts` 里一道构建期校验：入口产物里出现 `dsp_abi`（`dsp.ts` 的握手符号，只在
+那一处出现、属性名压缩不掉）即构建失败。它同时挡住「重新拖进读图链」与「有人又把 `startKernel`
+写回主线程」—— 后者更隐蔽：主线程没有启动路径，真跑起来是 `mustKernel()` 抛错。
+（可证伪性：把 `startKernel` 写回 `frontend.tsx`，构建当场退 1 并报出是哪个产物。）
 
 ### 应用壳：推出来，不是挑出来的
 
@@ -230,8 +266,9 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
   开该 SVG，`Emulation.setDeviceMetricsOverride` 定尺寸后 `Page.captureScreenshot`（180 / 192 / 512
   各一张）。一次性产物，改图稿要重出，别把这套塞进构建。
 - **Service Worker 是自建的一百行**（`app/sw.ts`，产物 1.2 KB）：壳（`PRECACHE` 里那份清单）由
-  构建期推出来，运行期没有任何第三方运行时。当前壳 **10 项 / 339.8 KB** ——
-  入口脚本 257.2 KB、内核 44.1 KB、worker 20.3 KB 占了绝大部分。
+  构建期推出来，运行期没有任何第三方运行时。当前壳 **10 项 / 333.7 KB** ——
+  入口脚本 239.3 KB、内核 44.2 KB、worker 32.1 KB 占了绝大部分。内核与 worker 一起搬到 worker
+  那一侧之后，三者之和比「两个线程各挂一份」时**小了 6.2 KB**，首屏要解析的入口脚本还少 17.7 KB。
 - **进壳的只有壳**。那 12 个懒加载的解码器分包（`decode-*` / `meta-*`，合计约 1.7 MB）刻意不进壳：
   进壳等于首次访问强制下载全部音频格式，改由运行期缓存按需兜住 —— 用过一次的格式此后离线可用，
   没用过的离线时优雅失败。

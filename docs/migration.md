@@ -751,6 +751,17 @@ bun test 164 通过、tsc 干净、产物与应用壳 10 项不变。
 页面零异常、零 `console.error`；长任务只报数（同 `perf.ts` 的理由）。
 当前基准：演示就绪 ~0.5 s、全程 **0 个**长任务。
 
+> **更正（里程碑 18，2026-09-12）：本节第 2 节的结论已被推翻 —— 主线程不再挂内核。**
+> 当时判「读图链与紧凑档出图必须住主线程」是因为它们用 `document.createElement("canvas")`
+> 与 `imageToSpectrum`（`createImageBitmap` + `getImageData`）。这一条是错的：**`OffscreenCanvas`
+> 在 worker 里可用**，`createImageBitmap` / `ImageData` / `convertToBlob` 也都在，实测主线程 `toBlob`
+> 与 worker `convertToBlob` 编出的 PNG / JPEG **逐字节相同**、解出的像素逐值相同。
+> 于是 exact 档出图与读图（连 `audit` 的三轮）整体搬进 worker，**入口脚本 257.0 → 239.3 KB**，
+> 端到端 `p.facts` 逐字符不变。上面那张门禁表里「`app/lib/image.test.ts`：去掉 `startKernel`」
+> 那一条随之失效（该测试改成手工加载路径）；顶上那条「只挂 worker 那一份」的注入从**缺陷**变成
+> **契约**，改由 `build.ts` 的构建期校验守（入口产物里出现 `dsp_abi` 即构建失败）。
+> 细节与实测数字见 `docs/build.md` 的「worker 是唯一挂内核的一侧」。
+
 ### 3. Worker 与内核都提前起
 
 `pipeline.ts` 改成**模块被引入就建 Worker**（原来等第一次 `send`）。它启动时要编 wasm、
@@ -1168,3 +1179,57 @@ Bun 的**内部挂载点**，不是文档承诺（旧代码为此还留了一道
 dev 下 worker 的地址一旦**页面路径带子目录**（`/sub/path`）就会算错 —— 产物侧不会（地址相对
 `index.html`），dev 侧只挂了根上那两条。本应用没有前端路由、dev 只会从 `/` 进，所以这条实测不可达；
 真要支持，得把 dev 的路由表按路径深度多挂几条。
+
+## 里程碑 18：worker 成了唯一挂内核的一侧（2026-09-12）
+
+用户问了两件事：`frontend.tsx` 那个 `void startKernel({ fft: false })` 是干什么的、是不是该
+一律走 worker（顺带省掉主包里重复的那份数值代码）；以及**还有哪些跑在 JS 里的 DOM 无关数值
+计算，值得继续往 MoonBit 里搬**。
+
+### 第一问：那条 `startKernel` 是主线程挂内核，两个用途，都能搬
+
+用途只有两处：`spectrumToPng` 的 **exact 档**（真彩图走 `canvas.toBlob`）与 `imageToSpectrum`
+（读图；`audit` 一轮连跑三次）。`fft: false` 是因为主线程不做 FFT，只问票根编解码。
+
+当时以为搬不动，理由是「canvas 与 `createImageBitmap` 是 DOM」。**这条是错的**：worker 里
+`OffscreenCanvas`（2d、`willReadFrequently`、`colorSpace: "srgb"` 全收）、`ImageData`、
+`createImageBitmap`（含 `colorSpaceConversion: "none"` 与 `resizeWidth/Height`）、`convertToBlob`、
+`CompressionStream` / `DecompressionStream` 全都有。三条实测（真实 Chromium）：
+主线程 `toBlob` 与 worker `convertToBlob` 编出的 PNG / JPEG **逐字节相同**（485=485、1259=1259）；
+worker 编的 JPEG 两边解出的像素和 / 平方和 / 32 个采样点**逐值相同**。
+
+于是整条读图与出图链搬进 worker（`io.readImage` / `io.png` / `io.audit` 三个作业），
+`audit` 里原先靠回调回 worker 做合成与对比的两趟消息也没了 —— 现在是 worker 内的直接函数调用。
+
+| | 改动前 | 改动后 |
+| --- | --- | --- |
+| 入口脚本 | 257.0 KB | **239.3 KB**（−17.7 KB，−6.9%） |
+| worker | 20.8 KB | 32.2 KB |
+| 壳合计（10 项） | 339.8 KB | **333.7 KB** |
+
+主线程剩下的读图件只有三样，单列在 `app/lib/container.ts`：`sniff`（**送 worker 之前**要判断
+拖进来的是图还是音频）、`ReadMode`、`downloadName`。它们拖不进 worker（一个在决定走哪条路、
+一个要交给浏览器的下载动作），其余连 `png.ts` / `stub.ts` / 内核加载器一起不进主包。
+
+**端到端复核不是「跑通了」，是拿改动前的产物并排跑同一条链**：紧凑档与可逆档各走一遍
+「演示 → 质检」，`p.facts` 两行**逐字符相同**（紧凑 `PNG 800 KB` / `14% / 10% / 4%`，
+可逆 `PNG 5.2 MB` / `100% / 72% / 5%`）—— 可逆那一行正是 worker 里的 `OffscreenCanvas` 编的
+5.2 MB 真彩图。dev 与 dist 两侧都跑了，都一样。
+
+**新门禁**：`build.ts` 里一道构建期校验 —— 入口产物里出现 `dsp_abi`（`dsp.ts` 的握手符号，
+只在那一处出现、属性名压缩不掉）即构建失败。它挡两类回归：重新拖进读图链，以及有人把
+`startKernel` 写回主线程。可证伪：写回一次，构建退 1 并报出是哪个产物。
+
+### 第二问：还留在宿主的数值，逐项裁定
+
+清单、判据与结论见 `docs/algorithms.md` 的「还留在宿主侧的数值」。一句话版：**主线程上的
+`silenceBounds`（拖进文件就扫描整段 PCM）与 `buildSheet`（每帧降采样）最值得动，其余大多
+不值得** —— 判据不是「是不是数值」，是「这段代码值不值一趟跨线程消息 + 一次 ABI 握手」。
+
+### 判据（串行跑，都在最终代码上）
+
+`tsc -b` 干净 · `lint` 0/0 · `bun test` **142 / 164016** · `test:kernel` **48/48** ·
+`moon:ports` · `moon fmt --check` · `quality` 15 项与基线逐项相同 · `kernel`
+**0.007 / 0.005 / 0.005 / 0.002×** · `offline` 全绿（预缓存 10 项含新入口与 worker）· `ui` 与
+`SUBPATH=/sub/path bun ui`（三次交互到位、零异常、零长任务）· `perf` · `bench` `errs: (none)` ·
+**dev 真浏览器**走完「演示 → 质检 → 切可逆 → 质检」，四个数字与改动前逐字符相同。

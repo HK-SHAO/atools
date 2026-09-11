@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
-import { downloadName, type ReadMode } from "../lib/image";
+import { downloadName, type ReadMode } from "../lib/container";
 import { srLabel, type Encode } from "../lib/params";
 import type { Spectrum } from "../lib/spectrum";
 import { wavFile } from "../lib/wav";

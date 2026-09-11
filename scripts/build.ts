@@ -48,6 +48,13 @@ const app = await build({
 const entry = app.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
 if (!entry) fail("应用产物里没有入口脚本：index.html 的 <script type=module> 没被认出来？");
 
+// 主线程不挂内核：读图、画图、质检、重采样全在 worker 里跑，内核只由 worker 那一侧加载。
+// `dsp_abi` 是 `dsp.ts` 的握手符号（只在那一处出现，且属性名压缩不掉），它落进入口产物就等于
+// 有人把内核又拖回了主线程 —— 首屏白搭 20 KB 数值层，而主线程根本没有 `startKernel` 可调，
+// 真跑起来是 `mustKernel()` 抛错。见 docs/build.md 的「worker 是唯一挂内核的一侧」。
+if ((await Bun.file(entry.path).text()).includes("dsp_abi"))
+  fail(`${rel(entry)} 里出现了内核握手：主线程不该挂内核（数值全在 worker，见 docs/build.md）`);
+
 // dist 扁平是硬约束：worker 的地址相对 **index.html** 算（`document.baseURI`），内核 .wasm 的地址
 // 相对**它所在的 chunk** 算（`import.meta.url`），两者都只在「同级文件」这个前提下成立。
 for (const output of [...app.outputs, ...worker.outputs])

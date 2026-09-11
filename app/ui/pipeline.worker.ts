@@ -1,8 +1,9 @@
+import { audit } from "../lib/audit";
 import { startKernel } from "../lib/dsp";
-import { spectrumToPng } from "../lib/image";
+import { imageToSpectrum, spectrumToPng } from "../lib/image";
 import { compare } from "../lib/metric";
 import { resample } from "../lib/resample";
-import { Aborted, encode, synthesise } from "../lib/spectrum";
+import { Aborted, encode, synthesise, type Spectrum } from "../lib/spectrum";
 import type { FromWorker, JobRequest, ToWorker } from "./pipeline";
 
 interface Scope {
@@ -18,6 +19,9 @@ const cancelled = new Set<number>();
 
 const strip = (buffers: (ArrayBufferLike | undefined)[]): Transferable[] =>
   buffers.filter((buffer): buffer is ArrayBufferLike => buffer !== undefined) as Transferable[];
+
+const specBuffers = (spec: Spectrum): Transferable[] =>
+  strip([spec.levels.buffer, spec.phaseCos?.buffer, spec.phaseSin?.buffer, spec.phaseW?.buffer]);
 
 async function run(request: JobRequest): Promise<void> {
   const { id } = request;
@@ -46,6 +50,16 @@ async function run(request: JobRequest): Promise<void> {
     }
     if (request.kind === "compare") {
       scope.postMessage({ id, kind: "done", value: compare(request.ref, request.got) });
+      return;
+    }
+    if (request.kind === "readImage") {
+      const decoded = await imageToSpectrum(request.file, request.name);
+      scope.postMessage({ id, kind: "done", value: decoded }, specBuffers(decoded.spec));
+      return;
+    }
+    if (request.kind === "audit") {
+      const rows = await audit(request.ref, request.spec, request.png, request.name, alive);
+      scope.postMessage({ id, kind: "done", value: rows });
       return;
     }
     scope.postMessage({ id, kind: "done", value: await spectrumToPng(request.spec) });

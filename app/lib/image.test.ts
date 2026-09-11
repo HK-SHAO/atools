@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { compileWasm } from "../../scripts/moon";
-import { recognizeExact, metaToText, sniff, spectrumToPng } from "./image";
+import { sniff } from "./container";
+import { recognizeExact, metaToText, spectrumToPng } from "./image";
 import type { Pixels } from "./arrays";
 import { startKernel } from "./dsp";
 import { RAMP } from "./palette";

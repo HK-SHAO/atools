@@ -44,11 +44,15 @@ app/lib/     算法层（纯函数，无 DOM 依赖）。
              宿主侧剩下的三块都不是数值实现：`spectrum.ts` 的量化与重建**调度**（fast / fine）、
              `resample.ts` 的相位表重采样、`stft.ts` 的骨架（窗与变换都取自内核表组）。
              数值行为断言一律在 `moon/*_wbtest.mbt`；`bun test` 只管**跨边界与浏览器侧**：
-             内核装载与握手（含两个线程各起一份）、视图的寿命、DOM / canvas、端到端契约。
+             内核装载与握手（worker 那一侧的启动路径）、视图的寿命、DOM / canvas、端到端契约。
 app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/styles/，组件上只有语义类名。
              数值流水线走 Worker（`pipeline.ts` 代理 + `pipeline.worker.ts`）：模块被引入就建
-             Worker，内核在 worker 里启动即加载 + 预热；**worker 与主线程各挂一份**（wasm 实例
-             不跨线程），主线程那一份由 `frontend.tsx` 顶层同时起。主线程那份只用票根编解码。
+             Worker，内核在 worker 里启动即加载 + 预热。**worker 是唯一挂内核的一侧** —— 主线程
+             不 `startKernel`，读图 / 画图 / 质检 / 重采样 / 编解码全进 worker；主线程只递 `Blob`
+             与参数、接结果。`scripts/build.ts` 有一道构建期校验盯着这条（入口产物里出现
+             `dsp_abi` 就构建失败），实测违例即退 1。历史：主线程曾为「exact 档出图」与「读图」
+             各挂一份内核，那是它唯一需要内核的两处，两处都能用 `OffscreenCanvas` 搬进 worker，
+             **搬完主包小 17.7 KB**（257.0 → 239.3 KB），产物逐字节不变。
              Worker 的地址由 `scripts/worker.ts` 这个自带的打包器插件给（`import PipelineWorker
              from "./pipeline.worker.ts?worker"`）：Bun 自己完全不认 worker，那条官方写法在 Bun 里
              两头都堵（实测见 `docs/build.md` 的「worker 走 `?worker`」），所以 `?worker` 是我们
@@ -80,11 +84,12 @@ docs/        format-spec.md（图片格式契约）、algorithms.md（算法原�
 
 关键模块职责：
 
-- `dsp.ts` 内核装载、握手、访存（`Job` / `Slot` / `Plan` 三件套，**视图只现切、不持有**）；`startKernel({ fft }, source = kernelUrl())` 是每一侧的启动入口（同一线程只加载一次），`source` 只留给测试传字节。
+- `dsp.ts` 内核装载、握手、访存（`Job` / `Slot` / `Plan` 三件套，**视图只现切、不持有**）；`startKernel({ fft }, source = kernelUrl())` 是每一侧的启动入口（同一线程只加载一次），`source` 只留给测试传字节。**线上只有 worker 这一侧调它**（`pipeline.worker.ts` 顶层，`fft: true` 预热表组）；主线程不调，`bun test` 里那些调用是测试自带的加载路径。
 - `stft.ts` STFT 宿主骨架：一个 `Frames` 占一个内核会话槽，窗与变换都来自内核表组。
 - `rtisi.ts` / `stub.ts` / `phase.ts` 三个薄壳（上传与分块推进），实现分别在 `moon/rtisi.mbt` / `moon/stub.mbt` / `moon/pghi.mbt`。
-- `spectrum.ts` 量化与重建调度（fast / fine，已裁定**不搬**：实测 30 s 细档合计 1.7 ms，是 `synthesise` 135 ms 的 1.2%，且搬它要把作业句柄穿进三个消费者 —— 见 `docs/algorithms.md`）；`image.ts` 容器嗅探、认图分级（可逆 / 紧凑 / 降级 / 通用）、缩放适配。
-- `audio.ts` 解码链与 `containerRate`；`pipeline.ts` + `pipeline.worker.ts` 跨线程代理（按 `scope` 分工、消息式取消）。
+- `spectrum.ts` 量化与重建调度（fast / fine，已裁定**不搬**：实测 30 s 细档合计 1.7 ms，是 `synthesise` 135 ms 的 1.2%，且搬它要把作业句柄穿进三个消费者 —— 见 `docs/algorithms.md`）；`image.ts` 认图分级（可逆 / 紧凑 / 降级 / 通用）、缩放适配、出图（含 PNG 字节层的索引打包与 `tEXt` 注入），**整个在 worker 里跑**，画布一律 `OffscreenCanvas`（实测主线程 `toBlob` 与它 `convertToBlob` 编出的 PNG / JPEG 逐字节相同）。
+- **`container.ts` 是主线程唯一剩下的读图件**：`sniff` / `ReadMode` / `downloadName`。它必须在主线程 —— `sniff` 要在送 worker 之前判断拖进来的是图还是音频，文件名要交给浏览器的下载动作；这两件拖不动的，就单列出来，其余连着 `png.ts` / `stub.ts` / 内核加载器一起不进主包。
+- `audio.ts` 解码链与 `containerRate`；`pipeline.ts` + `pipeline.worker.ts` 跨线程代理（按 `scope` 分工、消息式取消），作业面含 `readImage`（图 → 谱）与 `audit`（三轮质检，**整条在 worker 里**：它内部的合成与对比是直接函数调用，不再各走一趟消息）。
 
 **播放与「存音频」走 `synthesise(spec)` 的结果，不是编码前的原声。** 位深 / 窗长这类参数只改图，放原声等于让它们静默失效（2bit 与 8bit 听起来会一模一样）；这份还原结果按需算、随参数作废（`useStudio` 的 `listen`），时间轴长度一律取自 `meta.samples / meta.sr`。**这条没有自动门禁**（原先守它的界面冒烟台已删）：动播放链要人工核对 2bit 与 8bit 两次播出的 PCM 必须不同。
 

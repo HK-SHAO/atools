@@ -1,10 +1,8 @@
 import type { Samples } from "./arrays";
-import { downloadName, imageToSpectrum } from "./image";
-import { levelGap, type Metrics } from "./metric";
-import { Aborted, type Spectrum } from "./spectrum";
-
-type Synth = (spec: Spectrum) => Promise<Samples>;
-type MetricsOf = (ref: Samples, got: Samples) => Promise<Metrics>;
+import { downloadName } from "./container";
+import { imageToSpectrum } from "./image";
+import { compare, levelGap } from "./metric";
+import { Aborted, synthesise, type Spectrum } from "./spectrum";
 
 export interface LossRow {
   label: string;
@@ -20,9 +18,7 @@ async function recode(blob: Blob, mode: "jpeg" | "half"): Promise<Blob> {
   const scale = mode === "half" ? 0.5 : 1;
   const w = Math.max(1, Math.round(bitmap.width * scale));
   const h = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
+  const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     bitmap.close();
@@ -30,12 +26,12 @@ async function recode(blob: Blob, mode: "jpeg" | "half"): Promise<Blob> {
   }
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
-  const out = await new Promise<Blob | null>(done =>
-    canvas.toBlob(done, mode === "jpeg" ? "image/jpeg" : "image/png", 0.72),
+  const out = await canvas.convertToBlob(
+    mode === "jpeg" ? { type: "image/jpeg", quality: 0.72 } : { type: "image/png" },
   );
   canvas.width = 0;
   canvas.height = 0;
-  return out ?? blob;
+  return out;
 }
 
 async function one(
@@ -44,15 +40,13 @@ async function one(
   spec: Spectrum,
   blob: Blob,
   fileName: string,
-  synth: Synth,
-  metrics: MetricsOf,
   alive?: () => boolean,
 ): Promise<LossRow> {
   const back = (await imageToSpectrum(blob, fileName)).spec;
   if (alive && !alive()) throw new Aborted();
-  const y = await synth(back);
+  const y = await synthesise(back, alive, undefined, "fast");
   if (alive && !alive()) throw new Aborted();
-  const m = await metrics(ref, y as Samples);
+  const m = compare(ref, y);
   return {
     label,
     snr: Math.round(m.snr * 10) / 10,
@@ -68,13 +62,11 @@ export async function audit(
   spec: Spectrum,
   png: Blob,
   name: string,
-  synth: Synth,
-  metrics: MetricsOf,
   alive?: () => boolean,
 ): Promise<LossRow[]> {
   const own = downloadName(name, spec.meta);
   const out: LossRow[] = [];
-  out.push(await one("原图", ref, spec, png, own, synth, metrics, alive));
+  out.push(await one("原图", ref, spec, png, own, alive));
 
   for (const [label, mode] of [
     ["有损", "jpeg"],
@@ -83,7 +75,7 @@ export async function audit(
     const blob = await recode(png, mode);
     if (alive && !alive()) throw new Aborted();
     const fileName = mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own;
-    out.push(await one(label, ref, spec, blob, fileName, synth, metrics, alive));
+    out.push(await one(label, ref, spec, blob, fileName, alive));
   }
   return out;
 }

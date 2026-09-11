@@ -105,7 +105,7 @@ export const kernel = (): Dsp | null => attached;
 export const mustKernel = (): Dsp => {
   if (!attached)
     throw new Error(
-      "数值内核还没挂上：这一侧的入口要先 startKernel（worker 与主线程各挂一份，见 app/lib/dsp.ts）",
+      "数值内核还没挂上：这一侧的入口要先 startKernel（线上只有 worker 那一侧挂，见 app/lib/dsp.ts）",
     );
   return attached;
 };

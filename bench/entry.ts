@@ -1,7 +1,8 @@
 import { decodeAudioFile } from "../app/lib/audio";
 import { startKernel } from "../app/lib/dsp";
 import { align, levelGap, magnitudes, spectral } from "../app/lib/metric";
-import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../app/lib/image";
+import { downloadName } from "../app/lib/container";
+import { READ_TUNE, imageToSpectrum, spectrumToPng } from "../app/lib/image";
 import { FINENESS, type Encode, type Mode } from "../app/lib/params";
 import { SYNTH_TUNE } from "../app/lib/spectrum";
 import { resample, slice } from "../app/lib/resample";

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import type { Samples } from "../lib/arrays";
-import { audit, type LossRow } from "../lib/audit";
+import type { LossRow } from "../lib/audit";
 import type { Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
@@ -21,14 +21,7 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) 
     const alive = () => genRef.current === my;
     setRunning(spec);
     try {
-      const rows = await audit(
-        pcm,
-        spec,
-        png,
-        name,
-        s => io.synthesise(s, false),
-        (a, b) => io.compare(a, b),
-      );
+      const rows = await io.audit(pcm, spec, png, name);
       if (alive()) setFound({ spec, rows });
     } catch (e) {
       console.error(e);

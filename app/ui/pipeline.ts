@@ -1,4 +1,6 @@
 import type { Samples } from "../lib/arrays";
+import type { LossRow } from "../lib/audit";
+import type { Decoded } from "../lib/image";
 import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
@@ -11,7 +13,9 @@ export type Job =
   | { kind: "encode"; pcm: Samples; sr: number; enc: Encode }
   | { kind: "synthesise"; spec: Spectrum; fine: boolean }
   | { kind: "png"; spec: Spectrum }
-  | { kind: "compare"; ref: Samples; got: Samples };
+  | { kind: "compare"; ref: Samples; got: Samples }
+  | { kind: "readImage"; file: Blob; name: string }
+  | { kind: "audit"; ref: Samples; spec: Spectrum; png: Blob; name: string };
 
 export type JobRequest = { id: number } & Job;
 
@@ -19,7 +23,7 @@ export type ToWorker = JobRequest | { kind: "cancel"; ids: number[] };
 
 export type FromWorker =
   | { id: number; kind: "progress"; value: number }
-  | { id: number; kind: "done"; value: Spectrum | Samples | Blob | Metrics }
+  | { id: number; kind: "done"; value: Spectrum | Samples | Blob | Metrics | Decoded | LossRow[] }
   | { id: number; kind: "error"; message: string }
   | { id: number; kind: "aborted" };
 
@@ -34,6 +38,8 @@ export interface Scope {
   synthesise(spec: Spectrum, fine: boolean, onProgress?: (value: number) => void): Promise<Samples>;
   png(spec: Spectrum): Promise<Blob>;
   compare(ref: Samples, got: Samples): Promise<Metrics>;
+  readImage(file: Blob, name: string): Promise<Decoded>;
+  audit(ref: Samples, spec: Spectrum, png: Blob, name: string): Promise<LossRow[]>;
   cancel(): void;
 }
 
@@ -115,6 +121,9 @@ export function scope(name: string): Scope {
       send<Samples>({ kind: "synthesise", spec, fine }, onProgress),
     png: spec => send<Blob>({ kind: "png", spec }),
     compare: (ref, got) => send<Metrics>({ kind: "compare", ref, got }),
+    readImage: (file, fileName) => send<Decoded>({ kind: "readImage", file, name: fileName }),
+    audit: (ref, spec, png, fileName) =>
+      send<LossRow[]>({ kind: "audit", ref, spec, png, name: fileName }),
     cancel: () => {
       const live = wire;
       if (!live) return;
