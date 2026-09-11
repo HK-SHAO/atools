@@ -9,8 +9,8 @@
 
 | 插件 | 干什么 | 为什么不是别的东西 |
 | --- | --- | --- |
-| `scripts/moon.ts` | 编译 MoonBit 内核（`moon build --release --target wasm`），以**固定名** `wasm/dsp.wasm` 交给 Vite：构建期 `emitFile`，dev 期中间件直出并盯 `moon/` 里的源码变更重编 | 内核的源头不是 TS。固定名而非内容哈希 —— 它由 HTML 的 preload 引用，必须能进应用壳 |
-| `scripts/pwa.ts` | 出完产物后从 `dist/sw.js` 里读出预缓存清单，核对 `index.html` 与数值内核都在；不在就**让构建失败** | 这两样缺了都只在断网那一刻暴露，判据必须在构建期 |
+| `scripts/moon.ts` | 编译 MoonBit 内核（`moon build --release --target wasm`），以**固定名** `wasm/dsp.wasm` 交给 Vite：构建期 `emitFile`，dev 期中间件直出并盯 `moon/` 里的源码变更重编 | 内核的源头不是 TS。固定名而非内容哈希 —— 它被 HTML 的 preload 与 `app/lib/dsp.ts` 按字面路径写死，哈希名没法写进这两处 |
+| `scripts/pwa.ts` | 出完产物后从 `dist/sw.js` 里读出预缓存清单，核对 `index.html` 与数值内核都在；再从 `dist/index.html` 里核对内核那条 preload 的路径与 `crossorigin` 取对了；任一条不成立就**让构建失败** | 这几点缺了都只在断网那一刻、或「首屏悄悄慢一点」上暴露，判据必须在构建期 |
 
 **应用壳的清单不在这两个插件里**：它由 `vite-plugin-pwa` 在构建期 glob `dist/` 生成（见 PWA 一节）。
 
@@ -150,11 +150,18 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
 - **导航回退**：`NavigationRoute(createHandlerBoundToURL("index.html"))`，网络优先、离线回退预缓存里的
   `index.html`，深链因此离线也能直达应用。`denylist` 排除带扩展名的路径与 `_` 前缀 —— 那些按 URL
   精确命中预缓存，不该被回落成一份 HTML。
-- **构建期只剩一道校验**：从 `dist/sw.js` 里读出预缓存清单，核对 `index.html` 与数值内核都在。
-  「每一项都得真在 `dist/` 里」不用再查 —— 清单是 glob 出来的，匹配不到的文件根本进不去；
-  数值内核那条顺带核对了 `index.html` 的 preload 路径与 `scripts/moon.ts` 的 `WASM_FILE` 一致
-  （路径对不上的表现只是那种资源静默不进壳）。违例跑过：把 `globPatterns` 收窄到 `.txt`、或只排掉
-  `wasm`，两次构建都红，报的就是「清单是空的」与「没有 wasm/dsp.wasm」。
+- **构建期校验分两段**。一、从 `dist/sw.js` 读出预缓存清单，核对 `index.html` 与数值内核都在
+  （「每一项都得真在 `dist/` 里」不用再查 —— 清单是 glob 出来的，匹配不到的文件根本进不去）。
+  二、从 `dist/index.html` 里核对内核那条 preload 的 `href` 与 `crossorigin`。第二段非有不可：
+  壳改成 glob 之后，preload 的路径不再由「按 HTML 引用推壳」顺带覆盖，写错的后果也不再是
+  「那种资源静默不进壳」这种可观察的缺失，而只是这份资源掉出壳、断网后编不了。
+  违例跑过：`globPatterns` 收窄到 `.txt`、只排掉 `wasm`、preload 路径改成 `./wasm/dsp2.wasm`，
+  三次构建都红。
+- **内核 preload 的 `crossorigin` 要与真实那次 fetch 对齐**。`as="fetch"` 的预热按规范必须带它
+  （同源也一样），且取值须匹配请求的凭据模式：`app/lib/dsp.ts` 用 `credentials: "same-origin"`，
+  对应 `anonymous`。判据按**枚举语义**取 —— 空值与非法值都落回 `anonymous`，只有 `use-credentials`
+  是另一种模式（凭据 `include`），所以不写死字面值。取错时浏览器只当它是另一笔请求，症状是首屏
+  白白多下一次 18 KB，没人查得出来。违例跑过：去掉 `crossorigin`、改成 `use-credentials`，两次都红。
 - **预缓存缺一项就不接管**：workbox 的 `install` 也是 `Promise.all`，任一壳资源失败即安装失败，
   旧的 Worker 继续服役，浏览器下次导航重试。换成「缺了也照样激活」的话，要等到断网白屏才暴露，
   而那时用户和日志之间已经隔了很远。

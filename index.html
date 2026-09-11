@@ -8,10 +8,10 @@
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <!-- 数值内核：编码与还原都靠它，所以它是首屏必需品 —— 写成引用才进应用壳，
-         下载一次之后断网也还能编。路径必须与 scripts/moon.ts 的 WASM_FILE 一致，
-         构建期由 scripts/sw.ts 拿着那个常量核对，写错是硬失败。 -->
-    <link rel="preload" href="./wasm/dsp.wasm" as="fetch" />
+    <!-- 数值内核是首屏必需品：编码与还原都靠它，先把它要下来。路径须与 scripts/moon.ts 的 WASM_FILE
+         一致；crossorigin 须与 app/lib/dsp.ts 那次 fetch 的凭据模式匹配（same-origin → anonymous），
+         对不上浏览器就当两笔请求，这份预热白做。两条都由 scripts/pwa.ts 在构建期核对。 -->
+    <link rel="preload" href="./wasm/dsp.wasm" as="fetch" crossorigin="anonymous" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

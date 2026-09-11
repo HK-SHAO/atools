@@ -23,7 +23,7 @@ const moonBin = (): string => {
   return existsSync(installed) ? installed : exe;
 };
 
-/** 内核在应用里的落点。固定名而非内容哈希：它由 HTML 的 preload 引用，必须能进应用壳。 */
+/** 内核在应用里的落点。固定名而非内容哈希：HTML 的 preload 与 `app/lib/dsp.ts` 都按字面路径写死。 */
 export const WASM_FILE = "wasm/dsp.wasm";
 
 // 读出普通 Uint8Array 而不是 Node 的 Buffer：加载器同时被浏览器与测试使用，
