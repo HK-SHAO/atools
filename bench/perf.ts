@@ -2,8 +2,8 @@
 // 「比值」是机器无关的，可以当门禁；「长任务」随机器快慢浮动，只报数不设阈值。
 // 用法：bun bench/perf.ts        （SECS=60 可改合成素材时长，PAGE=0 跳过浏览器那半）
 import path from "node:path";
-import type { Samples } from "../src/lib/arrays";
-import { resample } from "../src/lib/resample";
+import type { Samples } from "../app/lib/arrays";
+import { resample } from "../app/lib/resample";
 import { open, serveDir, sleep } from "./cdp";
 
 const project = path.resolve(import.meta.dir, "..");

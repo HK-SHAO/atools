@@ -44,7 +44,7 @@ export default defineConfig({
     modulePreload: false,
     rollupOptions: {
       // sw.ts 与应用同一趟构建：它不 import 应用代码，产物天然自包含
-      input: { index: at("./index.html"), sw: at("./src/sw.ts") },
+      input: { index: at("./index.html"), sw: at("./app/sw.ts") },
       output: {
         // 用户可见的产物名只有一份：`sw.js` 必须落在 dist 根（注册与作用域都写着 `./sw.js`），
         // 其余按内容哈希进 assets/，改内容即改名字，缓存自然换代。

@@ -1,5 +1,5 @@
-// 原地 radix-2 FFT。与 TS 参照实现（`src/lib/fft.ts` 的 `FFT.transform`）逐位等价，
-// 由 `src/lib/fft.test.ts` 的逐位门禁守住 —— 顺序、除法、符号都不能动。
+// 原地 radix-2 FFT。与 TS 参照实现（`app/lib/fft.ts` 的 `FFT.transform`）逐位等价，
+// 由 `app/lib/fft.test.ts` 的逐位门禁守住 —— 顺序、除法、符号都不能动。
 
 ///|
 /// FFT 工作区。长度上限同 `max_win`；输入输出同址，宿主经 `dsp_re_ptr` / `dsp_im_ptr` 读写。

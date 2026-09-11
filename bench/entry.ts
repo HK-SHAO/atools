@@ -1,13 +1,13 @@
-import { decodeAudioFile } from "../src/lib/audio";
-import { FFT, hannWindow } from "../src/lib/fft";
-import { align, magnitudes, spectral } from "../src/lib/metric";
-import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../src/lib/image";
-import { FINENESS, type Encode, type Mode } from "../src/lib/params";
-import { SYNTH_TUNE } from "../src/lib/spectrum";
-import { resample, slice } from "../src/lib/resample";
-import { encode, synthesise, type Spectrum } from "../src/lib/spectrum";
-import { phaseFromMagnitude, TUNE } from "../src/lib/phase";
-import type { Samples } from "../src/lib/arrays";
+import { decodeAudioFile } from "../app/lib/audio";
+import { FFT, hannWindow } from "../app/lib/fft";
+import { align, magnitudes, spectral } from "../app/lib/metric";
+import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../app/lib/image";
+import { FINENESS, type Encode, type Mode } from "../app/lib/params";
+import { SYNTH_TUNE } from "../app/lib/spectrum";
+import { resample, slice } from "../app/lib/resample";
+import { encode, synthesise, type Spectrum } from "../app/lib/spectrum";
+import { phaseFromMagnitude, TUNE } from "../app/lib/phase";
+import type { Samples } from "../app/lib/arrays";
 
 interface Case {
   sr: number;

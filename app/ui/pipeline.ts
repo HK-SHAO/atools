@@ -10,7 +10,7 @@ import { Aborted, type Spectrum } from "../lib/spectrum";
  * 16.7 ms，等于把渲染整段挤掉；重采样更是几十毫秒一口气算完，中间一次都不让。搬进 Worker
  * 之后主线程一帧都不再让，每条让出自己的那次 `setTimeout` 往返也一并省了。
  *
- * 走这条路的都是**纯函数**（`src/lib/` 无 DOM 依赖），搬过去不用改一行算法。有 DOM 的部分
+ * 走这条路的都是**纯函数**（`app/lib/` 无 DOM 依赖），搬过去不用改一行算法。有 DOM 的部分
  * （读图要 canvas、可逆档出 PNG 要 `toBlob`、解码要 `AudioContext`）留在主线程，见 `useStudio`。
  *
  * 分工用 `scope`：每个用得着流水线的地方各拿一个。取消只作废自己这一份 —— 「谁新谁赢」是对的，

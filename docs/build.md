@@ -12,8 +12,8 @@
 | `scripts/moon.ts` | 编译 MoonBit 内核（`moon build --release --target wasm`），以**固定名** `wasm/dsp.wasm` 交给 Vite：构建期 `emitFile`，dev 期中间件直出并盯 `moon/` 里的源码变更重编 | 内核的源头不是 TS。固定名而非内容哈希 —— 它由 HTML 的 preload 引用，必须能进应用壳 |
 | `scripts/sw.ts` | 出完产物后推应用壳、算内容指纹，把 `{cache, home, files}` 注入 `dist/sw.js` 的 `__SHELL__`；不满足就**让构建失败** | 壳是「首屏必需的一切」，写错只会在断网时暴露，所以判据必须在构建期 |
 
-三个入口：`index.html`、`src/sw.ts`（应用同一趟构建，它不 import 应用代码，产物天然自包含）、
-以及由 `src/ui/pipeline.ts` 的 `new Worker(new URL(...))` 引出的 `pipeline.worker`。
+三个入口：`index.html`、`app/sw.ts`（应用同一趟构建，它不 import 应用代码，产物天然自包含）、
+以及由 `app/ui/pipeline.ts` 的 `new Worker(new URL(...))` 引出的 `pipeline.worker`。
 产物名只有一条规矩：`sw.js` 必须落在 `dist/` 根（注册与作用域都写着 `./sw.js`），
 其余按内容哈希进 `assets/`，改内容即改名字，缓存自然换代。
 
@@ -53,8 +53,8 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
 
 ## 样式：分层 CSS
 
-样式就是 CSS，按职责分层放在 `src/styles/`，由 `index.css` 一个 `@import` 入口按序串起来，
-`src/frontend.tsx` 是唯一导入点。Vite 会把整条 `@import` 链内联进同一个 css chunk，
+样式就是 CSS，按职责分层放在 `app/styles/`，由 `index.css` 一个 `@import` 入口按序串起来，
+`app/frontend.tsx` 是唯一导入点。Vite 会把整条 `@import` 链内联进同一个 css chunk，
 所以 `dist/` 里始终**只有一个** css 产物。dev 与生产走同一条链。
 
 | 文件 | 职责 |
@@ -126,7 +126,7 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
 
 - **manifest 必须落在应用根**（`start_url` 与 `scope` 都写 `"./"`）：它一旦挪进子目录，
   这两个值就会被解析成那个子目录，装出来的应用直接打不开。门禁里有一条专门盯它。
-- **图标**：iOS 不认 SVG，`apple-touch-icon` 必须是 PNG。三个 PNG 由 `src/icons/icon.svg` 光栅化而来
+- **图标**：iOS 不认 SVG，`apple-touch-icon` 必须是 PNG。三个 PNG 由 `app/icons/icon.svg` 光栅化而来
   （这份稿子只留着作图源，不进产物；产物里的是 `public/icons/*.png`）。那份图稿是 `public/logo.svg`
   （favicon）去掉 `rx=8` 的圆角、
   四条竖杠**以中心为原点等比缩到 0.82** 得到的（`x' = 16 + (x − 16) · 0.82`，`w' = 0.82w`，`y'`

@@ -41,7 +41,7 @@
 `src/index.html` 上移到仓库根（Vite 的入口约定），静态资源移进 `public/`：`manifest.webmanifest`、
 `logo.svg`、`icons/*.png`。这些文件**不经打包器改写**，按字面路径落进 `dist/`，
 与 manifest 里 `scope`/`start_url` 的 `"./"` 一致，子路径部署天然成立。
-`src/icons/icon.svg`（maskable 图稿源）刻意**留在 `src/`**：它不进产物，挪进 `public/` 就会白带一份。
+`app/icons/icon.svg`（maskable 图稿源）刻意**留在 `app/`**：它不进产物，挪进 `public/` 就会白带一份。
 
 ### 保住了什么
 
@@ -78,7 +78,7 @@
 
 ### 迁移中真实踩到的三个缺陷（都是「绿灯可证伪」的样本）
 
-1. **首屏白屏：`import.meta.hot.data.root`**。`src/frontend.tsx` 原本直接写
+1. **首屏白屏：`import.meta.hot.data.root`**。`app/frontend.tsx` 原本直接写
    `(import.meta.hot.data.root ??= createRoot(elem))`。Bun 的打包器会把整个表达式折掉，
    Vite 把 `import.meta.hot` 替换成 `undefined`，于是取 `.data` 直接抛错。
    **抓法**：CDP 里 `Runtime.exceptionThrown` 报 `Cannot read properties of undefined (reading 'data')`。
@@ -125,7 +125,7 @@ sfengine 把 `memory-limits` 钉成 `min=max`，换「宿主缓存的 typed view
 | `moon/ffi.mbt` | `#borrow` 取 `FixedArray` 数据区首地址、`memory.copy/fill`、v128 访存、裸地址读写（测试用） |
 | `moon/engine.mbt` | `dsp_abi` 与 canary 握手；白盒测试证明「导出地址 = 数据区首地址」 |
 | `scripts/moon.ts` | mtime 判 stale → `rm -rf moon/_build` → `moon build --release --target wasm`；Vite 插件 |
-| `src/lib/dsp.ts` | 加载器：ABI 校验、canary 双向握手、按需切 typed view |
+| `app/lib/dsp.ts` | 加载器：ABI 校验、canary 双向握手、按需切 typed view |
 
 判 stale 后**一律连 `_build` 一起删干净再编**：moon 的增量链接对 `moon.pkg` 变更会失活
 （实测导出面残留），全量重编 62~123 ms，换「产物与配置必然一致」很划算。
@@ -149,7 +149,7 @@ sfengine 把 `memory-limits` 钉成 `min=max`，换「宿主缓存的 typed view
 
 ### 门禁与可证伪性
 
-- `src/lib/dsp.test.ts` 4 条：ABI 一致、**导出地址双向握手**（内核写宿主读 / 宿主写内核读）、
+- `app/lib/dsp.test.ts` 4 条：ABI 一致、**导出地址双向握手**（内核写宿主读 / 宿主写内核读）、
   零 import 且导出 `memory`、加载器解析出的 URL 与构建落点同一条路径。
   第一条与第二条盯的是一条**没有文档背书**的 ABI —— 工具链升级若改了 `#borrow` 的传参表示，
   这里会先响，而不是等到某个数值调用给出「看起来合理但不对」的结果。
@@ -169,7 +169,7 @@ sfengine 把 `memory-limits` 钉成 `min=max`，换「宿主缓存的 typed view
 
 `moon/plan.mbt` 一次性算好 `rev` / 旋转因子 / 汉宁窗（三张静态表，`*_ptr()` 导出给宿主），
 `moon/fft.mbt` 是原地 radix-2 变换，末级（`step == 1`）单独走 v128 整对打包。
-`src/lib/dsp.ts` 的 `planOf()` 把这些表切成熟宿共享的视图，`src/lib/fft.ts` 的 TS 实现原样留在仓库里
+`app/lib/dsp.ts` 的 `planOf()` 把这些表切成熟宿共享的视图，`app/lib/fft.ts` 的 TS 实现原样留在仓库里
 **作为参照实现**，逐位比对靠它。
 
 ### 等价判据：分成「必须逐位」与「只约束 ulp 上界」两类
@@ -187,7 +187,7 @@ sfengine 把 `memory-limits` 钉成 `min=max`，换「宿主缓存的 typed view
 量级上它相对误差 2.19e-16，而数据最终落到 Float32（1.2e-7）与 8bit 幅度（1/255），
 相差九个数量级 —— 所以「exact 档逐位不变」这条强断言挪到**产物**上去验，不在这里卡。
 
-`src/lib/fft.test.ts` 9 条，`ULP_BOUND = 8`，窗长扫 256 / 512 / 1024 / 4096。
+`app/lib/fft.test.ts` 9 条，`ULP_BOUND = 8`，窗长扫 256 / 512 / 1024 / 4096。
 **故意制造一次违例**：把 `k = k + step` 改成 `k = k + 1` → 门禁报 `6293310820384024` ulp，
 确认它抓得住，随后恢复。
 
@@ -252,7 +252,7 @@ while (iters > 1 && unit * (K + 1) * iters > budget) iters--;
 里程碑 3 已经量清楚了瓶颈的形状：逆变换里 78% 在 RTISI，其中约八成是 FFT 本身。
 而这批 FFT 有个共同点 —— **每一次要么是「实序列 → 复谱」，要么是「Hermite 谱 → 实序列」**。
 实序列的谱是 Hermite 的，两条独立变换等于把同一份冗余算两遍。把两条打成
-`z = x1 + i·x2` 做一次复变换再拆开（`src/lib/pair.ts`），**变换次数直接减半**，
+`z = x1 + i·x2` 做一次复变换再拆开（`app/lib/pair.ts`），**变换次数直接减半**，
 多出来的只是 O(N) 的加减。这是与语言无关的算法收益，也是里程碑 3 说的那条「让 wasm 有意义的支路」：
 只有在 wasm 里才拿得到 SIMD，而 SIMD 要有能吃的循环 —— 打包之后那几圈加减正好是。
 
@@ -346,7 +346,7 @@ while (iters > 1 && unit * (K + 1) * iters > budget) iters--;
 | 读图 | 主线程 | 要 canvas |
 | 解码 | 主线程 | 要 `AudioContext` |
 
-判据是「有没有 DOM 依赖」，不是「重不重」：`src/lib/` 本来就无 DOM，所以搬过去一行算法没改。
+判据是「有没有 DOM 依赖」，不是「重不重」：`app/lib/` 本来就无 DOM，所以搬过去一行算法没改。
 
 ### 三条契约，各有门禁
 

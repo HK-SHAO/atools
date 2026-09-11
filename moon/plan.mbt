@@ -1,7 +1,7 @@
 // FFT 计划：位反转索引、旋转因子、汉宁窗。
 //
 // 三张表都按窗长上限静态定型（运行期零分配），`dsp_plan(win)` 只重填前 win 项。
-// 上限与 src/lib/spectrum.ts 的 MAX_WIN 同值：三档窗长最高 1024，读图侧按几何反推最高 4096。
+// 上限与 app/lib/spectrum.ts 的 MAX_WIN 同值：三档窗长最高 1024，读图侧按几何反推最高 4096。
 
 ///|
 pub let max_win : Int = 4096

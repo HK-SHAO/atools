@@ -1,5 +1,5 @@
 import { mkdirSync, statSync } from "node:fs";
-import { decodeAudioFile } from "../src/lib/audio";
+import { decodeAudioFile } from "../app/lib/audio";
 
 const CACHE_DIR = `${import.meta.dir}/.cache`;
 const PRECACHE_SEC = Number(process.env.PRECACHE_SEC ?? 30);

@@ -1,8 +1,8 @@
-import type { Samples } from "../src/lib/arrays";
-import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../src/lib/metric";
-import { TUNE } from "../src/lib/phase";
-import type { Encode } from "../src/lib/params";
-import { encode, synthesise } from "../src/lib/spectrum";
+import type { Samples } from "../app/lib/arrays";
+import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../app/lib/metric";
+import { TUNE } from "../app/lib/phase";
+import type { Encode } from "../app/lib/params";
+import { encode, synthesise } from "../app/lib/spectrum";
 
 const tuneArg = process.argv.find(a => a.startsWith("--tune="));
 if (tuneArg) {

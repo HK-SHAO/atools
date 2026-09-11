@@ -4,7 +4,7 @@
  * 契约一句话：**先让内核把所有缓冲配齐，再取指针，再计算**。
  * 导出地址是「FixedArray 数据区首地址」这条非文档化 ABI（见 `moon/ffi.mbt`），
  * 而 `memory.grow` 会让先前切出来的视图全部 detach，所以视图一律**每个 job 重切**，
- * 不跨 job 缓存。这条约定由 `moon/engine.mbt` 的白盒测试与 `src/lib/dsp.test.ts` 的往返验证共守。
+ * 不跨 job 缓存。这条约定由 `moon/engine.mbt` 的白盒测试与 `app/lib/dsp.test.ts` 的往返验证共守。
  */
 
 /** 内核导出面。与 `moon/*.mbt` 里的 `#export_name` 一一对应，改一处必须改两处。 */
