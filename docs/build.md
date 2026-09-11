@@ -9,7 +9,7 @@
 | 步 | 干什么 |
 | --- | --- |
 | 0 | **import `scripts/moon.ts` 就把内核编了**：按 mtime 判 stale 后重编（`moon check/build --release --deny-warn --target wasm`）。放在 import 侧是为了给 `bun test` 的 preload 用，见 `moon.ts` |
-| 1 | 打包 worker（**独立入口**，先编 —— 应用那一步要拿它的名字做内联） |
+| 1 | 打包 worker（**独立入口**，先编 —— 名字与 `?worker` 算出的地址同源，见「worker 走 `?worker`」） |
 | 2 | 打包应用（HTML 入口：样式、图标与 manifest 一并按内容哈希落盘） |
 | 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 再构建 `app/sw.ts`，把壳以 `PRECACHE` 注入 |
 
@@ -51,29 +51,39 @@
 `docs/migration.md` 的「内核改走打包器」）。`?url` 这个后缀也一并删掉 —— Bun 不支持它，直接写
 `.wasm` 导入即可。
 
-### worker 是独立入口
+### worker 走 `?worker`，地址由插件给
 
-Bun **不打包** `new Worker(new URL(…, import.meta.url))`（列成 entrypoint 也不改写，实测产物里
-原样留着 `"./w.ts"`、文件也不出），`?url` / `?worker` 两个后缀都不认。所以 worker 自己编，
-而它的地址由**入口自己算出来**，不经过任何注入：
+Bun 的打包器**完全不认** worker。三件事都是实测（1.4.3）：① `new Worker(new URL("./w.ts",
+import.meta.url))` 连同六种变体一律被**原样透传**，worker 文件根本不产出（把 worker 列成
+entrypoint 也不改写调用点）；② `?url` / `?worker` 后缀直接 `Could not resolve`；③ dev 下
+`import.meta.url` 被**静态替换**成源码的 `file://` 路径（实测产物里是
+`new URL("./pipeline.worker.js", "file:///…/app/ui/pipeline.ts")`）。前两条是「没有这个功能」，
+第三条单独就足以否定那条写法。
+
+于是本仓自带一个十几行的打包器插件 `scripts/worker.ts`，语义与生态一致（默认导出能直接 `new`
+的 Worker）：
 
 ```ts
-const WORKER = new URL("./pipeline.worker.js", entry.src);   // entry = <script type=module src>
-new Worker(WORKER, { type: "module" });
+import PipelineWorker from "./pipeline.worker.ts?worker";
+new PipelineWorker();          // 地址、`type: "module"` 都已就位
 ```
 
-- **名字钉死、不带哈希**：dev 与产物两边必须算出同一个地址，所以 worker 只能有一个固定名字。
-  它的内容变化由 Service Worker 的壳指纹覆盖（那个指纹把每个字节都喂进了 `Bun.hash`）。
-- **不能写 `import.meta.url`**：dev 下 Bun 把它内联成**源码的 `file://` 路径**（实测产物里是
-  `new URL("./pipeline.worker.js", "file:///…/app/ui/pipeline.ts")`），浏览器拉不动；而入口脚本的
-  `src` 在 dev（`/_bun/client/index-*.js`）与产物里都指得对，深路径与子路径部署也成立 ——
-  按 `entry.src` 解析是这一族写法里唯一两边都对的那个。
-- **dev 侧**：`scripts/serve.ts` 把 worker 现编现供在 `/_bun/client/pipeline.worker.js`（Bun 的
-  dev 服务器把入口 bundle 供在那个前缀下，所以按入口脚本相对解析正好落到这里）。这是 Bun 的
-  **内部挂载点**，不是文档承诺，所以 dev 起来后当场 fetch 一次，供出来的不是 JS 就直接报错。
-  兄弟资产（内核 `.wasm`，dev 下钉成 `dsp.wasm`）同前缀、同路由表 —— 路由表由**真实产物名**推出来。
-- **产物侧**：`naming: "pipeline.worker.js"`，与入口 chunk 同在 `dist/` 根（一道构建期校验兜住
-  入口不在根的情况：不同目录即构建失败）。
+- **地址相对当前文档**（`document.baseURI`）算：产物里 worker 与 `index.html` 同级（dist 扁平），
+  子路径部署因此也成立。`new URL(绝对路径, 任何基准)` 会直接返回那个绝对路径，所以 dev 那一遍
+  （Bun 给资产的是根绝对路径）同一个表达式也对 —— **一个表达式，两边都对**。
+- **dev 侧**：`scripts/serve.ts` 把 worker 现编现供在**与 dist 同名同级**的路径上
+  （`/pipeline.worker.js`，以及它内部按同级引的 `/dsp.wasm`）。名字钉死（连 `.wasm` 一起）是因为
+  路由表在启动时定下来、重出一次不能换名字；路由表由**真实产物名**推出来。启动后当场 fetch 一次
+  入口，供出来的不是 JS 就直接报错 —— 那正是「worker 静默拿回 SPA 回落的 HTML」唯一的前兆。
+  （实测把挂载点挪开一位，启动即抛错退出。）
+- **插件没挂上就当场炸**：`bunfig.toml` 的 `[serve.static] plugins` 只在 dev 这一遍生效，构建那
+  一遍由 `build.ts` 的 `plugins` 显式传入同一个文件。没挂上时 `?worker` 解析不了，页面直接是
+  「Build Failed」—— 比静默降级好。
+- **插件的职责只有一件**：把 `?worker` 说明符变成一个模块。出 worker 文件仍由构建与 dev 各出一遍
+  （那两边本来就拥有产物），两处名字都从 `workerFile()` 算出来，只此一处定义。
+- **产物侧**：`naming: workerFile(源文件)` → `pipeline.worker.js`，与 `index.html` 同在 `dist/`。
+  构建期校验写成了**规则**：所有产物必须在 dist 根 —— worker 按文档解析、内核 `.wasm` 按模块自身
+  解析，都只在「同级文件」这个前提下成立（实测把 `naming.chunk` 改成 `chunks/…` 即构建失败）。
 - 拉起方式是 `new Worker(url, { type: "module" })`，产物自包含（零顶层 `import`）。
 
 ### 应用壳：推出来，不是挑出来的
@@ -117,10 +127,10 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 
 `scripts/serve.ts` 一个文件两种模式，职责不重叠，合成一条不行：
 
-- `bun dev`：Bun 的 HTML 路由（源码直出 + HMR），另按 `/_bun/client/*` 现编现供 worker 与它的
-  兄弟资产 —— 见「worker 是独立入口」。几毫秒一次，改完 worker 刷新即生效。
-  它还盯着 `moon/`：`.mbt` 一改就重编内核；产物被重写后 Bun 自己的 dev 服务器看到那个 import
-  变了，照常整页刷新。
+- `bun dev`：Bun 的 HTML 路由（源码直出 + HMR），另把 worker 与它的兄弟资产现编现供在**与 dist
+  同名同级**的路径上 —— 见「worker 走 `?worker`」。几毫秒一次，改完 worker 刷新即生效
+  （实测：请求一次就会重编，落盘 mtime 随之前进）。它还盯着 `moon/`：`.mbt` 一改就重编内核；
+  产物被重写后 Bun 自己的 dev 服务器看到那个 import 变了，照常整页刷新。
 - `bun start`（`--dist`）：静态服务 `dist/`，**找不到实体文件就回落到 `index.html`**，与 Cloudflare 的
   `not_found_handling: single-page-application` 同语义；顺带把 `/../../etc/passwd` 这类穿越挡在
   `dist/` 里。它**不碰内核**（`moon.ts` 是动态引入的）：本机没装 MoonBit 也跑得起来，因为它只
@@ -131,7 +141,7 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 `bun start` 存在的理由就是：在 localhost 这个安全上下文里，能用真浏览器验证安装与离线。
 
 端口与地址钉死在 `127.0.0.1:3000`：PWA 只认回环上的 `http://`（那才算安全上下文，Service Worker
-才装得上）。dev 那条 worker 路由的路径不是配出来的，而是入口脚本相对解析的**结果**（见上）。
+才装得上）。dev 那条 worker 路由的路径不是配出来的，而是**与产物同名同级**的直接结果（见上）。
 
 `dist/` 是唯一产物，多文件，交给任意静态服务器（Cloudflare 那份配置见 `cloudflare/`）。
 

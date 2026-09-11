@@ -1,6 +1,7 @@
 import { watch } from "node:fs";
 import path from "node:path";
 import index from "../app/index.html";
+import { workerFile } from "./worker.ts";
 
 const project = path.join(import.meta.dirname, "..");
 const hostname = "127.0.0.1";
@@ -30,28 +31,27 @@ function distServer(): ReturnType<typeof Bun.serve> {
   });
 }
 
-// Bun 的 dev 服务器把入口 bundle 供在 /_bun/client/ 下，于是 app 里那句
-// `new URL("./pipeline.worker.js", 入口脚本.src)` 落到那个前缀上 —— worker 与它的兄弟资产
-// （内核 .wasm）都得能在那儿取到，所以 dev 这一遍把名字钉死、不带内容哈希，路由才认得出来。
+const workerSource = path.join(project, "app/ui/pipeline.worker.ts");
 const workerDir = path.join(project, "node_modules/.tmp/dev-worker");
+
+// dev 这一遍把名字钉死（连 worker 内部引的兄弟 .wasm 一起）：路由表在启动时定下来，重出一次
+// 不能换名字。`bun build:web` 那遍则用默认命名（带内容哈希）—— 那是产物，不必当路由键。
+const workerNames = async (): Promise<string[]> => {
+  const done = await Bun.build({
+    entrypoints: [workerSource],
+    outdir: workerDir,
+    target: "browser",
+    naming: { entry: workerFile(workerSource), asset: "[name].[ext]" },
+  });
+  if (!done.success) for (const log of done.logs) console.error(log);
+  return done.outputs.map(output => path.basename(output.path));
+};
 
 async function devServer(): Promise<ReturnType<typeof Bun.serve>> {
   // 动态引入：`bun start` 只服务产物，不该因此要求本机装了 MoonBit。
   const { ensureWasm } = await import("./moon.ts");
 
-  const workerNames = async (): Promise<string[]> => {
-    const done = await Bun.build({
-      entrypoints: [path.join(project, "app/ui/pipeline.worker.ts")],
-      outdir: workerDir,
-      target: "browser",
-      naming: { entry: "pipeline.worker.js", asset: "[name].[ext]" },
-    });
-    if (!done.success) for (const log of done.logs) console.error(log);
-    return done.outputs.map(output => path.basename(output.path));
-  };
-
-  const [entry, ...assets] = await workerNames();
-  const under = (name: string): string => `/_bun/client/${name}`;
+  const names = await workerNames();
   const serve = (name: string): Response =>
     new Response(Bun.file(path.join(workerDir, name)), { headers: { "cache-control": "no-store" } });
 
@@ -59,24 +59,30 @@ async function devServer(): Promise<ReturnType<typeof Bun.serve>> {
     port,
     hostname,
     routes: {
-      // 现编现供：改完 worker 刷新就生效（名字钉住了，所以路由表不必重建）。
-      [under(entry!)]: async () => {
-        await workerNames();
-        return serve(entry!);
-      },
-      ...Object.fromEntries(assets.map(name => [under(name), () => serve(name)])),
+      // 路径与 dist **同名同级**：worker 的地址由 `scripts/worker.ts` 按「相对当前文档」算出来，
+      // 它内部引的兄弟 .wasm 同理。于是 dev 与产物在这一块形状完全一致，也就不必依赖 Bun
+      // 把入口挂在哪（那是个会变的内部实现）。现编现供：改完 worker 刷新即生效。
+      ...Object.fromEntries(
+        names.map(name => [
+          `/${name}`,
+          async () => {
+            await workerNames();
+            return serve(name);
+          },
+        ]),
+      ),
       "/*": index,
     },
     development: { hmr: true, console: true },
   });
 
-  // Bun 的 client 挂载点是它的内部约定，不是文档承诺：变了就当场说清楚，
-  // 别让 worker 静默地拿回 SPA 回落的 HTML。
-  for (const name of [entry!, ...assets]) {
-    const type = (await fetch(new URL(under(name), server.url))).headers.get("content-type") ?? "";
-    if (type === "" || type.includes("html"))
-      throw new Error(`${under(name)} 供出来的是「${type}」：Bun 的 client 挂载点变了。`);
-  }
+  // 名字对不上就是地址对不上：那会让 worker 静默拿回 SPA 回落的 HTML，所以当场说清楚。
+  const entry = workerFile(workerSource);
+  if (!names.includes(entry))
+    throw new Error(`worker 出的是 ${names.join("、")}，而 app 侧算出来的地址是 /${entry}：两边对不上`);
+  const type = (await fetch(new URL(`/${entry}`, server.url))).headers.get("content-type") ?? "";
+  if (!type.includes("javascript"))
+    throw new Error(`/${entry} 供出来的是「${type}」：被 SPA 回落吞了，worker 会静默拉不到`);
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   watch(path.join(project, "moon"), { recursive: true }, (_event, file) => {

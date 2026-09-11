@@ -1,10 +1,12 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import "./moon.ts"; // import 即确保内核产物是新的（见 moon.ts），应用侧 import 它当资产
+import workerPlugin, { workerFile } from "./worker.ts";
 
 const project = path.join(import.meta.dirname, "..");
 const outdir = path.join(project, "dist");
 const publicDir = path.join(project, "app/public");
+const workerSource = path.join(project, "app/ui/pipeline.worker.ts");
 const at = (file: string): string => path.join(outdir, file);
 
 function fail(message: string): never {
@@ -27,27 +29,33 @@ const rel = (output: Bun.BuildArtifact): string =>
 
 await rm(outdir, { recursive: true, force: true });
 
+// worker 是独立入口（`app` 侧的 `?worker` 只负责算它的地址）。这里的名字与那个地址同源，
+// 见 `workerFile()`。
 const worker = await build({
-  entrypoints: [path.join(project, "app/ui/pipeline.worker.ts")],
-  naming: "pipeline.worker.js",
+  entrypoints: [workerSource],
+  naming: workerFile(workerSource),
 });
-const workerFile = rel(worker.outputs[0]!);
 
 const app = await build({
   entrypoints: [path.join(project, "app/index.html")],
   splitting: true,
   reactCompiler: true,
+  plugins: [workerPlugin],
   naming: { chunk: "[name]-[hash].[ext]" },
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
 });
 
 const entry = app.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
 if (!entry) fail("应用产物里没有入口脚本：index.html 的 <script type=module> 没被认出来？");
-if (path.posix.dirname(rel(entry)) !== ".")
-  fail(
-    `${rel(entry)} 落在了子目录：worker 的地址是相对入口脚本解析的（./${workerFile}），` +
-      `换目录就会解析到别处 —— 见 naming.chunk 的 [dir] 标记。`,
-  );
+
+// dist 扁平是硬约束：worker 的地址相对 **index.html** 算（`document.baseURI`），内核 .wasm 的地址
+// 相对**它所在的 chunk** 算（`import.meta.url`），两者都只在「同级文件」这个前提下成立。
+for (const output of [...app.outputs, ...worker.outputs])
+  if (path.posix.dirname(rel(output)) !== ".")
+    fail(
+      `${rel(output)} 落在了子目录：dist 必须扁平 —— worker 与 .wasm 都是按同级文件解析的` +
+        `（见 naming.chunk / naming.asset 里的 [dir] 标记）。`,
+    );
 
 const html = await Bun.file(at("index.html")).text();
 const pwa = (await Bun.file(path.join(publicDir, "manifest.webmanifest")).json()) as {

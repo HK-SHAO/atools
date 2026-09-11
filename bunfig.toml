@@ -2,3 +2,8 @@
 # 就会互相 `rm -rf moon/_build`，而 preload 在整个测试进程里只跑一次（`moon.ts` 被 import 就编）。
 [test]
 preload = ["./scripts/moon.ts"]
+
+# dev 服务器认 `?worker` 靠这个插件（Bun 自己完全不认 worker，见 scripts/worker.ts）。
+# 构建侧不走这里：`scripts/build.ts` 在 plugins 选项里显式传入同一个文件。
+[serve.static]
+plugins = ["./scripts/worker.ts"]

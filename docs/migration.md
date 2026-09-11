@@ -962,6 +962,10 @@ entrypoint 也不改写）。里程碑 14 里「URL 相对模块自身算」这�
 有效的只有两条 —— 外面先设好，或 `bun --env-file=` 在启动前送进去。`dev` 因此写成
 `bun --env-file=scripts/dev.env scripts/serve.ts`。
 
+**②③④ 都已被里程碑 17 推翻。** worker 那三条（构建期 `define` 注入、地址相对入口脚本、
+`bun --env-file` 送 env）在里程碑 17 里连根拔掉：Bun 侧没有可借的机制，改成自家一个 `?worker`
+插件。留在这里是因为它们记着「当时为什么那么做」；要照抄结论请直接跳里程碑 17。
+
 **⑤ 扁平布局是 manifest 的硬约束，不是审美。** 先把带哈希的产物收进 `assets/`（Bun 的 `naming`
 对象支持这么写），`bench/offline.ts` 立刻报 7 项不合格：manifest 是手写件、不经打包器改写，
 `"scope": "./"` 与 `./icons/icon-192.png` 都按它自己的位置解析，一挪就成了 `/assets/`，
@@ -1080,3 +1084,87 @@ Bun 的压缩器本来就把注释丢掉了。所以这一轮唯一的产物变�
 `ts.createSourceFile(...).parseDiagnostics` 那一遍全量诊断（60 文件 / 5 个带语法错）。
 顺带记一条本机坑：驱动 TS 的裸扫描器要自己调 `reScanTemplateToken`，否则 `` ` `` 会被当成
 又一个模板头，把整段模板吞掉 —— 这也是「注释一个都找不到」的根因。
+
+## 里程碑 17：worker 自造 `?worker`，脚本与语料一起收口（2026-09-12）
+
+用户这一轮的 `/goal` 是八条：worker 那条注入链是脏代码、`build.ts` / `serve.ts` 太脏、
+`test-setup.ts` 冗余、`bun lint` 的提示都要处理、`tsconfig.bun.json` 改名、移除 B 站 toy、
+每个里程碑提交、构建系统照 `bundler.md` 减冗余。落成六个提交。
+
+### 删掉了什么
+
+| 删掉 | 是什么 |
+| --- | --- |
+| `PIPELINE_WORKER` 那条四处转发的链 | `dev.env` → `[serve.static] env` → `build.ts` 的 `define` → 应用里的 `process.env`；连同 `bunfig.toml` 的那一段与 `app/browser.d.ts` 里 `process` 的声明 |
+| `scripts/dev.env`、`scripts/toy.ts`、`scripts/test-setup.ts` | 第一个随 env 链消失；第二个是 B 站玩具的打包链（`build:toy` 一并删）；第三个的三行「import 即确保内核新鲜」挪进 `moon.ts` 的 `import.meta.main` 另一支 |
+| 四条 react 规则的 `warn` 降级 | 降级理由（「几处 effect 有意这么做」）随 `set-state-in-effect` 那几处改成**派生**而消失，于是按 `error` 钉住 |
+| 根上的 `tsconfig.bun.json` | 改名 `tsconfig.node.json`（Bun 就是这一侧唯一的运行时，名字该说这件事） |
+
+### 换成了什么
+
+- **worker 走 `?worker`，由自家插件 `scripts/worker.ts` 实现**（十几行，只做一件事：把说明符变成
+  一个导出「能直接 `new` 的 Worker」的模块）。应用侧只剩
+  `import PipelineWorker from "./pipeline.worker.ts?worker"`。
+- `bunfig.toml` 的 `[serve.static] plugins` 管 dev 那一遍，`build.ts` 的 `plugins` 显式传同一个文件。
+- 两个构建脚本按「纯浏览器 SPA」重排：三次打包共用一套选项（默认值一处）、两种模式拆成两个函数、
+  `bun start` 改动态 import `moon.ts`（本机没装 MoonBit 也能只服务产物）。
+
+### 关键发现（全部实测，Bun 1.4.3）
+
+**① Bun 的打包器完全不认 worker。** 七个变体一个都没被识别：`new Worker(new URL("./w.ts",
+import.meta.url))`、去掉 options、先取出 URL、字符串字面量、模板拼接 —— 一律**原样透传**、
+worker 文件根本不产出（列成 entrypoint 也不改写调用点）；`?url` / `?worker` 直接
+`Could not resolve`。`bundler.md` 对 worker 只字未提。
+
+**② dev 下 `import.meta.url` 被静态替换成源码的 `file://` 路径。** 抓下来的 dev bundle 里是
+`new URL("./wa.ts", "file:///private/tmp/wp2/dev/main.ts")`。所以那条官方写法在 Bun 里不是
+「没实现」，而是**按它写必错**。
+
+**③ 但 `[serve.static] plugins` 在 dev 里真的会被加载并生效。** 用一个只打印、并拦 `?worker` 的
+探针验过：`bun index.html` 与「自建 `Bun.serve` + import HTML」两种形状都调到了 `onResolve` /
+`onLoad`。于是 `?worker` 可以由我们自己补齐，语义与生态一致。
+
+**④ 文件资产机制是现成的，但不必绕。** `import x from "./f.js" with { type: "file" }` 会把文件
+**原样拷贝**成资产（扩展名保留，`naming.asset` 可改名 —— 实测 `.js` 进来还是 `.js`），import 得到
+路径：dev 是 `/_bun/asset/<16hex>.js`（`Content-Type: text/javascript`），产物里是相对路径。
+**没走这条路的原因**：worker 产物内部还按同级引着内核 `.wasm`，要让它兄弟可服务，仍然得给自己挂
+一条路由 —— 那就与下一条等价，而后者不必先起一次嵌套构建。
+
+**⑤ 地址相对 `document.baseURI` 算，一个表达式通吃两边。** `new URL(绝对路径, 任何基准)` 直接返回
+那个绝对路径，所以「dev 给根绝对路径、产物给相对路径」这件事不需要分支；而 worker 在产物里与
+`index.html` 同级（dist 扁平），子路径部署因此也成立。**不用 `import.meta.url`**（见 ②）。
+
+**⑥ 路由表由真实产物名推出来，路径与 dist 同名同级。** dev 这一遍把名字钉死（连 worker 内部引的
+`.wasm` 一起），因为路由表在启动时定下来、重出一次不能换名字。旧写法挂在 `/_bun/client/` —— 那是
+Bun 的**内部挂载点**，不是文档承诺（旧代码为此还留了一道启动自检）；现在挂在根上，与 `dist/` 同形，
+这层「猜内部实现」没有了。
+
+**⑦ 插件没挂上会当场炸，不会静默降级。** 去掉 `[serve.static] plugins`，`?worker` 解析不了，
+页面直接是「Build Failed」；旧的注入链失败时页面只是静静地拿不到 worker。
+
+### 可证伪性（各故意造了一次违例）
+
+- **构建期「dist 必须扁平」**：把 `naming.chunk` 改成 `chunks/[name]-[hash].[ext]` → 构建当场失败，
+  报出「worker 与 `.wasm` 都是按同级文件解析的」。
+- **dev 的挂载自检**：把路由键挪开一位（`/_worker/${name}`）→ `/pipeline.worker.js` 落到 SPA 回落、
+  供出 `text/html`，服务器**启动即抛错退出**，报出「被 SPA 回落吞了，worker 会静默拉不到」。
+- **dev 的现编现供**：请求一次 worker，落盘 `node_modules/.tmp/dev-worker/pipeline.worker.js` 的
+  mtime 随之前进（秒级可比）。
+- **lint 的四条 react 规则**：塞一个在 effect 里同步 `setState` 的组件 → 退 1 并报
+  「React Compiler skipped optimizing this component」。
+
+### 全链验证（都在最终代码上跑）
+
+`tsc -b` 干净 · `lint` **0 warning 0 error**（11 → 0）· `bun test` **142 / 164016** ·
+`test:kernel` **48/48** · `moon:ports` js + native · `moon fmt --check` 干净 · `quality` 15 项与基线
+逐项相同 · `kernel` **0.007 / 0.005 / 0.005 / 0.002×** · `offline` 全绿（预缓存 10 项含
+`pipeline.worker.js`，断网探针 `kernel:200`）· `ui` 与 `SUBPATH=/sub/path bun ui` 都通过（三次
+交互到位、零异常、零长任务 —— 子路径那一条正是 `document.baseURI` 的判据）· `perf` 通过 ·
+`bench` 单素材 `errs: (none)` · `bun start`：`/`、`/pipeline.worker.js`、内核、`sw.js` 与深链回落
+都对 · dev 在真 Chromium 里跑通整条链（worker 起了、图出来了、零异常）。
+
+### 未覆盖面
+
+dev 下 worker 的地址一旦**页面路径带子目录**（`/sub/path`）就会算错 —— 产物侧不会（地址相对
+`index.html`），dev 侧只挂了根上那两条。本应用没有前端路由、dev 只会从 `/` 进，所以这条实测不可达；
+真要支持，得把 dev 的路由表按路径深度多挂几条。

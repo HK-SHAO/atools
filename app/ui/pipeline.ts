@@ -2,6 +2,7 @@ import type { Samples } from "../lib/arrays";
 import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
+import PipelineWorker from "./pipeline.worker.ts?worker";
 
 export type { Metrics };
 
@@ -52,18 +53,9 @@ interface Wire {
 let wire: Wire | null = null;
 const scopes = new Map<string, Scope>();
 
-// worker 就落在入口脚本旁边（`build.ts` 把它出在 dist/ 根），所以按入口脚本的地址解析。
-// **不能用 `import.meta.url`**：dev 下 Bun 把它内联成源码的 `file:///…/app/ui/pipeline.ts`，
-// 浏览器拉不动；入口脚本的 `src` 在 dev（`/_bun/client/index-*.js`）与产物里都指得对，
-// 深路径与子路径部署也都成立 —— `scripts/serve.ts` 在同一条路径上现编现供 worker。
-const WORKER = new URL(
-  "./pipeline.worker.js",
-  document.querySelector<HTMLScriptElement>('script[type="module"][src]')!.src,
-);
-
 function connect(): Wire {
   if (wire) return wire;
-  const worker = new Worker(WORKER, { type: "module" });
+  const worker = new PipelineWorker();
   const live: Wire = { worker, nextId: 1, pending: new Map() };
 
   const fail = (reason: string): void => {

@@ -49,15 +49,17 @@ app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/style
              数值流水线走 Worker（`pipeline.ts` 代理 + `pipeline.worker.ts`）：模块被引入就建
              Worker，内核在 worker 里启动即加载 + 预热；**worker 与主线程各挂一份**（wasm 实例
              不跨线程），主线程那一份由 `frontend.tsx` 顶层同时起。主线程那份只用票根编解码。
-             Worker 的地址由入口自己算：`new URL("./pipeline.worker.js", 入口脚本.src)`。名字不带
-             哈希是**必须的**（两边得算出同一个地址），拉动态路由见 `docs/build.md` 的「worker 是独立入口」。
-             别改成 `import.meta.url`：dev 下 Bun 把它内联成源码的 `file://` 路径，浏览器拉不动。
+             Worker 的地址由 `scripts/worker.ts` 这个自带的打包器插件给（`import PipelineWorker
+             from "./pipeline.worker.ts?worker"`）：Bun 自己完全不认 worker，那条官方写法在 Bun 里
+             两头都堵（实测见 `docs/build.md` 的「worker 走 `?worker`」），所以 `?worker` 是我们
+             自己实现的，地址相对**当前文档**算。dev 下 `scripts/serve.ts` 按同名同级挂出来。
 moon/        数值内核（MoonBit → `moon/_build/…/dsp.wasm`，由 `app/lib/dsp.ts` 导入成产物里的
              一个普通资产）。零 import、只用标准库（`moon.pkg`），所以 js / native 也编得过
              （`bun run moon:ports` 盯着）。三层内存、边界约定、导出面与搬迁流程见 `moon/README.md`。
 scripts/     build.ts（编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
-             serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核；**被 import 就编一次** ——
-             构建、dev、`bun test` 的 preload 都靠这一条，所以没有单独的垫片文件）
+             serve.ts（dev 与 --dist 两种模式）、worker.ts（`?worker` 的打包器插件，dev 那一遍由
+             `bunfig.toml` 的 `[serve.static] plugins` 挂上）、moon.ts（编内核；**被 import 就编一次**
+             —— 构建、dev、`bun test` 的 preload 都靠这一条，所以没有单独的垫片文件）
 app/styles/  样式，`index.css` 一个 `@import` 入口，按 reset → tokens → primitives → layout →
              spectrogram → workbench 分层
 app/index.html  唯一入口（Bun 的 HTML loader 的入口约定），与 `frontend.tsx` 同级；它引到的
