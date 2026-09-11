@@ -17,14 +17,14 @@
     "react/set-state-in-render": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }],
 
-    // 下面四条是**已知且有意**的偏离，降到 warn 而不是关掉：这几处 effect 都在做
-    // 「同步外部系统 + 重置派生状态」（取消在飞的作业、换 spec 就清空结果），也正是编译器
-    // 拒绝优化的地方。留着 warn 是为了让「编译器在这几个 hook 上没生效」永远看得见 ——
-    // 要真改掉得重排异步取消与 ref 的生命周期，那是另一件事，不该混进工具链这一轮。
-    "react/set-state-in-effect": "warn",
-    "react/exhaustive-effect-dependencies": "warn",
-    "react-hooks/exhaustive-deps": "warn",
-    "react/memo-dependencies": "warn",
+    // 这四条一度是我们**明知故犯**的偏离（effect 里取消在飞的作业 + 重置派生结果），当时降到
+    // warn 留着可见。那几处现已改成派生：结果与它所属的 spec 一起存、区间草稿与参数一起存、
+    // 播放状态与时间轴一起存，于是 effect 里再没有 setState，整仓一条不剩 —— 与其余编译器规则
+    // 一致按 error 钉住。将来真需要偏离就用 `// oxlint-disable-next-line <rule>` 就地说明。
+    "react/set-state-in-effect": "error",
+    "react/exhaustive-effect-dependencies": "error",
+    "react-hooks/exhaustive-deps": "error",
+    "react/memo-dependencies": "error",
 
     // `react/refs` 把 JSX 上的 `ref={job.ref}` 读成「渲染期访问 ref 值」，连带把同一个元素上的
     // `spec` / `audio` / `png` 也一起报了。本仓的 `ref` 是**格式字段**（编码前的参照样点，见

@@ -1,26 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import { audit, type LossRow } from "../lib/audit";
 import type { Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
+interface Finding {
+  spec: Spectrum;
+  rows: LossRow[] | null;
+}
+
 export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) {
-  const [loss, setLoss] = useState<LossRow[] | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [found, setFound] = useState<Finding | null>(null);
+  const [running, setRunning] = useState<Spectrum | null>(null);
   const genRef = useRef(0);
   const io = scope("audit");
-
-  useEffect(() => {
-    io.cancel();
-    genRef.current++;
-    setLoss(null);
-  }, [io, spec]);
 
   const check = useCallback(async () => {
     io.cancel();
     const my = ++genRef.current;
     const alive = () => genRef.current === my;
-    setChecking(true);
+    setRunning(spec);
     try {
       const rows = await audit(
         pcm,
@@ -30,14 +29,20 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) 
         s => io.synthesise(s, false),
         (a, b) => io.compare(a, b),
       );
-      if (alive()) setLoss(rows);
+      if (alive()) setFound({ spec, rows });
     } catch (e) {
       console.error(e);
-      if (alive()) setLoss(null);
+      if (alive()) setFound(null);
     } finally {
-      if (alive()) setChecking(false);
+      if (alive()) setRunning(null);
     }
   }, [io, name, pcm, png, spec]);
 
-  return { loss, checking, check };
+  const loss = found && found.spec === spec ? found.rows : null;
+
+  return {
+    loss,
+    checking: running === spec,
+    check,
+  };
 }

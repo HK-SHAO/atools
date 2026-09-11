@@ -1,4 +1,4 @@
-declare const __SHELL__: { cache: string; home: string; files: string[] };
+declare const PRECACHE: { cache: string; home: string; files: string[] };
 
 interface Lifecycle extends Event {
   waitUntil(task: Promise<unknown>): void;
@@ -16,7 +16,7 @@ interface WorkerScope {
   addEventListener(type: "fetch", listener: (event: Routed) => void): void;
 }
 
-const { cache: CACHE, home, files } = __SHELL__;
+const { cache: CACHE, home, files } = PRECACHE;
 
 const scope = self as unknown as WorkerScope;
 const HOME = new URL(home, scope.location.href).href;

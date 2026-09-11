@@ -11,7 +11,7 @@
 | 0 | **import `scripts/moon.ts` 就把内核编了**：按 mtime 判 stale 后重编（`moon check/build --release --deny-warn --target wasm`）。放在 import 侧是为了给 `bun test` 的 preload 用，见 `moon.ts` |
 | 1 | 打包 worker（**独立入口**，先编 —— 应用那一步要拿它的名字做内联） |
 | 2 | 打包应用（HTML 入口：样式、图标与 manifest 一并按内容哈希落盘） |
-| 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 再构建 `app/sw.ts`，把壳以 `__SHELL__` 注入 |
+| 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 再构建 `app/sw.ts`，把壳以 `PRECACHE` 注入 |
 
 三次打包共用一套选项（`target: "browser"` / `minify` / `sourcemap: "none"`），差异写在各自的
 调用里 —— 那套默认值只此一处。`sourcemap: "none"` 虽然是打包器的默认，仍然显式写着：部署端
@@ -97,8 +97,8 @@ new Worker(WORKER, { type: "module" });
 一项在不在 `dist/` 里做一次核对 —— 这类错只有断网才看得出来。
 
 `sw.js` 是**第三次构建**的产物：它是应用的看门人，不在应用的依赖图里，壳以 `define` 注入
-`__SHELL__`。`define` 是文本替换，**键名写错不会让构建失败**，所以补一道残留检查：产物里还有
-`__SHELL__` 就退出。`sw.ts` 顶部一次性解构那个对象 —— `define` 会把对象字面量在**每一处**整份
+`PRECACHE`。`define` 是文本替换，**键名写错不会让构建失败**，所以补一道残留检查：产物里还有
+`PRECACHE` 就退出。`sw.ts` 顶部一次性解构那个对象 —— `define` 会把对象字面量在**每一处**整份
 内联（实测 6 处 → 2.0 KB），解构后只剩那一处。
 
 ### React Compiler
@@ -219,7 +219,7 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
   本机没有 rsvg/inkscape，光栅化用的是仓库自带的 Chromium 快照：照 `bench/cdp.ts` 的 `open()`
   开该 SVG，`Emulation.setDeviceMetricsOverride` 定尺寸后 `Page.captureScreenshot`（180 / 192 / 512
   各一张）。一次性产物，改图稿要重出，别把这套塞进构建。
-- **Service Worker 是自建的一百行**（`app/sw.ts`，产物 1.2 KB）：壳（`__SHELL__` 里那份清单）由
+- **Service Worker 是自建的一百行**（`app/sw.ts`，产物 1.2 KB）：壳（`PRECACHE` 里那份清单）由
   构建期推出来，运行期没有任何第三方运行时。当前壳 **10 项 / 339.8 KB** ——
   入口脚本 257.2 KB、内核 44.1 KB、worker 20.3 KB 占了绝大部分。
 - **进壳的只有壳**。那 12 个懒加载的解码器分包（`decode-*` / `meta-*`，合计约 1.7 MB）刻意不进壳：
@@ -283,7 +283,7 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 本仓库照着同一份清单接过一次：`precaching`（预缓存与 `__WB_MANIFEST`）、`routing`（导航回退）、
 `core`（`clientsClaim`）、`strategies`（运行期那一支的 `CacheFirst`）、`expiration`（缓存过期）。
 那次是为构建期那 210 行自建链（壳推导 114 行 + SW 96 行）买的单：要按 HTML 引用推壳、给壳算内容
-指纹当缓存名、再往产物里替换 `__SHELL__` 槽位，每一环都是「写错只断网时才暴露」的那一类。
+指纹当缓存名、再往产物里替换 `PRECACHE` 槽位，每一环都是「写错只断网时才暴露」的那一类。
 workbox 的代价：`bun add` 装 319 个包、`node_modules` 94 MB → 162 MB，`dist/sw.js`
 0.86 → 23.20 KB（gzip 0.47 → 7.68），另加 `vite.config.ts` 十余行配置。
 

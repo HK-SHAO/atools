@@ -82,10 +82,10 @@ const cache = `atools-${Bun.hash(
 await build({
   entrypoints: [path.join(project, "app/sw.ts")],
   naming: "sw.js",
-  define: { __SHELL__: JSON.stringify({ cache, home: "index.html", files: shell }) },
+  define: { PRECACHE: JSON.stringify({ cache, home: "index.html", files: shell }) },
 });
 const sw = await Bun.file(at("sw.js")).text();
-if (sw.includes("__SHELL__")) fail("dist/sw.js 里还留着 __SHELL__：define 没注入上");
+if (sw.includes("PRECACHE")) fail("dist/sw.js 里还留着 PRECACHE：define 没注入上");
 
 for (const output of app.outputs) console.log(`${rel(output)}  ${(output.size / 1024).toFixed(1)} KB`);
 console.log(`${cache}  sw.js ${(sw.length / 1024).toFixed(1)} KB  预缓存 ${shell.length} 项`);

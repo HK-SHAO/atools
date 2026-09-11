@@ -22,7 +22,7 @@ export function usePlayback(
   duration: number,
   prepare: () => Promise<Samples | null>,
 ) {
-  const [playing, setPlaying] = useState(false);
+  const [playing, setPlaying] = useState<{ of: number | null; on: boolean }>({ of: null, on: false });
 
   const ctxRef = useRef<AudioContext | null>(null);
   const bufRef = useRef<AudioBuffer | null>(null);
@@ -40,10 +40,14 @@ export function usePlayback(
   const liveRef = useRef(false);
   const startedRef = useRef(-1);
   const playingRef = useRef(false);
-  const mark = useCallback((on: boolean) => {
-    playingRef.current = on;
-    setPlaying(on);
-  }, []);
+  const mark = useCallback(
+    (on: boolean) => {
+      playingRef.current = on;
+      setPlaying({ of: duration, on });
+    },
+    [duration],
+  );
+  const live = playing.of === duration && playing.on;
 
   const paint = useCallback(
     (pos: number) => {
@@ -143,7 +147,7 @@ export function usePlayback(
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(tick);
     },
-    [duration, ensure, halt, paint],
+    [duration, ensure, halt, paint, mark],
   );
 
   const toggle = useCallback(() => {
@@ -187,9 +191,9 @@ export function usePlayback(
     posRef.current = 0;
     startedRef.current = -1;
     liveRef.current = false;
-    mark(false);
+    playingRef.current = false;
     paint(0);
-  }, [duration, sr, halt, paint, mark]);
+  }, [halt, paint]);
 
   const followedRef = useRef<Samples | null>(null);
   useEffect(() => {
@@ -222,5 +226,5 @@ export function usePlayback(
     [duration, seek],
   );
 
-  return { playing, toggle, seek, scrub, commit, nudge, headRef, timeRef };
+  return { playing: live, toggle, seek, scrub, commit, nudge, headRef, timeRef };
 }

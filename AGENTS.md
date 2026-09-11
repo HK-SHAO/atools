@@ -32,7 +32,7 @@ bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 
 
 **tsconfig 拆两个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` **留空**，只认 `app/assets.d.ts` 的资源声明与 `app/browser.d.ts` 的构建期常量）、`tsconfig.node.json`（`scripts/` / `bench/` / 测试 / `app` 的其余部分，`types: ["bun"]`。名字沿用生态惯用的「非浏览器那一侧」，**不是**说它跑在 Node 上 —— 它只认 Bun 的类型）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dirname`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。测试不再单列一个工程：它们与构建脚本跑在同一个运行时上、要同一套类型。
 
-**React Compiler 走 `Bun.build` 的 `reactCompiler: true`**（`scripts/build.ts`），不需要 `@vitejs/plugin-react` + `@rolldown/plugin-babel` 那一串。`.oxlintrc.json` 里那一组 `react/*` 规则是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 11 条 warn，全部落在 `set-state-in-effect` / 依赖数组上：那是几个 effect 有意「取消在飞的作业 + 重置派生状态」，要改得重排异步取消与 ref 生命周期，属于另一件事。
+**React Compiler 走 `Bun.build` 的 `reactCompiler: true`**（`scripts/build.ts`），不需要 `@vitejs/plugin-react` + `@rolldown/plugin-babel` 那一串。`.oxlintrc.json` 里那一组 `react/*` 规则是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 0 条：那四条（`set-state-in-effect` / 依赖数组那三条）一度是有意降级的，对应几处 effect「取消在飞的作业 + 重置派生状态」；现已全部改成**派生** —— 质检结果与它所属的 `spec` 一起存、区间草稿与 `enc.start`/`enc.end` 一起存、播放状态与时间轴长度一起存、清空作业挪进 `clear()` —— 于是 effect 里再没有 setState，四条都按 `error` 钉住（违例验过：注入一个 effect 里同步 setState 的组件，lint 退 1 并报「React Compiler skipped optimizing」）。将来真要偏离，用 `// oxlint-disable-next-line <rule>` 就地说明，不要把整条规则降级。
 
 ## 架构
 
@@ -66,7 +66,7 @@ app/public/  按字面路径被引的静态件：`logo.svg`（favicon）、`mani
              **目录名只是位置，Bun 不认 public 语义** —— HTML 里写 `/x` 会被当成文件系统里的
              绝对路径去找，所以引用一律相对。`icons/icon.svg` 是三个 PNG 的 maskable 作图源，
              全仓唯一一件「在 app/ 下却不进产物」的东西。
-app/sw.ts    Service Worker（自建预缓存：壳由构建期推出来、以 `__SHELL__` 注入 + 运行期缓存）
+app/sw.ts    Service Worker（自建预缓存：壳由构建期推出来、以 `PRECACHE` 注入 + 运行期缓存）
 fixtures/    单测的音频夹具（10 个真容器样本）
 bench/       评测台（`cdp.ts` 会话壳）。quality.ts 与 kernel.ts 不经浏览器；run.ts 跑
              `bench/index.html` 这份自建页；offline.ts / perf.ts / ui.ts 驱动真实 dist 页面

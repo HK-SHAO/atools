@@ -86,8 +86,6 @@ export function useStudio() {
 
     if (!source) {
       release();
-      putJob(null);
-      setPick(p => (p.note === null ? p : { ...p, note: null }));
       return release;
     }
     let cancelled = false;
@@ -266,10 +264,12 @@ export function useStudio() {
   const clear = useCallback(() => {
     generation();
     pendingRef.current = null;
+    putJob(null);
+    setPick(p => (p.note === null ? p : { ...p, note: null }));
     setSource(null);
     setError(null);
     setHint(null);
-  }, [generation]);
+  }, [generation, putJob]);
 
   return {
     source,

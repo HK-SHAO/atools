@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -38,10 +38,14 @@ interface Props {
   onEnc: (e: Encode) => void;
 }
 
-export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
-  const [range, setRange] = useState<{ start: string; end: string } | null>(null);
+interface Draft {
+  at: { start: number; end: number };
+  text: { start: string; end: string };
+}
 
-  useEffect(() => setRange(null), [enc.start, enc.end]);
+export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const open = draft && draft.at.start === enc.start && draft.at.end === enc.end ? draft.text : null;
 
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
   const endShown = (end: number): string => (end === 0 ? "" : String(end));
@@ -49,10 +53,10 @@ export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
   const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
 
   const commitRange = () => {
-    if (!range) return;
-    const start = Math.max(0, Number(range.start) || 0);
-    const end = Math.max(0, Number(range.end) || 0);
-    setRange(null);
+    if (!open) return;
+    const start = Math.max(0, Number(open.start) || 0);
+    const end = Math.max(0, Number(open.end) || 0);
+    setDraft(null);
     if (start !== enc.start || end !== enc.end) onEnc({ ...enc, start, end });
   };
 
@@ -72,11 +76,14 @@ export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
         min={0}
         max={duration}
         step={0.1}
-        value={range ? range[side] : side === "start" ? String(enc.start) : endShown(enc.end)}
+        value={open ? open[side] : side === "start" ? String(enc.start) : endShown(enc.end)}
         onChange={e =>
-          setRange({
-            start: side === "start" ? e.target.value : (range?.start ?? String(enc.start)),
-            end: side === "end" ? e.target.value : (range?.end ?? endShown(enc.end)),
+          setDraft({
+            at: { start: enc.start, end: enc.end },
+            text: {
+              start: side === "start" ? e.target.value : (open?.start ?? String(enc.start)),
+              end: side === "end" ? e.target.value : (open?.end ?? endShown(enc.end)),
+            },
           })
         }
         onBlur={commitRange}
