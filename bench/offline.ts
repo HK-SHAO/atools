@@ -46,14 +46,18 @@ const CACHED = `
   return out;
 `;
 
-const server = serve(PORT, { dir: `${project}/dist`, spa: true });
+const server = serve(PORT, {
+  dir: `${project}/dist`,
+  spa: true,
+  files: { "/__cache-test__.html": new TextEncoder().encode("<!doctype html><title>Cache test</title>") },
+});
 let serving = true;
 const shutDown = (): void => {
   if (!serving) return;
   serving = false;
   server.stop();
 };
-const session = await open({ port: CDP, size: [1200, 900], url: APP });
+const session = await open({ port: CDP, size: [1200, 900], url: `${APP}__cache-test__.html` });
 const status = async (url: string | null): Promise<number> =>
   url
     ? session.ev<number>(
@@ -62,6 +66,12 @@ const status = async (url: string | null): Promise<number> =>
     : 0;
 
 try {
+  await session.ev(`
+    for (const name of ['other-app', 'atools:/other/sw.js:old', 'atools:/sw.js:old']) {
+      const cache = await caches.open(name);
+      await cache.put('/index.html', new Response('foreign home'));
+    }
+  `);
   await session.goto(APP, ".app");
   const ready = await session.ev<boolean>(`
     if (!('serviceWorker' in navigator)) return false;
@@ -83,6 +93,11 @@ try {
   `);
   if (!controlled)
     fail("首次加载后当前页面未受控（clients.claim 没生效：首次访问拿不到离线能力，得再加载一次）");
+
+  const cacheNames = await session.ev<string[]>("return await caches.keys();");
+  if (!cacheNames.includes("other-app") || !cacheNames.includes("atools:/other/sw.js:old"))
+    fail("激活删除了其他应用或其他部署的缓存");
+  if (cacheNames.includes("atools:/sw.js:old")) fail("激活没有清理当前部署的旧缓存");
 
   const online = await session.ev<{
     href: Record<string, string | null>;

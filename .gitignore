@@ -26,7 +26,6 @@ coverage
 # caches
 .eslintcache
 .cache
-bench/.data
 *.tsbuildinfo
 .wrangler/
 

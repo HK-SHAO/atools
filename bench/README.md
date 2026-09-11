@@ -96,9 +96,6 @@
   - `SYNTH` / `RECON` / `PHASE` / `GRAD` —— 反演器横评、量化/相位分离、PGHI 梯度体检（详见 entry.ts 各 probe 注释）。
 - `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（CDP 端口与 bundle 文件名都从它派生，互不冲突）。
 - **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
-- `DATA='["jpeg","s75"]'` —— **训练对转储**：走真实管线（encode → 降损 → 读回），把损伤相位/幅度/置信度与真值相位成对落盘 `bench/.data/`，供相位修正网络的训练（脚本自备，见 `docs/algorithms.md` 的 ML 负结果）。二进制布局见 `entry.ts` 的 `dumpPair`：40 字节小端头（frames/bins/win/hop/sr/bits/exact/ref/hasW）→ uint16 层级 → 损伤 cos/sin/置信度三路 uint8 → 对齐后的真值 cos/sin。层级统一升到 **uint16**，免得 compact 的 uint8 与 exact 的 uint16 在训练侧分成两套读法（compact 升位无损）。
-- `NEURAL=<weights.json>` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
-  这个口子留着，但权重文件与训练脚本**不随仓库**（本地训练产物）。
 - 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
 ## PWA 门禁（offline.ts）

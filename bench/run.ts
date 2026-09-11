@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { cachePath, ensureCached } from "./cache.ts";
 import { open, serve, sleep, waitFor } from "./cdp.ts";
@@ -144,68 +144,36 @@ const probes = async (samples: string): Promise<void> => {
 try {
   await waitFor("bench bundle", async () => ((await ev("return typeof Bench")) === "object" ? true : null));
 
-  if (process.env.NEURAL) {
-    await ev(`Bench.setNeural(${JSON.stringify(JSON.parse(await readFile(process.env.NEURAL, "utf8")))})`);
-    console.log("神经修正已启用:", process.env.NEURAL);
+  for (const file of list) {
+    const [sr, samples] = await load(file);
+    const tune = process.env.TUNE ? JSON.parse(process.env.TUNE) : null;
+    if (tune) await ev(`Bench.setTune(${JSON.stringify(tune)})`);
+    console.log(`\n── ${file}  ${sr}Hz  ${(samples / sr).toFixed(1)}s`);
+    for (const c of CASES) {
+      const row = await ev<Row>(
+        `return await Bench.runCase(${HEAD}, window.__src.sr, ${JSON.stringify(
+          file.split("/").pop(),
+        )}, ${JSON.stringify(c)}, ${JSON.stringify(file.split("/")[0] ?? "")})`,
+      );
+      rows.push(row);
+      const m = row.m;
+      console.log(
+        `  ${row.case.padEnd(26)} ${String(row.frames).padStart(5)}×${String(row.bins).padStart(4)}` +
+          `  ${String(Math.round(row.bytes / 1024)).padStart(4)}KB` +
+          `  SNR ${String(m.snr).padStart(6)}  相关 ${m.corr.toFixed(3)}` +
+          `  收敛 ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
+          `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelGap).padStart(3)}` +
+          `  认图 ${row.readMode || "-"}` +
+          `  相位可靠 ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
+          `  ${row.ms}ms`,
+      );
+    }
+    await probes(HEAD);
   }
 
-  if (process.env.DATA) {
-    const dir = `${import.meta.dirname}/.data`;
-    await mkdir(dir, { recursive: true });
-    for (const file of list) {
-      await ev(`window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)});`);
-      const tag = file.replaceAll("/", "_").replace(/\.[^.]+$/, "");
-      for (const via of JSON.parse(process.env.DATA) as string[]) {
-        const b64 = await ev<string>(
-          `return await Bench.dumpPair(${HEAD}, window.__src.sr, ${JSON.stringify({
-            sr: 0,
-            bits: 8,
-            fineness: 1,
-            fmax: 0,
-            mode: "exact",
-            via,
-          })})`,
-        );
-        if (!b64) {
-          console.log(`  跳过 ${tag}.${via}（读回无相位）`);
-          continue;
-        }
-        await writeFile(`${dir}/${tag}.${via}.bin`, Buffer.from(b64, "base64"));
-        console.log(`  ${tag}.${via}.bin`);
-      }
-    }
-  } else {
-    for (const file of list) {
-      const [sr, samples] = await load(file);
-      const tune = process.env.TUNE ? JSON.parse(process.env.TUNE) : null;
-      if (tune) await ev(`Bench.setTune(${JSON.stringify(tune)})`);
-      console.log(`\n── ${file}  ${sr}Hz  ${(samples / sr).toFixed(1)}s`);
-      for (const c of CASES) {
-        const row = await ev<Row>(
-          `return await Bench.runCase(${HEAD}, window.__src.sr, ${JSON.stringify(
-            file.split("/").pop(),
-          )}, ${JSON.stringify(c)}, ${JSON.stringify(file.split("/")[0] ?? "")})`,
-        );
-        rows.push(row);
-        const m = row.m;
-        console.log(
-          `  ${row.case.padEnd(26)} ${String(row.frames).padStart(5)}×${String(row.bins).padStart(4)}` +
-            `  ${String(Math.round(row.bytes / 1024)).padStart(4)}KB` +
-            `  SNR ${String(m.snr).padStart(6)}  相关 ${m.corr.toFixed(3)}` +
-            `  收敛 ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
-            `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelGap).padStart(3)}` +
-            `  认图 ${row.readMode || "-"}` +
-            `  相位可靠 ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
-            `  ${row.ms}ms`,
-        );
-      }
-      await probes(HEAD);
-    }
-
-    console.log("\nPNG 体检:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));
-    await writeFile(OUT, JSON.stringify(rows, null, 2));
-    console.log("\nerrs:", errors.length ? errors.slice(0, 3).join(" | ") : "(none)");
-  }
+  console.log("\nPNG 体检:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));
+  await writeFile(OUT, JSON.stringify(rows, null, 2));
+  console.log("\nerrs:", errors.length ? errors.slice(0, 3).join(" | ") : "(none)");
 } finally {
   await session.stop();
   server.stop();
