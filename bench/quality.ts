@@ -1,8 +1,13 @@
 import type { Samples } from "../app/lib/arrays";
+import { loadDsp, warmKernel } from "../app/lib/dsp";
 import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../app/lib/metric";
 import { TUNE } from "../app/lib/phase";
 import type { Encode } from "../app/lib/params";
 import { encode, synthesise } from "../app/lib/spectrum";
+import { compileWasm } from "../scripts/moon";
+
+// 内核是这条链的唯一实现（`moon/`），先挂上再谈质量 —— 它在 worker 里也是这个顺序。
+warmKernel(await loadDsp(compileWasm()));
 
 const tuneArg = process.argv.find(a => a.startsWith("--tune="));
 if (tuneArg) {

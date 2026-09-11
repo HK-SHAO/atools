@@ -1,9 +1,10 @@
 import type { Pixels } from "./arrays";
+import { kernelReady } from "./dsp";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, DEFAULT_SR, MAX_FRAMES, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { hopOfWin, stepsOf } from "./params";
-import { STUB_ROWS, decodeStub, drawStub, stubFits, stubLuma, type StubInfo } from "./stub";
+import { decodeStub, drawStub, stubFits, stubLuma, stubRows, type StubInfo } from "./stub";
 
 const FORMAT_VERSION = 4;
 
@@ -313,7 +314,8 @@ export const READ_TUNE = {
 };
 
 function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
-  for (let rows = STUB_ROWS; rows >= 2; rows--) {
+  // 行数是格式的一部分，问内核要（`moon/stub.mbt` 的 `stub_rows`），不在宿主侧再写一份。
+  for (let rows = stubRows(); rows >= 2; rows--) {
     if (h <= rows) break;
     const prof: number[] = [];
     for (let x = 0; x < w; x++) {
@@ -331,6 +333,9 @@ function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
 }
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
+  // 读图链每一步都要问内核要票根（行数、解码、绘制），先等这一线程的内核热好 ——
+  // 用户的动作可能比 wasm 的加载早到（见 `app/lib/dsp.ts` 的 `kernelReady`）。
+  await kernelReady();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
   let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);
@@ -339,7 +344,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
       let stub: StubInfo | null = null;
-      for (let rows = STUB_ROWS; rows >= 2 && !stub; rows--) {
+      for (let rows = stubRows(); rows >= 2 && !stub; rows--) {
         if (idx.height <= rows) break;
         const prof: number[] = [];
         for (let x = 0; x < idx.width; x++) {
@@ -351,7 +356,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         stub = decodeStub(prof);
       }
       if (stub) {
-        const hEff = idx.height - STUB_ROWS;
+        const hEff = idx.height - stubRows();
         const bins0 = stub.win / 2 + 1;
         const gmeta: Meta = {
           sr: stub.sr,
@@ -450,7 +455,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
     canvas.height = 0;
 
     const stub = stubFromPixels(pixels, w, h);
-    if (stub) h = Math.max(2, h - Math.max(1, Math.round((STUB_ROWS * w) / stub.width)));
+    if (stub) h = Math.max(2, h - Math.max(1, Math.round((stubRows() * w) / stub.width)));
 
     if (stub && (meta === null || w < stub.width * 0.95)) {
       const bins0 = stub.win / 2 + 1;
@@ -588,8 +593,8 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
   const { meta, levels, phaseCos, phaseSin } = spec;
   const { frames, bins } = meta;
   const width = frames;
-  const stubRows = stubFits(frames) ? STUB_ROWS : 0;
-  const height = BANDS * bins + stubRows;
+  const rows = stubFits(frames) ? stubRows() : 0;
+  const height = BANDS * bins + rows;
   const pixels = new Uint8ClampedArray(width * height * 4) as Pixels;
   let p = 0;
 
@@ -617,7 +622,7 @@ export function exactPixels(spec: Spectrum): { pixels: Pixels; width: number; he
     }
   }
 
-  if (stubRows) drawStub(pixels, width, height, meta.sr, meta.win, true);
+  if (rows) drawStub(pixels, width, height, meta.sr, meta.win, true);
 
   return { pixels, width, height };
 }
@@ -657,8 +662,8 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
 
   const { frames, bins } = meta;
   const stub = stubFits(frames) ? stubLuma(frames, meta.sr, meta.win, false) : null;
-  const stubRows = stub ? STUB_ROWS : 0;
-  const packed = new Uint8Array(frames * (bins + stubRows));
+  const rows = stub ? stubRows() : 0;
+  const packed = new Uint8Array(frames * (bins + rows));
   for (let row = 0; row < bins; row++) {
     const b = bins - 1 - row;
     for (let f = 0; f < frames; f++) packed[row * frames + f] = indices[f * bins + b]!;
@@ -666,14 +671,14 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
   if (stub) {
     const dark = 0;
     const light = steps;
-    for (let i = 0; i < STUB_ROWS * frames; i++)
+    for (let i = 0; i < rows * frames; i++)
       packed[bins * frames + i] = stub[i % frames]! > 125 ? light : dark;
   }
 
   const bytes = await indexedPng(
     packed,
     frames,
-    bins + stubRows,
+    bins + rows,
     depth,
     palette,
     metaToText(meta),
@@ -681,6 +686,11 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
   return new Blob([bytes], { type: "image/png" });
 }
 
-export function spectrumToPng(spec: Spectrum): Promise<Blob> {
+/**
+ * 出图。两条分支都要问内核要票根（`stubFits` / `stubLuma` / `drawStub`），所以先等内核 ——
+ * 同 `imageToSpectrum`。可逆档那条之后才是 canvas 的 `toBlob`。
+ */
+export async function spectrumToPng(spec: Spectrum): Promise<Blob> {
+  await kernelReady();
   return spec.meta.exact ? exactPng(spec) : compactPng(spec);
 }

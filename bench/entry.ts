@@ -1,5 +1,5 @@
 import { decodeAudioFile } from "../app/lib/audio";
-import { FFT, hannWindow } from "../app/lib/fft";
+import { loadDsp, warmKernel } from "../app/lib/dsp";
 import { align, magnitudes, spectral } from "../app/lib/metric";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../app/lib/image";
 import { FINENESS, type Encode, type Mode } from "../app/lib/params";
@@ -7,7 +7,16 @@ import { SYNTH_TUNE } from "../app/lib/spectrum";
 import { resample, slice } from "../app/lib/resample";
 import { encode, synthesise, type Spectrum } from "../app/lib/spectrum";
 import { phaseFromMagnitude, TUNE } from "../app/lib/phase";
+import { olaFromPhase, Frames, coverage, stftOf } from "../app/lib/stft";
 import type { Samples } from "../app/lib/arrays";
+
+/**
+ * 内核是整条链的前置条件 —— 数值只有 `moon/` 那一份，没有 TS 参照实现可退。
+ * 探针里的 STFT / WOLA 也走它（`app/lib/stft.ts`），所以**先挂上再让 `Bench` 露面**：
+ * 顶层 await 会把模块求值推迟到内核热好之后，`run.ts` 的 `waitFor("bench bundle")`
+ * 因此天然地等到那一刻（`index.html` 拿到的是求值完的模块）。
+ */
+await warmKernel(await loadDsp("/wasm/dsp.wasm"));
 
 interface Case {
   sr: number;
@@ -147,32 +156,17 @@ function neuralRefine(spec: Spectrum): number {
 }
 
 function stftPhase(x: Samples, win: number, hop: number, frames: number): { cos: Uint8Array; sin: Uint8Array } {
-  const bins = win / 2 + 1;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const pad = new Float64Array(x.length + win);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
+  const { mag, ph, bins } = stftOf(x, win, hop, frames);
   const cos = new Uint8Array(frames * bins);
   const sin = new Uint8Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
+  for (let i = 0; i < cos.length; i++) {
+    if (mag[i]! < 1e-12) {
+      cos[i] = 127;
+      sin[i] = 127;
+      continue;
     }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      const mg = Math.hypot(re[b]!, im[b]!);
-      const i = f * bins + b;
-      if (mg < 1e-12) {
-        cos[i] = 127;
-        sin[i] = 127;
-        continue;
-      }
-      cos[i] = Math.max(0, Math.min(255, Math.round((re[b]! / mg) * 127.5 + 127.5)));
-      sin[i] = Math.max(0, Math.min(255, Math.round((im[b]! / mg) * 127.5 + 127.5)));
-    }
+    cos[i] = Math.max(0, Math.min(255, Math.round(Math.cos(ph[i]!) * 127.5 + 127.5)));
+    sin[i] = Math.max(0, Math.min(255, Math.round(Math.sin(ph[i]!) * 127.5 + 127.5)));
   }
   return { cos, sin };
 }
@@ -398,30 +392,10 @@ export async function synthProbe(
 ): Promise<string> {
   const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
   const samples = x.length;
-  const bins = win / 2 + 1;
   const frames = Math.floor(samples / hop) + 1;
   const scale = win / 4;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const padded = samples + win;
-  const pad = new Float64Array(padded);
-  for (let i = 0; i < samples; i++) pad[win / 2 + i] = x[i]!;
-
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const mag = new Float64Array(frames * bins);
-  const truth = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      mag[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-      truth[f * bins + b] = Math.atan2(im[b]!, re[b]!);
-    }
-  }
+  // 谱只问 `stftOf` 要：变换在内核里，探针与产品链看到的是同一份谱。
+  const { mag, ph: truth, bins } = stftOf(x, win, hop, frames);
 
   let peak = 0;
   for (let i = 0; i < mag.length; i++) if (mag[i]! > peak) peak = mag[i]!;
@@ -445,33 +419,7 @@ export async function synthProbe(
     phaseSin: null,
   };
 
-  const wola = (ph: Float64Array): Samples => {
-    const acc = new Float64Array(padded);
-    const cover = new Float64Array(padded);
-    for (let f = 0; f < frames; f++) {
-      for (let b = 0; b < bins; b++) {
-        re[b] = target[f * bins + b]! * Math.cos(ph[f * bins + b]!);
-        im[b] = target[f * bins + b]! * Math.sin(ph[f * bins + b]!);
-      }
-      im[0] = 0;
-      im[bins - 1] = 0;
-      for (let b = 1; b < bins - 1; b++) {
-        re[win - b] = re[b]!;
-        im[win - b] = -im[b]!;
-      }
-      fft.transform(re, im, true);
-      for (let m = 0; m < win; m++) {
-        acc[f * hop + m] = acc[f * hop + m]! + re[m]! * w[m]!;
-        cover[f * hop + m] = cover[f * hop + m]! + w[m]! * w[m]!;
-      }
-    }
-    let top = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-    const out = new Float32Array(samples);
-    for (let i = 0; i < samples; i++)
-      out[i] = cover[win / 2 + i]! > top * 0.05 ? acc[win / 2 + i]! / cover[win / 2 + i]! : 0;
-    return out;
-  };
+  const wola = (ph: Float64Array): Samples => olaFromPhase(target, ph, frames, bins, win, hop, samples);
 
   const ref0 = x as Samples;
   const show = (label: string, y: Samples, ms: number): string => {
@@ -701,27 +649,8 @@ export function phaseProbe(
 ): string {
   if (gamma !== null) TUNE.gamma = gamma;
   const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
-  const bins = win / 2 + 1;
   const frames = Math.floor(x.length / hop) + 1;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const pad = new Float64Array(x.length + win);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const mag = new Float64Array(frames * bins);
-  const truth = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      mag[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-      truth[f * bins + b] = Math.atan2(im[b]!, re[b]!);
-    }
-  }
+  const { mag, ph: truth, bins } = stftOf(x, win, hop, frames);
   const est = phaseFromMagnitude(mag, frames, bins, win, hop);
   let cr = 0;
   let ci = 0;
@@ -759,29 +688,9 @@ export function reconProbe(
   seconds = 3,
 ): string {
   const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
-  const bins = win / 2 + 1;
   const frames = Math.floor(x.length / hop) + 1;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const padded = x.length + win;
-  const pad = new Float64Array(padded);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  let mag = new Float64Array(frames * bins);
-  const truth = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      mag[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-      truth[f * bins + b] = Math.atan2(im[b]!, re[b]!);
-    }
-  }
+  const { mag: rawMag, ph: truth, bins, padded } = stftOf(x, win, hop, frames);
+  let mag = rawMag;
 
   if (quant > 0) {
     let peak = 0;
@@ -798,77 +707,42 @@ export function reconProbe(
     mag = q;
   }
 
-  const synth = (ph: Float64Array): Float64Array => {
-    const acc = new Float64Array(padded);
-    const cover = new Float64Array(padded);
-    for (let f = 0; f < frames; f++) {
-      const base = f * bins;
-      for (let b = 0; b < bins; b++) {
-        re[b] = mag[base + b]! * Math.cos(ph[base + b]!);
-        im[b] = mag[base + b]! * Math.sin(ph[base + b]!);
-      }
-      im[0] = 0;
-      im[bins - 1] = 0;
-      for (let b = 1; b < bins - 1; b++) {
-        re[win - b] = re[b]!;
-        im[win - b] = -im[b]!;
-      }
-      fft.transform(re, im, true);
-      for (let m = 0; m < win; m++) {
-        acc[f * hop + m] = acc[f * hop + m]! + re[m]! * w[m]!;
-        cover[f * hop + m] = cover[f * hop + m]! + w[m]! * w[m]!;
-      }
-    }
-    let top = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-    const out = new Float64Array(x.length);
-    for (let i = 0; i < out.length; i++)
-      out[i] = cover[win / 2 + i]! > top * 0.05 ? acc[win / 2 + i]! / cover[win / 2 + i]! : 0;
-    return out;
-  };
+  const synth = (ph: Float64Array): Float32Array => olaFromPhase(mag, ph, frames, bins, win, hop, x.length);
 
-  const gl = (ph: Float64Array, iters: number): Float64Array => {
-    const cover = new Float64Array(padded);
-    for (let f = 0; f < frames; f++)
-      for (let m = 0; m < win; m++) cover[f * hop + m] = cover[f * hop + m]! + w[m]! * w[m]!;
-    let top = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-    const cur = synth(ph);
-    const buf = new Float64Array(padded);
-    for (let i = 0; i < x.length; i++) buf[win / 2 + i] = cur[i]!;
-    for (let it = 0; it < iters; it++) {
-      const acc = new Float64Array(padded);
-      const cc = new Float64Array(padded);
-      for (let f = 0; f < frames; f++) {
-        const base = f * bins;
-        for (let m = 0; m < win; m++) {
-          re[m] = buf[f * hop + m]! * w[m]!;
-          im[m] = 0;
+  const gl = (ph: Float64Array, iters: number): Float32Array => {
+    const core = new Frames(win);
+    try {
+      const cc = coverage(win, hop, frames, padded);
+      let top = 0;
+      for (let i = 0; i < padded; i++) if (cc[i]! > top) top = cc[i]!;
+      // 归一化写回**整段** padded 缓冲：帧 0 之前那半个窗的反变换尾巴下一轮还会被读到，
+      // 只保留 `[win/2, win/2+n)` 会悄悄改掉 GL 的迭代轨迹。
+      const buf = new Float64Array(padded);
+      const first = synth(ph);
+      for (let i = 0; i < first.length; i++) buf[win / 2 + i] = first[i]!;
+      for (let it = 0; it < iters; it++) {
+        const acc = new Float64Array(padded);
+        const { re, im } = core.data();
+        for (let f = 0; f < frames; f++) {
+          const base = f * bins;
+          // 硬投影：幅度一律改写成目标值（`glRefine` 的软约束版另有内核实现）。
+          core.analyse(buf, f * hop);
+          for (let b = 0; b < bins; b++) {
+            const d = Math.sqrt(re[b]! ** 2 + im[b]! ** 2) || 1e-30;
+            re[b] = (re[b]! / d) * mag[base + b]!;
+            im[b] = (im[b]! / d) * mag[base + b]!;
+          }
+          core.add(acc, f * hop);
         }
-        fft.transform(re, im);
-        for (let b = 0; b < bins; b++) {
-          const d = Math.sqrt(re[b]! ** 2 + im[b]! ** 2) || 1e-30;
-          re[b] = (re[b]! / d) * mag[base + b]!;
-          im[b] = (im[b]! / d) * mag[base + b]!;
-        }
-        im[0] = 0;
-        im[bins - 1] = 0;
-        for (let b = 1; b < bins - 1; b++) {
-          re[win - b] = re[b]!;
-          im[win - b] = -im[b]!;
-        }
-        fft.transform(re, im, true);
-        for (let m = 0; m < win; m++) {
-          acc[f * hop + m] = acc[f * hop + m]! + re[m]! * w[m]!;
-          cc[f * hop + m] = cc[f * hop + m]! + w[m]! * w[m]!;
-        }
+        for (let i = 0; i < padded; i++)
+          buf[i] = cc[i]! > top * 0.05 ? acc[i]! / cc[i]! : 0;
       }
-      for (let i = 0; i < padded; i++)
-        buf[i] = cc[i]! > top * 0.05 ? acc[i]! / cc[i]! : 0;
+      const out = new Float32Array(x.length);
+      for (let i = 0; i < out.length; i++) out[i] = buf[win / 2 + i]!;
+      return out;
+    } finally {
+      core.close();
     }
-    const out = new Float64Array(x.length);
-    for (let i = 0; i < out.length; i++) out[i] = buf[win / 2 + i]!;
-    return out;
   };
 
   const rand = (): Float64Array => {
@@ -883,29 +757,20 @@ export function reconProbe(
     return p;
   };
 
-  const fit = (y: Float64Array): number => {
-    const full = new Float64Array(padded);
-    for (let i = 0; i < y.length; i++) full[win / 2 + i] = y[i]!;
+  const fit = (y: ArrayLike<number>): number => {
+    const { mag: got } = stftOf(Float32Array.from(y) as Samples, win, hop, frames);
     let num = 0;
     let den = 0;
-    for (let f = 0; f < frames; f++) {
-      for (let m = 0; m < win; m++) {
-        re[m] = full[f * hop + m]! * w[m]!;
-        im[m] = 0;
-      }
-      fft.transform(re, im);
-      for (let b = 0; b < bins; b++) {
-        const got = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-        num += (got - mag[f * bins + b]!) ** 2;
-        den += mag[f * bins + b]! ** 2;
-      }
+    for (let i = 0; i < mag.length; i++) {
+      num += (got[i]! - mag[i]!) ** 2;
+      den += mag[i]! ** 2;
     }
-    return 10 * Math.log10(Math.max(den, 1e-30) / Math.max(num, 1e-30));
+    return 10 * log10(Math.max(den, 1e-30) / Math.max(num, 1e-30));
   };
 
   const pghi = phaseFromMagnitude(mag, frames, bins, win, hop);
   const ref = x as Samples;
-  const show = (label: string, y: Float64Array) => {
+  const show = (label: string, y: ArrayLike<number>) => {
     const a = align(ref, Float32Array.from(y) as Samples, Math.min(2048, Math.floor(x.length / 4)));
     return `${label} ${a.snr.toFixed(1)}dB/${a.corr.toFixed(3)}/谱拟合${fit(y).toFixed(1)}`;
   };
@@ -925,27 +790,8 @@ export function reconProbe(
 
 export function gradProbe(pcm: Samples, sr: number, win: number, hop: number): string[] {
   const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * 3))) as Samples;
-  const bins = win / 2 + 1;
   const frames = Math.floor(x.length / hop) + 1;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const pad = new Float64Array(x.length + win);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const mag = new Float64Array(frames * bins);
-  const ph = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      mag[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-      ph[f * bins + b] = Math.atan2(im[b]!, re[b]!);
-    }
-  }
+  const { mag, ph, bins } = stftOf(x, win, hop, frames);
   let top = 0;
   for (let i = 0; i < mag.length; i++) if (mag[i]! > top) top = mag[i]!;
   const floor = top * 1e-12;

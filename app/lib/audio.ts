@@ -48,7 +48,7 @@ type MetaParser = { parseMeta(bytes: Uint8Array): { sampleRate?: number } | null
  * 速率（本仓 `he-aac.m4a` 写 22050，解码器给 44100）。照 22050 建上下文，浏览器会先把 SBR
  * 展开到 44100、再为迁就上下文把它压回 22050 —— 那一道**丢掉整条 11k~22k 的高频带**，比多
  * 转一道重采样糟得多。同一个字段在实际文件里两种写法都有（Apple 系写输出速率），容器自己都
- * 没定论，就别猜。M4A 于是照旧走默认上下文，代价只是多一道重采样 —— 而且只在**原生解得开**
+ * 没定论，就别猜。M4A 于是照旧走 `DECODE_RATE`，代价只是多一道重采样 —— 而且只在**原生解得开**
  * 时付：原生解不开就落到 WASM 兜底，那边解码器自己会报出 44100。
  */
 const META_PARSERS: Record<string, () => Promise<MetaParser>> = {
@@ -58,9 +58,30 @@ const META_PARSERS: Record<string, () => Promise<MetaParser>> = {
   "OGG/Opus": () => import("@audio/decode-opus/meta"),
 };
 
-/** 采样率的合理窗口。窗口外的值只会来自被读坏的字段，一律不认。 */
+/**
+ * 采样率的合理窗口。窗口外的值只会来自被读坏的字段，一律不认。
+ *
+ * 上界与解码上下文能接受的上界是同一个数（`OfflineAudioContext` 的 `sampleRate` 只收
+ * 8000~96000）：再高的速率我们连上下文都建不出来，认了也只能落到 `DECODE_RATE`，
+ * 那还不如在这里就说不认识 —— 一个边界只有一个地方写。
+ */
 const SR_MIN = 8000;
-const SR_MAX = 192000;
+const SR_MAX = 96000;
+
+/**
+ * 容器里读不出采样率时的解码速率（M4A 是主要的一类，见 `META_PARSERS` 的注释）。
+ *
+ * 过去这里是「设备速率」：`new AudioContext()` 不给参数就是这个值。但那个构造本身要
+ * **135 ms**（实测，headless Chromium），而且它是主线程上一个实打实的长任务 ——
+ * 用户点「演示」或拖进一个音频文件，界面就卡在那里一动不动，跟解码毫无关系
+ * （同一份素材实测：构造 135 ms，真正解码 17 ms，还跑在别的线程上）。改成定值换来两件事：
+ * 不必为了问一个速率去建设备上下文；**同一个文件不再随机器变**（44.1k 设备上过去解出
+ * 44100，现在解出 48000）。
+ *
+ * 代价要认：这类文件在「原」档下拿到的速率跟着变。但两边都不是素材的真实速率 ——
+ * 真实速率只有 WASM 兜底那条路报得出来（解码器自己给的）。
+ */
+const DECODE_RATE = 48000;
 
 /** MPEG1 的三个采样率档；MPEG2 减半、MPEG2.5 再减半。 */
 const MP3_RATES = [44100, 48000, 32000] as const;
@@ -88,15 +109,15 @@ async function mp3Rate(bytes: Uint8Array): Promise<number> {
 }
 
 /**
- * 素材自己的采样率 —— 拿不到就返回 null（退回默认上下文，也就是改动之前的行为）。
+ * 素材自己的采样率 —— 拿不到就返回 null（退回 `DECODE_RATE`）。
  *
- * 为什么非要它：`decodeAudioData` 把结果重采样到**解码上下文的采样率**，而默认上下文是**设备**
- * 速率（本机 headless Chromium 实测 48000）。44.1k 的素材于是先被转到 48k、再由我们转到目标档：
- * 多一道不可控的重采样、慢得多（同一段 60s 素材 65ms 对 17ms），而且「原声档」拿到的其实是 48k ——
- * 名不副实。容器里本来就写着这个数。
+ * 为什么非要它：`decodeAudioData` 把结果重采样到**解码上下文的采样率**，而上下文一旦按默认值
+ * 建就是**设备**速率（本机 headless Chromium 实测 48000）。44.1k 的素材于是先被转到 48k、再由
+ * 我们转到目标档：多一道不可控的重采样、慢得多（同一段 60s 素材 65ms 对 17ms），而且「原声档」
+ * 拿到的其实是 48k —— 名不副实。容器里本来就写着这个数。
  *
  * 猜错的后果不重：上下文速率不对只是让浏览器替我们多转一道，音高与时长都不变；但「原」就不再是
- * 原，那一道重采样也白付。所以窗口之外、解析抛错、认不出的容器，一律退回默认上下文。
+ * 原，那一道重采样也白付。所以窗口之外、解析抛错、认不出的容器，一律退回 `DECODE_RATE`。
  */
 export async function containerRate(head: string, bytes: Uint8Array): Promise<number | null> {
   let rate = 0;
@@ -147,40 +168,47 @@ async function decodeWasm(engine: Engine, bytes: Uint8Array): Promise<Decoded> {
   return { pcm: mixdown(channelData), sr: sampleRate };
 }
 
-async function decodeNative(data: ArrayBuffer, rate: number | null): Promise<Decoded | null> {
+/**
+ * 解码上下文：**刻意不用 `AudioContext`**，用 `OfflineAudioContext`。
+ *
+ * 两者都是 `BaseAudioContext`，`decodeAudioData` 的行为**逐样点相同**（同一份 ogg 在
+ * 8000 / 44100 / 48000 三档各比位一次，0 个样点不同、长度与返回速率也都一致），
+ * 但构造代价差两个数量级：`new AudioContext(...)` 实测 135 ms，`OfflineAudioContext` 0~1 ms。
+ * 那 135 ms 就是用户点「演示」时主线程上那个长任务；换掉之后整段只剩解码本身（17 ms，
+ * 本来就在别的线程上跑）。顺带两件事：解码不输出声音，本就不该去碰音频设备；
+ * 也不受自动播放策略约束（不需要用户手势）。
+ *
+ * OfflineAudioContext **没有 `close()`**，也不需要 —— 它不占音频设备，
+ * 解码出来的缓冲随引用一起回收（`hasClose` 实测 undefined）。
+ */
+function decodeContext(rate: number): BaseAudioContext {
   const Ctor =
-    typeof window === "undefined"
-      ? undefined
-      : (window.AudioContext ??
-        (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
-  if (!Ctor) return null;
+    typeof OfflineAudioContext !== "undefined"
+      ? OfflineAudioContext
+      : (globalThis as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+          .webkitOfflineAudioContext;
+  if (!Ctor) throw new Error("这个浏览器不支持离线音频上下文");
+  return new Ctor(1, 1, rate);
+}
 
-  // 知识别出来的原生速率就先按它建上下文，免得被设备速率偷换一道；建不起来（老浏览器不认
-  // 这个选项，或者直接抛）就退回默认上下文 —— 那是改动之前的行为，不是新缺陷。
-  const attempts: (AudioContextOptions | undefined)[] =
-    rate === null
-      ? [undefined]
-      : [{ sampleRate: rate }, undefined];
-  let ctx: AudioContext | null = null;
+async function decodeNative(data: ArrayBuffer, rate: number | null): Promise<Decoded | null> {
+  let ctx: BaseAudioContext;
   try {
-    for (const options of attempts) {
-      try {
-        ctx = options ? new Ctor(options) : new Ctor();
-      } catch {
-        continue;
-      }
-      const buffer = await decodeRaw(ctx, data.slice(0));
-      const channels: Float32Array[] = [];
-      for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-      if (channels[0]!.length === 0) throw new Error("空流");
-      return { pcm: mixdown(channels), sr: buffer.sampleRate };
-    }
-    return null;
+    // 知识别出来的原生速率就先按它建上下文，免得被 `DECODE_RATE` 偷换一道。
+    ctx = decodeContext(rate ?? DECODE_RATE);
+  } catch {
+    return null; // 老浏览器没有这个接口 —— 那就走 WASM 兜底
+  }
+
+  try {
+    const buffer = await decodeRaw(ctx, data.slice(0));
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+    if (channels[0]!.length === 0) throw new Error("空流");
+    return { pcm: mixdown(channels), sr: buffer.sampleRate };
   } catch (e) {
     console.error("原生解码失败，尝试 WASM 兜底", e);
     return null;
-  } finally {
-    void ctx?.close();
   }
 }
 

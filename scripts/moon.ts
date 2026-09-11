@@ -149,14 +149,43 @@ if (import.meta.main) {
   // 与编译共用，免得在 package.json 里再写一遍裸 `moon`。
   const task = flags.includes("--bench") ? "bench" : flags.includes("--test") ? "test" : null;
   if (task) {
-    const done = spawnSync(moonBin(), [task, "--release", "--deny-warn", "--target", "wasm"], {
-      cwd: moonDir,
-      stdio: "inherit",
-    });
+    // `--build-only` 原样透传：`bench/moonebench.ts` 要的就是「只编出产物、不在这里跑」，
+    // 而工具链定位（`MOON` 环境变量、`~/.moon/bin`）不该在第二个地方再写一遍。
+    const extra = flags.includes("--build-only") ? ["--build-only"] : [];
+    const done = spawnSync(
+      moonBin(),
+      [task, "--release", "--deny-warn", "--target", "wasm", ...extra],
+      {
+        cwd: moonDir,
+        stdio: "inherit",
+      },
+    );
     if (done.error)
       throw new Error(`找不到 moon 工具链：装好 MoonBit（本机在 ~/.moon/bin）或用 MOON 指路径。`);
     process.exit(done.status ?? 1);
   }
+
+  /**
+   * `--ports`：同一份内核源码在 js / native 两个后端也要能编。
+   *
+   * 这是「核心库只用标准库」这句话的**可证伪形式** —— 引一个后端专属的包、写一句
+   * `extern`、用一条 JS 后端编不出来的内建，都会当场红。**只 check 不 build**：
+   * 目的不是产出一个能在 Node 里跑的库（产品走 wasm），而是证明源码没有绑死某个后端。
+   * 与 wasm 的 `--deny-warn` 同一套纪律。
+   */
+  if (flags.includes("--ports")) {
+    for (const target of ["js", "native"]) {
+      const done = spawnSync(moonBin(), ["check", "--deny-warn", "--target", target], {
+        cwd: moonDir,
+        stdio: "inherit",
+      });
+      if (done.error) throw new Error(`找不到 moon 工具链（本机在 ~/.moon/bin），或用 MOON 指路径。`);
+      if (done.status !== 0) process.exit(done.status ?? 1);
+      console.log(`[moon] ${target} 后端可以编译 ✓`);
+    }
+    process.exit(0);
+  }
+
   const bytes = ensureWasm({ force: flags.includes("--force") });
   console.log(`[moon] ${WASM_FILE} ${(bytes.length / 1024).toFixed(1)} KB`);
 }

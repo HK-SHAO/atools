@@ -1,5 +1,6 @@
-import { attachKernel, loadDsp, wasmUrl } from "../lib/dsp";
+import { startKernel, wasmUrl } from "../lib/dsp";
 import { spectrumToPng } from "../lib/image";
+import { compare } from "../lib/metric";
 import { resample } from "../lib/resample";
 import { Aborted, encode, synthesise } from "../lib/spectrum";
 import type { FromWorker, JobRequest, ToWorker } from "./pipeline";
@@ -12,8 +13,15 @@ import type { FromWorker, JobRequest, ToWorker } from "./pipeline";
  * 取消是消息式的：`alive` 每 12 ms 被流水线问一次，而流水线每 12 ms 也让出一次事件循环，
  * 于是主线程发的取消消息一定来得及在某一轮让出时被读到。已经算完的活不受影响。
  *
- * MoonBit 数值内核也在这里加载：加载失败只是退回 TS 参照实现（慢一截但结果相同），
- * 不是让整条流水线停摆 —— 所以 `ready` 只等「加载这件事结束」，不等「加载成功」。
+ * **内核是这个 worker 的启动前置条件，不是可选项**：核心数值逻辑只有 `moon/` 那一份，
+ * 没有参照实现可退。所以 `ready` 只做「加载 + 挂上 + 预热」，**失败就让它失败** ——
+ * 每件活会带着那条错误回到主线程，而不是悄悄换一条谁都没在维护的路去算。
+ *
+ * 加载与预热都放在这里、放在收到第一条消息之前：编译 wasm、建表组、`memory.grow`
+ * 这三件事都只发生一次，且都不占用户等待出图的那段时间。
+ *
+ * `fft: true`：这个 worker 的每一件活（编码、还原、重采样、指标）都要跑 FFT，
+ * 所以产品那三档窗长的表组在这里一次建好。主线程那一份不建，见 `app/frontend.tsx`。
  */
 
 interface Scope {
@@ -25,9 +33,7 @@ const scope = self as unknown as Scope;
 
 // 内核落在应用根的 `wasm/dsp.wasm`；产物里 worker 在 `assets/`、源码里在 `app/ui/`，
 // 都是向上**一级**。dev 与 build 因此各自解析成不同路径，由 `scripts/moon.ts` 的中间件兜住。
-const ready = loadDsp(wasmUrl(new URL("..", import.meta.url).href))
-  .then(attachKernel)
-  .catch((error: unknown) => console.warn("数值内核没起来，退回 TS 参照实现", error));
+const ready = startKernel(wasmUrl(new URL("..", import.meta.url).href), { fft: true });
 
 const cancelled = new Set<number>();
 
@@ -59,6 +65,11 @@ async function run(request: JobRequest): Promise<void> {
     if (request.kind === "synthesise") {
       const pcm = await synthesise(request.spec, alive, report, request.fine ? "fine" : "fast");
       scope.postMessage({ id, kind: "done", value: pcm }, strip([pcm.buffer]));
+      return;
+    }
+    if (request.kind === "compare") {
+      // 指标也是跨线程纯计算，而且 `align` 是这里最重的一段（±span 个时延各扫一遍全长信号）。
+      scope.postMessage({ id, kind: "done", value: compare(request.ref, request.got) });
       return;
     }
     // 尺寸可能很大，但 PNG 的字节都在这个 Blob 里，复制它比重算便宜。

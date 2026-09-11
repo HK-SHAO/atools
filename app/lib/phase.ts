@@ -8,15 +8,6 @@ export const TUNE = {
   rtisi: true,
   rtisiIters: 8,
   rtisiGl: 0,
-  /**
-   * RTISI 内层是否两条实变换共用一个复变换（`pair.ts`）。开着快约 1.7×。
-   *
-   * 它是消融口：`bun run quality -- --tune='{"pair":false}'` 一行复现。
-   * 注意**不能**拿波形逐位或 ulp 去比这两条支路 —— RTISI-LA 在这套参数下是不稳的
-   * （每帧误差放大百分之几，几百帧后饱和），给它喂 1 ulp 的幅度扰动同样会让输出差到
-   * 峰值的百分之几。判据只能是「对参照素材的指标按分布比」，见 docs/migration.md。
-   */
-  pair: true,
   anchorLambda: 0.85,
   fine: {
     rtisiIters: 16,

@@ -1,14 +1,22 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
 import type { Samples } from "./arrays";
-import { FFT, hannWindow } from "./fft";
+import { attachKernel, loadDsp } from "./dsp";
 import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
 import { BANDS, MAX_FRAMES, MAX_PIXELS, encode, fitEncode, maxFramesFor, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { OVERLAP, SR_OPTIONS, FMAX_OPTIONS, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
-import { STUB_ROWS, stubFits } from "./stub";
+import { stubFits, stubRows } from "./stub";
+import { Frames } from "./stft";
 import { TUNE } from "./phase";
 import { resample, resampledLength, silenceBounds, slice, trimRange } from "./resample";
+
+// 内核是这个套件的前置条件：`encode` / `synthesise` / 票根都只有内核里那一份实现，
+// 没有参照实现可退（见 `app/lib/dsp.ts` 的 `mustKernel`）。
+beforeAll(async () => {
+  attachKernel(await loadDsp(compileWasm()));
+});
 
 function signal(samples: number, sr: number): Samples {
   const out = new Float32Array(samples);
@@ -58,18 +66,6 @@ const localCorrelation = (a: Samples, b: Samples, sr: number): number => {
   }
   return count > 0 ? total / count : 0;
 };
-
-describe("fft", () => {
-  test("inverse recovers the input", () => {
-    const fft = new FFT(64);
-    const re = Float64Array.from({ length: 64 }, (_, i) => Math.sin(i * 0.7));
-    const im = new Float64Array(64);
-    const keep = Float64Array.from(re);
-    fft.transform(re, im);
-    fft.transform(re, im, true);
-    for (let i = 0; i < 64; i++) expect(re[i]!).toBeCloseTo(keep[i]!, 10);
-  });
-});
 
 describe("params", () => {
   test("defaults are the voice minimum", () => {
@@ -385,36 +381,35 @@ function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   }
 }
 
-// 参照实现：精确档相位原本的写法（atan2 + cos + sin）。只用来钉住替换，别拿它当第二份真相。
+// 参照式子：精确档相位原本的写法（atan2 + cos + sin）。只用来钉住那次替换
+// （换成直接取 re/h、im/h），不是第二份实现 —— 变换本身仍走内核，见 stft.ts。
 const exactPhaseInline = (
   pcm: Samples,
   win: number,
   hop: number,
   bins: number,
 ): { cos: Uint8Array; sin: Uint8Array } => {
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const frames = Math.floor(pcm.length / hop) + 1;
-  const x = new Float64Array(pcm.length + win);
-  for (let i = 0; i < pcm.length; i++) x[win / 2 + i] = pcm[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const cos = new Uint8Array(frames * bins);
-  const sin = new Uint8Array(frames * bins);
-  const byte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = x[f * hop + m]! * w[m]!;
-      im[m] = 0;
+  const core = new Frames(win);
+  try {
+    const frames = Math.floor(pcm.length / hop) + 1;
+    const x = new Float64Array(pcm.length + win);
+    for (let i = 0; i < pcm.length; i++) x[win / 2 + i] = pcm[i]!;
+    const cos = new Uint8Array(frames * bins);
+    const sin = new Uint8Array(frames * bins);
+    const byte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+    const { re, im } = core.data();
+    for (let f = 0; f < frames; f++) {
+      core.analyse(x, f * hop);
+      for (let b = 0; b < bins; b++) {
+        const a = Math.atan2(im[b]!, re[b]!);
+        cos[f * bins + b] = byte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
+        sin[f * bins + b] = byte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
+      }
     }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      const a = Math.atan2(im[b]!, re[b]!);
-      cos[f * bins + b] = byte(Math.round((Math.cos(a) * 0.5 + 0.5) * 255));
-      sin[f * bins + b] = byte(Math.round((Math.sin(a) * 0.5 + 0.5) * 255));
-    }
+    return { cos, sin };
+  } finally {
+    core.close();
   }
-  return { cos, sin };
 };
 
 const clicks = (a: Samples): number => {
@@ -473,10 +468,10 @@ describe("exact (2-band) mode", () => {
     expect(spec.meta.exact).toBe(true);
 
     const { pixels, width, height } = exactPixels(spec);
-    const stubRows = stubFits(width) ? STUB_ROWS : 0;
-    expect(height).toBe(2 * spec.meta.bins + stubRows);
+    const rows = stubFits(width) ? stubRows() : 0;
+    expect(height).toBe(2 * spec.meta.bins + rows);
 
-    const bandRows = Math.floor((height - stubRows) / 2);
+    const bandRows = Math.floor((height - rows) / 2);
     const levels = sampleLevels(pixels, width, 0, bandRows, spec.meta.frames, spec.meta.bins);
     const ph = samplePhase(pixels, width, bandRows, bandRows, spec.meta.frames, spec.meta.bins);
     expect(ph.reliability).toBeGreaterThan(0.98);

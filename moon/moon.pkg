@@ -1,12 +1,13 @@
 // 宿主（JS）直调的数值库：无 _start、零 import，导出面即全部接口。
-// 内存契约、缓冲上限与降级路径写在 session.mbt 顶部。
+// 内存契约、缓冲上限与降级路径写在 session.mbt 与 arena.mbt 顶部。
+//
+// **这个包只用标准库**：`FixedArray` / `Bytes` / `@v128` 一概不引，`extern` 一个没有。
+// 取址那条边界走的是「导出函数返回数组，宿主拿到的整数就是数据区首址」，见 engine.mbt。
+// 于是同一份源码在 wasm / js / native 三个后端都能编 —— `bun run moon:ports` 盯着这条。
 pkgtype(kind: "foreign_library")
-
-supported_targets = "wasm"
 
 import {
   "moonbitlang/core/math",
-  "moonbitlang/core/v128",
 }
 
 import {
@@ -14,10 +15,7 @@ import {
 } for "wbtest"
 
 // 导出面用 #export_name 逐函数在源码内标注（名字贴着实现）。
-// alert_experimental 是刻意接受的：热循环要用 @v128 的双精度运算内建（见 fft.mbt 的 last_stage），
-// 它们标着实验性且没有替代品。其余警告一律照显。
 options(
-  warn_list: "-alert_experimental",
   link: {
     "wasm": {
       "export-memory-name": "memory",

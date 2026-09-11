@@ -1,4 +1,4 @@
-// 两条实序列共用一个复变换（参照实现与推导见 `app/lib/pair.ts`）。
+// 两条实序列共用一个复变换：z = x1 + i·x2 做一次复变换，再按共轭对称拆回两条半谱。
 //
 // 槽工作区布局（元素偏移；S = win，H = S/2+1）：
 //
@@ -14,7 +14,8 @@
 // | 3S+4H | x2 | S |
 //
 // 合计 4S+4H —— 正好是 `session.mbt` 的 `slot_words` 在 S = max_win 时的值，槽的容量就是照它定的。
-// 每张表的偏移都由导出函数给出（宿主不自己算），改布局时宿主会跟着编译期一起响。
+// 每张表的偏移都由 `dsp_pair_off` 给出（宿主不自己算），改布局时宿主会跟着编译期一起响。
+// 偏移是**元素**偏移，相对槽工作区首 —— 宿主把它加到 `dsp_slot_mem(s)` 那个地址上。
 
 ///|
 fn pair_size(s : Int) -> Int {
@@ -36,48 +37,33 @@ fn pair_off(which : Int, size : Int) -> Int {
 }
 
 ///|
-fn pair_table_ptr(s : Int, which : Int) -> Int {
+/// 第 `which` 张表的**元素**偏移：0=r1 1=i1 2=r2 3=i2 4=x1 5=x2。槽非法给 -1。
+#export_name("dsp_pair_off")
+pub fn pair_off_of(s : Int, which : Int) -> Int {
+  if !slot_ok(s) || which < 0 || which > 5 {
+    return -1
+  }
+  pair_off(which, pair_size(s))
+}
+
+///|
+/// 半谱长度 H = S/2+1。宿主拿它定视图长度，不自己算。
+#export_name("dsp_pair_half")
+pub fn pair_half_of(s : Int) -> Int {
   if !slot_ok(s) {
     return 0
   }
-  let arena = slot_mem.unsafe_get(s)
-  addr_of_f64(arena) + pair_off(which, pair_size(s)) * 8
+  pair_size(s) / 2 + 1
 }
 
 ///|
-#export_name("dsp_pair_r1_ptr")
-pub fn pair_r1_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 0)
-}
-
-///|
-#export_name("dsp_pair_i1_ptr")
-pub fn pair_i1_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 1)
-}
-
-///|
-#export_name("dsp_pair_r2_ptr")
-pub fn pair_r2_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 2)
-}
-
-///|
-#export_name("dsp_pair_i2_ptr")
-pub fn pair_i2_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 3)
-}
-
-///|
-#export_name("dsp_pair_x1_ptr")
-pub fn pair_x1_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 4)
-}
-
-///|
-#export_name("dsp_pair_x2_ptr")
-pub fn pair_x2_ptr(s : Int) -> Int {
-  pair_table_ptr(s, 5)
+/// 槽内整幅谱长 S（= 窗长）。宿主拿它定 x1/x2 的视图长度。
+#export_name("dsp_pair_size")
+pub fn pair_size_of(s : Int) -> Int {
+  if !slot_ok(s) {
+    return 0
+  }
+  pair_size(s)
 }
 
 ///|
@@ -90,11 +76,10 @@ pub fn pair_forward(s : Int) -> Unit {
   let size = pair_size(s)
   let half = size / 2 + 1
   let arena = slot_mem.unsafe_get(s)
-  let base = addr_of_f64(arena)
   let zi_off = size
   // zr = x1，zi = x2：TS 的 `zr.set(y1.subarray(0, size))` 是同一件事
-  mem_copy(base, base + pair_off(4, size) * 8, size * 8)
-  mem_copy(base + zi_off * 8, base + pair_off(5, size) * 8, size * 8)
+  arena.blit_to(arena, len=size, src_offset=pair_off(4, size), dst_offset=0)
+  arena.blit_to(arena, len=size, src_offset=pair_off(5, size), dst_offset=zi_off)
   fft_at(slot_plan.unsafe_get(s), arena, 0, zi_off, false)
   let r1 = pair_off(0, size)
   let i1 = pair_off(1, size)
@@ -156,7 +141,6 @@ pub fn pair_inverse(s : Int) -> Unit {
     arena.unsafe_set(zi_off + m, c - b)
   }
   fft_at(slot_plan.unsafe_get(s), arena, 0, zi_off, true)
-  let base = addr_of_f64(arena)
-  mem_copy(base + pair_off(4, size) * 8, base, size * 8)
-  mem_copy(base + pair_off(5, size) * 8, base + zi_off * 8, size * 8)
+  arena.blit_to(arena, len=size, src_offset=0, dst_offset=pair_off(4, size))
+  arena.blit_to(arena, len=size, src_offset=zi_off, dst_offset=pair_off(5, size))
 }

@@ -1,5 +1,5 @@
 import type { Samples } from "./arrays";
-import { FFT, hannWindow } from "./fft";
+import { Frames } from "./stft";
 
 export function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
@@ -35,24 +35,25 @@ export function align(a: Samples, b: Samples, span: number): { corr: number; snr
 }
 
 export function magnitudes(x: Samples, win: number, hop: number): Float64Array {
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const bins = win / 2 + 1;
-  const frames = Math.floor(x.length / hop) + 1;
-  const pad = new Float64Array(x.length + win);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const out = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
+  // 变换走内核（与编码链同一份 FFT、同一张汉宁窗），宿主不再自带一套。
+  // 代价是这条指标链也要求内核已挂上 —— 它本来就跑在 Worker 里（见 audit.ts）。
+  const core = new Frames(win);
+  try {
+    const bins = core.bins;
+    const frames = Math.floor(x.length / hop) + 1;
+    const pad = new Float64Array(x.length + win);
+    for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
+    const out = new Float64Array(frames * bins);
+    const { re, im } = core.data();
+    for (let f = 0; f < frames; f++) {
+      core.analyse(pad, f * hop);
+      const base = f * bins;
+      for (let b = 0; b < bins; b++) out[base + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
     }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) out[f * bins + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
+    return out;
+  } finally {
+    core.close();
   }
-  return out;
 }
 
 export function spectral(
@@ -212,7 +213,14 @@ export function barkDistance(ref: Samples, got: Samples, sr: number, win = 1024,
   return Math.sqrt(acc / size);
 }
 
-export function compare(ref: Samples, got: Samples): { snr: number; corr: number; lsd: number } {
+/** 一段还原音与它的参照相比掉了多少。三个口径各自的范围与含义见各自的函数。 */
+export interface Metrics {
+  snr: number;
+  corr: number;
+  lsd: number;
+}
+
+export function compare(ref: Samples, got: Samples): Metrics {
   const n = Math.min(ref.length, got.length);
   const a = align(ref, got, Math.min(2048, Math.floor(n / 4) || 1));
   const s = spectral(magnitudes(ref, 1024, 256), magnitudes(got, 1024, 256));

@@ -1,5 +1,11 @@
-// 原地 radix-2 FFT。与 TS 参照实现（`app/lib/fft.ts` 的 `FFT.transform`）逐位等价，
-// 由 `app/lib/fft.test.ts` 的逐位门禁守住 —— 顺序、除法、符号都不能动。
+// 原地 radix-2 FFT，加上「单边谱 → 共轭对称整谱」的翻转（`mirror`）。两者是 STFT 与
+// 相位重建的地基，**产品路径上只有这一份实现**（宿主侧的 FFT 类已删，见 app/lib/stft.ts）。
+//
+// 精度：位反转索引是纯整数运算，逐位相同；旋转因子与汉宁窗走 `@math.cos/sin`，与 V8 的
+// `Math.cos/sin` 在约 4% 的输入上差**恰好 1 ulp**（两者都是合法的舍入，实测最大相对
+// 2.19e-16），于是整条变换以峰值为尺度的最大相对误差是 1.5~3.4 ulp。这条差异不必消除 ——
+// 它在 Float32 精度（1.2e-7）之下，而真正要挡的「算法写错」（顺序、除法、符号、下标）
+// 会大出好几个数量级。白盒上界定在 8 ulp，见 fft_wbtest.mbt。
 //
 // **热循环里一律用 `unsafe_get` / `unsafe_set`，不写 `arr[i]`。** 后者编译出来的是一次
 // `moonbit.check_range` + 一次 `moonbit.array_length` 调用，两个都不内联：同一个 512 点变换
@@ -8,6 +14,11 @@
 //
 // 变换作用在会话槽工作区的两段上（`re_off` / `im_off` 是**元素**偏移），旋转因子取第 `pi` 组 ——
 // 于是配对双实变换（pair.mbt）能拿同一个内核跑自己的布局。
+//
+// **末级没有 SIMD 分支。** 原先 width == n 那一级单独走 `@v128` + 内联 WAT 的 v128.load/store，
+// 拆开来量过：换成标准库的 `@v128.f64x2_*`（从两个标量拼一个 v128）比标量**慢 2%**
+// （512 点、2000 轮，三条路校验和逐位相同）。收益全在 `v128.load/store` 这两条**访存**
+// 指令上，而那正是没有标准 API 的一处 —— 于是末级就用标量，逐位等价反而少了一个论证负担。
 
 ///|
 /// 槽号合法性。越界一律当作「没有这个槽」，不让 `unsafe_get` 越界读。
@@ -42,7 +53,7 @@ fn fft_at(
     }
   }
   let mut width = 2
-  while width * 2 <= n {
+  while width <= n {
     let half = width / 2
     let step = n / width
     let mut base = 0
@@ -70,9 +81,6 @@ fn fft_at(
     }
     width = width * 2
   }
-  if width == n {
-    last_stage(pi, arena, re_off, im_off, inverse)
-  }
   if inverse {
     // 除以 n，不是乘 1/n：TS 参照实现写的是 `re[i] / n`，两者在浮点上不等价（1/n 不精确）
     let nf = n.to_double()
@@ -84,51 +92,7 @@ fn fft_at(
 }
 
 ///|
-/// 末级（width == n，即 step == 1）单独走 v128：相邻两个蝶形的旋转因子也是相邻的，
-/// 四项访存全部连续，是这套 radix-2 布局里唯一能整对打包的一级。
-///
-/// 逐位等价靠两点：① 只做 mul/add/sub，不做 FMA，每条指令与标量式同序；
-/// ② 取反用乘 -1.0 而不是 0 - v —— `-x` 与 `(-1)·x` 逐位相同（含 ±0 与 NaN 的符号位），
-/// `0 - x` 在 x = 0 时给 +0，会被逐位比对判成不同。
-fn last_stage(
-  pi : Int,
-  arena : FixedArray[Double],
-  re_off : Int,
-  im_off : Int,
-  inverse : Bool,
-) -> Unit {
-  let n = plan_rev.unsafe_get(pi).length()
-  let half = n / 2
-  let tc = plan_cos.unsafe_get(pi)
-  let ts = plan_sin.unsafe_get(pi)
-  let rb = re_off * 8
-  let ib = im_off * 8
-  let minus_one = @v128.f64x2_splat(-1.0)
-  let mut j = 0
-  while j < half {
-    let p = j + half
-    let rj = v128_load2_f64(arena, rb + j * 8)
-    let ij = v128_load2_f64(arena, ib + j * 8)
-    let rp = v128_load2_f64(arena, rb + p * 8)
-    let ip = v128_load2_f64(arena, ib + p * 8)
-    let c = v128_load2_f64(tc, j * 8)
-    let raw_s = v128_load2_f64(ts, j * 8)
-    let s = if inverse { @v128.f64x2_mul(minus_one, raw_s) } else { raw_s }
-    let tre = @v128.f64x2_add(@v128.f64x2_mul(rp, c), @v128.f64x2_mul(ip, s))
-    let tim = @v128.f64x2_add(
-      @v128.f64x2_mul(@v128.f64x2_mul(minus_one, rp), s),
-      @v128.f64x2_mul(ip, c),
-    )
-    v128_store2_f64(arena, rb + p * 8, @v128.f64x2_sub(rj, tre))
-    v128_store2_f64(arena, ib + p * 8, @v128.f64x2_sub(ij, tim))
-    v128_store2_f64(arena, rb + j * 8, @v128.f64x2_add(rj, tre))
-    v128_store2_f64(arena, ib + j * 8, @v128.f64x2_add(ij, tim))
-    j = j + 2
-  }
-}
-
-///|
-/// 单条复变换。工作区布局：`re` 在槽首，`im` 紧随其后（宿主侧见 `app/lib/dsp.ts` 的 `fftOf`）。
+/// 单条复变换。工作区布局：`re` 在槽首、`im` 紧随其后（宿主侧见 `app/lib/dsp.ts` 的 `fftBuffers`）。
 #export_name("dsp_fft")
 pub fn forward(s : Int) -> Unit {
   if slot_ok(s) {
@@ -139,6 +103,9 @@ pub fn forward(s : Int) -> Unit {
 }
 
 ///|
+/// 单条复反变换（除以 n，不是乘 1/n —— 两者在浮点上不等价）。**产品路径上不用它**：
+/// 实序列的反变换走 `real_ifft`，那里把「单边谱翻成整谱」一并做了。它留着是给白盒做
+/// 「正变换 → 反变换回到原序列」这条自洽性断言，以及给配对双实变换那套布局当参照。
 #export_name("dsp_ifft")
 pub fn inverse(s : Int) -> Unit {
   if slot_ok(s) {
@@ -146,4 +113,36 @@ pub fn inverse(s : Int) -> Unit {
     let n = plan_rev.unsafe_get(pi).length()
     fft_at(pi, slot_mem.unsafe_get(s), 0, n, true)
   }
+}
+
+///|
+/// 实序列的反变换：先把**单边谱**补成共轭对称的整谱，再做一次复反变换。
+///
+/// 翻转这一步不能省，而且必须在核心里做。留下半张谱不管的后果实测过：上半谱带着上一帧
+/// 反变换出来的时域样本，被当成本帧的谱再变一次，帧 0 之后整条输出都被污染。
+/// 于是「配对的复变换」这条约束只有一处实现，宿主不需要知道 `X[N-k] = conj(X[k])` 怎么写，
+/// 也就不会漏掉 DC 与奈奎斯特点那两处虚部置零（它们是实数谱线，虚部必须为 0）。
+///
+/// `bins` 是单边谱的行数，最多 `n/2+1`。**小于它也是合法的**：图读回来的精确谱被行数夹过，
+/// 这种时候按 `bins` 翻转、`bins` 之外由调用方自己清零（与翻转互不覆盖，见 `add`）。
+/// 返回 1 表示做了，0 表示槽或 `bins` 不合法（不动手，别把半张谱变回去）。
+#export_name("dsp_real_ifft")
+pub fn real_ifft(s : Int, bins : Int) -> Int {
+  if !slot_ok(s) {
+    return 0
+  }
+  let pi = slot_plan.unsafe_get(s)
+  let n = plan_rev.unsafe_get(pi).length()
+  if n == 0 || bins < 1 || bins > n / 2 + 1 {
+    return 0
+  }
+  let mem = slot_mem.unsafe_get(s)
+  mem.unsafe_set(n, 0.0)
+  mem.unsafe_set(n + bins - 1, 0.0)
+  for b = 1; b < bins - 1; b = b + 1 {
+    mem.unsafe_set(n - b, mem.unsafe_get(b))
+    mem.unsafe_set(2 * n - b, -mem.unsafe_get(n + b))
+  }
+  fft_at(pi, mem, 0, n, true)
+  1
 }

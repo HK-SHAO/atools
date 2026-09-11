@@ -24,7 +24,16 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) 
     const alive = () => genRef.current === my;
     setChecking(true);
     try {
-      const rows = await audit(pcm, spec, png, name, s => io.synthesise(s, false));
+      // 还原与指标都交给 Worker：`compare` 里的 `align` 会在四千多倍素材长度上扫一遍，
+      // 留在主线程就是一次实打实的卡顿（见 `pipeline.ts`）。
+      const rows = await audit(
+        pcm,
+        spec,
+        png,
+        name,
+        s => io.synthesise(s, false),
+        (a, b) => io.compare(a, b),
+      );
       if (alive()) setLoss(rows);
     } catch (e) {
       console.error(e);

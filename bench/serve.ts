@@ -1,3 +1,4 @@
+import { compileWasm, WASM_FILE } from "../scripts/moon";
 import { contentType } from "./cdp";
 
 const root = import.meta.dir;
@@ -17,6 +18,10 @@ Bun.serve({
       } catch {
         return new Response("missing", { status: 404 });
       }
+    } else if (path === `/${WASM_FILE}`) {
+      // 数值内核是页面上整条链的前置条件（没有 TS 参照实现可退），`entry.ts` 顶层就 await 它。
+      // 这里现编现供：`bun bench` 因此不会拿着一份与 `moon/` 不同步的旧产物去量。
+      return new Response(compileWasm(), { headers: { "content-type": "application/wasm" } });
     } else return new Response("nope", { status: 404 });
 
     const body = Bun.file(file);

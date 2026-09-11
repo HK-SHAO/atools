@@ -1,11 +1,30 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
 import type { Samples } from "./arrays";
-import { FFT, hannWindow } from "./fft";
+import { attachKernel, loadDsp, mustKernel } from "./dsp";
 import { phaseFromMagnitude } from "./phase";
 import { resample } from "./resample";
+import { hannOf, Frames } from "./stft";
+
+/**
+ * 这里只剩**还住在宿主**的两条式子：相位反演（`phase.ts`）与重采样（`resample.ts`），
+ * 外加它们的接口契约。
+ *
+ * 原先这里还有三条在量内核的实现细节 —— 正变换与朴素 DFT 是否一致、汉宁窗是否对称、
+ * 窗平方在 `hop = win/4` 时是否拼得平 —— 它们都已经被搬进 `moon/` 的白盒
+ * （`plan_wbtest.mbt` / `fft_wbtest.mbt`）。搬过去之后判据更硬：量的是**内核真的在用的
+ * 那张表**，而不是宿主拿同一条式子重算的一份复制品。
+ *
+ * 于是本文件里的变换只是**造素材**的手段，走内核的 `Frames`（宿主不再自带 FFT）——
+ * 性能不敏感，一致性要紧：素材的谱必须就是产品链会看到的那份谱。
+ */
 
 const TWO_PI = Math.PI * 2;
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
+
+beforeAll(async () => {
+  attachKernel(await loadDsp(compileWasm()));
+});
 
 function chirp(n: number, sr: number, from: number, to: number): Float64Array {
   const x = new Float64Array(n);
@@ -17,75 +36,28 @@ function chirp(n: number, sr: number, from: number, to: number): Float64Array {
 }
 
 function stft(x: Float64Array, win: number, hop: number) {
-  const bins = win / 2 + 1;
-  const frames = Math.floor(x.length / hop) + 1;
-  const fft = new FFT(win);
-  const w = hannWindow(win);
-  const padded = x.length + win;
-  const pad = new Float64Array(padded);
-  for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
-  const re = new Float64Array(win);
-  const im = new Float64Array(win);
-  const mag = new Float64Array(frames * bins);
-  const ph = new Float64Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    for (let m = 0; m < win; m++) {
-      re[m] = pad[f * hop + m]! * w[m]!;
-      im[m] = 0;
-    }
-    fft.transform(re, im);
-    for (let b = 0; b < bins; b++) {
-      mag[f * bins + b] = Math.hypot(re[b]!, im[b]!);
-      ph[f * bins + b] = Math.atan2(im[b]!, re[b]!);
-    }
-  }
-  return { mag, ph, frames, bins };
-}
-
-describe("fft", () => {
-  test("matches a naive dft", () => {
-    const n = 32;
-    const fft = new FFT(n);
-    const re = Float64Array.from({ length: n }, (_, i) => Math.sin(i * 0.31) + i / n);
-    const im = Float64Array.from({ length: n }, (_, i) => Math.cos(i * 0.77));
-    const re0 = Float64Array.from(re);
-    const im0 = Float64Array.from(im);
-    fft.transform(re, im);
-    for (let k = 0; k < n; k++) {
-      let sr = 0;
-      let si = 0;
-      for (let t = 0; t < n; t++) {
-        const a = (-TWO_PI * k * t) / n;
-        sr += re0[t]! * Math.cos(a) - im0[t]! * Math.sin(a);
-        si += re0[t]! * Math.sin(a) + im0[t]! * Math.cos(a);
+  const core = new Frames(win);
+  try {
+    const bins = core.bins;
+    const frames = Math.floor(x.length / hop) + 1;
+    const pad = new Float64Array(x.length + win);
+    for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
+    const mag = new Float64Array(frames * bins);
+    const ph = new Float64Array(frames * bins);
+    const { re, im } = core.data();
+    for (let f = 0; f < frames; f++) {
+      core.analyse(pad, f * hop);
+      const base = f * bins;
+      for (let b = 0; b < bins; b++) {
+        mag[base + b] = Math.hypot(re[b]!, im[b]!);
+        ph[base + b] = Math.atan2(im[b]!, re[b]!);
       }
-      expect(re[k]!).toBeCloseTo(sr, 8);
-      expect(im[k]!).toBeCloseTo(si, 8);
     }
-  });
-
-  test("hann is symmetric with its peak at the centre", () => {
-    const w = hannWindow(256);
-    for (let i = 1; i < 128; i++) expect(w[128 + i]!).toBeCloseTo(w[128 - i]!, 12);
-    expect(w[128]!).toBeCloseTo(1, 12);
-  });
-
-  test("coverage is flat at hop = win/4", () => {
-    const win = 256;
-    const hop = win / 4;
-    const w = hannWindow(win);
-    const cover = new Float64Array(win);
-    for (let f = 0; f * hop < win; f++)
-      for (let m = 0; m < win; m++) cover[(f * hop + m) % win] = cover[(f * hop + m) % win]! + w[m]! ** 2;
-    let lo = Infinity;
-    let hi = 0;
-    for (let m = 0; m < win; m++) {
-      lo = Math.min(lo, cover[m]!);
-      hi = Math.max(hi, cover[m]!);
-    }
-    expect(hi - lo).toBeLessThan(1e-9);
-  });
-});
+    return { mag, ph, frames, bins };
+  } finally {
+    core.close();
+  }
+}
 
 describe("phase from magnitude", () => {
   test("a chirp's phase comes back almost exactly", () => {
@@ -160,5 +132,31 @@ describe("resample", () => {
     const head = rms(0, 100);
     const mid = rms(Math.floor(y.length / 2) - 50, Math.floor(y.length / 2) + 50);
     expect(head).toBeGreaterThan(mid * 0.7);
+  });
+});
+
+describe("stft 适配层", () => {
+  test("窗函数来自内核表组，与内核表组是同一份", () => {
+    const w = hannOf(mustKernel(), 256);
+    expect(w.length).toBe(256);
+    expect(w[128]).toBeCloseTo(1, 12);
+    expect(w[0]).toBeCloseTo(0, 12);
+    // 换一个窗长拿到的是另一张表，不是同一段的别名。
+    expect(hannOf(mustKernel(), 512).length).toBe(512);
+  });
+
+  test("工作区还回去之后就不能再用（借还有据）", () => {
+    const core = new Frames(512);
+    core.close();
+    expect(() => core.data()).toThrow(/还给内核/);
+    // 还过一次再还一次是幂等的：取消路径会走到两次。
+    core.close();
+  });
+
+  test("槽位池满时报出来（池是 6 个，漏还不会变成慢慢变慢的路）", () => {
+    const held = Array.from({ length: 6 }, () => new Frames(512));
+    expect(() => new Frames(512)).toThrow(/会话槽已满/);
+    for (const c of held) c.close();
+    new Frames(512).close();
   });
 });

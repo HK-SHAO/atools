@@ -1,9 +1,9 @@
 import type { Samples } from "./arrays";
-import { FFT, coverage, hannWindow, mirrorSpectrum } from "./fft";
 import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { resampledLength } from "./resample";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
+import { Frames, coverage, olaFromPhase } from "./stft";
 
 export const BANDS = 2;
 
@@ -173,38 +173,6 @@ export function fitEncode(
   };
 }
 
-class Frames {
-  readonly bins: number;
-  readonly re: Float64Array;
-  readonly im: Float64Array;
-  private readonly fft: FFT;
-  private readonly win: Float64Array;
-
-  constructor(readonly size: number) {
-    this.fft = new FFT(size);
-    this.win = hannWindow(size);
-    this.re = new Float64Array(size);
-    this.im = new Float64Array(size);
-    this.bins = size / 2 + 1;
-  }
-
-  analyse(x: Float64Array, start: number): void {
-    const { re, im, win, size } = this;
-    for (let m = 0; m < size; m++) {
-      re[m] = x[start + m]! * win[m]!;
-      im[m] = 0;
-    }
-    this.fft.transform(re, im);
-  }
-
-  add(acc: Float64Array, start: number): void {
-    const { re, im, win, size } = this;
-    mirrorSpectrum(re, im, this.bins, size);
-    this.fft.transform(re, im, true);
-    for (let m = 0; m < size; m++) acc[start + m] = acc[start + m]! + re[m]! * win[m]!;
-  }
-}
-
 const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
 
 const magToLevel = (db: number): number => clampByte(Math.round(((db - DB_MIN) / DB_SPAN) * 255));
@@ -235,86 +203,101 @@ export async function encode(
   onProgress?: (p: number) => void,
 ): Promise<Spectrum> {
   const { win, hop, frames, bins, samples } = shapeFor(enc, sr, pcm.length);
+  // 一帧变换的工作区借自内核（会话槽），整段活干完才还 —— 池满会当场抛，见 stft.ts。
   const core = new Frames(win);
-  const padded = samples + win;
-  const x = new Float64Array(padded);
-  for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
+  try {
+    const padded = samples + win;
+    const x = new Float64Array(padded);
+    for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
 
-  const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
-  const scale = win / 4;
-  let next = 0;
+    const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
+    const scale = win / 4;
+    let next = 0;
 
-  if (enc.mode === "exact") {
-    meta.exact = true;
+    if (enc.mode === "exact") {
+      meta.exact = true;
+      const levels = new Uint8Array(frames * bins);
+      const phaseCos = new Uint8Array(frames * bins);
+      const phaseSin = new Uint8Array(frames * bins);
+
+      // 视图只现切、不跨 `await` 持有：等待期间别的作业可能 `memory.grow`，把旧视图整片
+      // detach 掉（写进去是静默丢弃）。所以每次让出之后重新取一次，见 stft.ts 的 Frames。
+      let { re, im } = core.data();
+      for (let f = 0; f < frames; f++) {
+        core.analyse(x, f * hop);
+        const base = f * bins;
+        for (let b = 0; b < bins; b++) {
+          const r = re[b]!;
+          const c = im[b]!;
+          const h = Math.sqrt(r * r + c * c);
+          levels[base + b] = magToLevel(20 * Math.log10(h / scale));
+          // 单位相量直接取 re/h 与 im/h：与 cos(atan2(im, re)) 是同一件事，
+          // 但省掉 atan2 + cos + sin 三个超越函数（内层实测 2.12×）。h = 0 时
+          // 原式给 cos=1、sin=0，这里照样填 255 / 128。
+          phaseCos[base + b] = h > 0 ? clampByte(Math.round(((r / h) * 0.5 + 0.5) * 255)) : 255;
+          phaseSin[base + b] = h > 0 ? clampByte(Math.round(((c / h) * 0.5 + 0.5) * 255)) : 128;
+        }
+        if (Date.now() >= next) {
+          if (alive && !alive()) throw new Aborted();
+          onProgress?.((f + 1) / frames);
+          await yieldToUi();
+          ({ re, im } = core.data());
+          next = Date.now() + SLICE_MS;
+        }
+      }
+      return { meta, levels, phaseCos, phaseSin };
+    }
+
+    const bits = Math.max(1, enc.bits);
+    const span = dbSpanOf(bits);
+    const steps = stepsOf(bits);
+    meta.bits = bits;
+
+    // 峰值扫描不跨 `await`：一次取视图、一口气读完。
+    {
+      let { re, im } = core.data();
+      let peak = 0;
+      const stride = Math.max(1, Math.floor(frames / 240));
+      for (let f = 0; f < frames; f += stride) {
+        core.analyse(x, f * hop);
+        for (let b = 0; b < bins; b++) {
+          const r = re[b]!;
+          const c = im[b]!;
+          const m = Math.sqrt(r * r + c * c);
+          if (m > peak) peak = m;
+        }
+      }
+      meta.ref = peak > 0 ? 20 * Math.log10(peak / scale) + 1 : 0;
+    }
+    const floorDb = meta.ref - span;
+
+    // 无论位深多少，level 一律是字节：quantize 把量化档按 255 展开。
+    // 曾经这里给 bits>=16 开过 Uint16Array 的分支，而 levelToDb 是按字节解释的
+    // （level·steps/255），两条约定一撞就是整段 NaN（实测 4096/4096 非有限）。
+    // 位深只由 params.ts 的 BITS_OPTIONS（2/4/8）给，那条分支从来到不了。
     const levels = new Uint8Array(frames * bins);
-    const phaseCos = new Uint8Array(frames * bins);
-    const phaseSin = new Uint8Array(frames * bins);
-
+    let { re, im } = core.data();
     for (let f = 0; f < frames; f++) {
       core.analyse(x, f * hop);
       const base = f * bins;
       for (let b = 0; b < bins; b++) {
-        const re = core.re[b]!;
-        const im = core.im[b]!;
-        const h = Math.sqrt(re * re + im * im);
-        levels[base + b] = magToLevel(20 * Math.log10(h / scale));
-        // 单位相量直接取 re/h 与 im/h：与 cos(atan2(im, re)) 是同一件事，
-        // 但省掉 atan2 + cos + sin 三个超越函数（内层实测 2.12×）。h = 0 时
-        // 原式给 cos=1、sin=0，这里照样填 255 / 128。
-        phaseCos[base + b] = h > 0 ? clampByte(Math.round(((re / h) * 0.5 + 0.5) * 255)) : 255;
-        phaseSin[base + b] = h > 0 ? clampByte(Math.round(((im / h) * 0.5 + 0.5) * 255)) : 128;
+        const r = re[b]!;
+        const c = im[b]!;
+        levels[base + b] = quantize(Math.sqrt(r * r + c * c), scale, floorDb, span, steps);
       }
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
         onProgress?.((f + 1) / frames);
         await yieldToUi();
+        ({ re, im } = core.data());
         next = Date.now() + SLICE_MS;
       }
     }
-    return { meta, levels, phaseCos, phaseSin };
+
+    return { meta, levels, phaseCos: null, phaseSin: null };
+  } finally {
+    core.close();
   }
-
-  const bits = Math.max(1, enc.bits);
-  const span = dbSpanOf(bits);
-  const steps = stepsOf(bits);
-  meta.bits = bits;
-
-  let peak = 0;
-  const stride = Math.max(1, Math.floor(frames / 240));
-  for (let f = 0; f < frames; f += stride) {
-    core.analyse(x, f * hop);
-    for (let b = 0; b < bins; b++) {
-      const re = core.re[b]!;
-      const im = core.im[b]!;
-      const m = Math.sqrt(re * re + im * im);
-      if (m > peak) peak = m;
-    }
-  }
-  meta.ref = peak > 0 ? 20 * Math.log10(peak / scale) + 1 : 0;
-  const floorDb = meta.ref - span;
-
-  // 无论位深多少，level 一律是字节：quantize 把量化档按 255 展开。
-  // 曾经这里给 bits>=16 开过 Uint16Array 的分支，而 levelToDb 是按字节解释的
-  // （level·steps/255），两条约定一撞就是整段 NaN（实测 4096/4096 非有限）。
-  // 位深只由 params.ts 的 BITS_OPTIONS（2/4/8）给，那条分支从来到不了。
-  const levels = new Uint8Array(frames * bins);
-  for (let f = 0; f < frames; f++) {
-    core.analyse(x, f * hop);
-    const base = f * bins;
-    for (let b = 0; b < bins; b++) {
-      const re = core.re[b]!;
-      const im = core.im[b]!;
-      levels[base + b] = quantize(Math.sqrt(re * re + im * im), scale, floorDb, span, steps);
-    }
-    if (Date.now() >= next) {
-      if (alive && !alive()) throw new Aborted();
-      onProgress?.((f + 1) / frames);
-      await yieldToUi();
-      next = Date.now() + SLICE_MS;
-    }
-  }
-
-  return { meta, levels, phaseCos: null, phaseSin: null };
 }
 
 async function synthesiseExact(
@@ -326,62 +309,68 @@ async function synthesiseExact(
   if (!phaseCos || !phaseSin) return invert(spec, alive, onProgress);
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
-  const padded = samples + win;
-  const acc = new Float64Array(padded);
-  const scale = win / 4;
+  try {
+    const padded = samples + win;
+    const acc = new Float64Array(padded);
+    const scale = win / 4;
 
-  let next = 0;
-  const holdC = new Float64Array(bins).fill(1);
-  const holdS = new Float64Array(bins);
-  for (let f = 0; f < frames; f++) {
-    const base = f * bins;
-    for (let b = 0; b < bins; b++) {
-      const m = Math.exp(levelToMagDb(levels[base + b]!) * DB_TO_LIN) * scale;
-      const cr = (phaseCos[base + b]! - 127.5) / 127.5;
-      const cs = (phaseSin[base + b]! - 127.5) / 127.5;
-      const h = Math.sqrt(cr * cr + cs * cs);
-      let c: number;
-      let s: number;
-      if (h > SYNTH_TUNE.phaseDeadZone) {
-        c = cr / h;
-        s = cs / h;
-        holdC[b] = c;
-        holdS[b] = s;
-      } else {
-        c = holdC[b]!;
-        s = holdS[b]!;
+    let next = 0;
+    const holdC = new Float64Array(bins).fill(1);
+    const holdS = new Float64Array(bins);
+    let { re, im } = core.data();
+    for (let f = 0; f < frames; f++) {
+      const base = f * bins;
+      for (let b = 0; b < bins; b++) {
+        const m = Math.exp(levelToMagDb(levels[base + b]!) * DB_TO_LIN) * scale;
+        const cr = (phaseCos[base + b]! - 127.5) / 127.5;
+        const cs = (phaseSin[base + b]! - 127.5) / 127.5;
+        const h = Math.sqrt(cr * cr + cs * cs);
+        let c: number;
+        let s: number;
+        if (h > SYNTH_TUNE.phaseDeadZone) {
+          c = cr / h;
+          s = cs / h;
+          holdC[b] = c;
+          holdS[b] = s;
+        } else {
+          c = holdC[b]!;
+          s = holdS[b]!;
+        }
+        re[b] = m * c;
+        im[b] = m * s;
       }
-      core.re[b] = m * c;
-      core.im[b] = m * s;
+      // bins 可能小于 win/2+1（图读回来的精确谱，行数被 win/2+1 夹过）。
+      // 反变换做的是全长的共轭翻转，上半谱不清零的话，上一帧反变换出来的时域样本会被
+      // 当成本帧的谱线再变一次 —— 帧 0 之后整条输出都被污染。
+      for (let b = bins; b < core.bins; b++) {
+        re[b] = 0;
+        im[b] = 0;
+      }
+      core.add(acc, f * hop);
+      if (Date.now() >= next) {
+        if (alive && !alive()) throw new Aborted();
+        onProgress?.((f + 1) / frames);
+        await yieldToUi();
+        ({ re, im } = core.data());
+        next = Date.now() + SLICE_MS;
+      }
     }
-    // bins 可能小于 win/2+1（图读回来的精确谱，行数被 win/2+1 夹过）。
-    // core.add 做的是全长的 Hermite 反变换，上半谱不清零的话，上一帧反变换出来的
-    // 时域样本会被当成本帧的谱线再变一次 —— 帧 0 之后整条输出都被污染。
-    for (let b = bins; b < core.bins; b++) {
-      core.re[b] = 0;
-      core.im[b] = 0;
-    }
-    core.add(acc, f * hop);
-    if (Date.now() >= next) {
-      if (alive && !alive()) throw new Aborted();
-      onProgress?.((f + 1) / frames);
-      await yieldToUi();
-      next = Date.now() + SLICE_MS;
-    }
-  }
 
-  const cover = coverage(win, hop, frames, padded);
-  let peak = 0;
-  for (let i = 0; i < padded; i++) if (cover[i]! > peak) peak = cover[i]!;
-  const floor = peak * 0.05;
+    const cover = coverage(win, hop, frames, padded);
+    let peak = 0;
+    for (let i = 0; i < padded; i++) if (cover[i]! > peak) peak = cover[i]!;
+    const floor = peak * 0.05;
 
-  const out = new Float32Array(samples);
-  const pad = win / 2;
-  for (let i = 0; i < samples; i++) {
-    const c = cover[pad + i]!;
-    out[i] = c > floor ? acc[pad + i]! / c : 0;
+    const out = new Float32Array(samples);
+    const pad = win / 2;
+    for (let i = 0; i < samples; i++) {
+      const c = cover[pad + i]!;
+      out[i] = c > floor ? acc[pad + i]! / c : 0;
+    }
+    return out;
+  } finally {
+    core.close();
   }
-  return out;
 }
 
 function targetOf(spec: Spectrum, scale: number): Float64Array {
@@ -392,11 +381,8 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
   return out;
 }
 
-/** 幅度投影的目标区间：真值落在「档中心 ± 半档」内，最低档一侧无下界。 */
-interface Band {
-  lo: Float64Array;
-  hi: Float64Array;
-}
+/** 幅度投影的目标区间：按**量化字节**查的 256 项表。见 `rtisi.ts` 的 `Band`。 */
+type Band = import("./rtisi").Band;
 
 /**
  * 幅度是**量化**存下来的，level 说的是「落在第 q 档」，不是「等于档中心」。
@@ -413,6 +399,11 @@ interface Band {
  * 交给迭代的语义是「幅度落在 [lo, hi] 内就不动它，出界才夹回来」，
  * 即 ADMM 类相位重建里的幅度软约束；训练无关、零依赖、零额外耗时。
  * 可逆档（exact）没有量化这一步，返回 null。
+ *
+ * 表按 256 个**字节值**建，而不是逐元素建两张 `frames×bins` 的表：量化档只由那个字节
+ * 决定（`q = round(lv·steps/255)`），所以逐元素存是白白多出 16M 像素素材的 128 MB。
+ * 这张表由宿主按量化约定算好、整段交给内核的 `rt_fit`，所以「同一个字节值定出哪一段边界」
+ * 只有这一处。
  */
 function bandOf(spec: Spectrum, scale: number): Band | null {
   const { meta, levels } = spec;
@@ -421,20 +412,29 @@ function bandOf(spec: Spectrum, scale: number): Band | null {
   // 钉不钉它都听不出来 —— 实测 8bit（−96 dB）上放宽之后各项指标只是在噪声里摆动，
   // 而 4bit（−48 dB）与 2bit（−24 dB）上这层假噪声又响又脏，放宽是巨赢。
   if (meta.exact || !TUNE.relaxFloor || span >= 80) return null;
+  // 表是按元素下标取的：levels 短了内核就会读到段外（它拿到的是裸段地址，没有边界）。
+  if (levels.length < meta.frames * meta.bins) return null;
   const steps = stepsOf(meta.bits);
   const floorDb = meta.ref - span;
-  const lo = new Float64Array(levels.length);
-  const hi = new Float64Array(levels.length);
-  for (let i = 0; i < levels.length; i++) {
-    const q = Math.round((levels[i]! * steps) / 255);
+  const lo = new Float64Array(256);
+  const hi = new Float64Array(256);
+  for (let lv = 0; lv < 256; lv++) {
+    const q = Math.round((lv * steps) / 255);
     const c = Math.exp((floorDb + (q / steps) * span) * DB_TO_LIN) * scale;
-    lo[i] = q <= 0 ? 0 : c;
-    hi[i] = q >= steps ? Infinity : c;
+    lo[lv] = q <= 0 ? 0 : c;
+    hi[lv] = q >= steps ? Infinity : c;
   }
-  return { lo, hi };
+  return { levels, lo, hi };
 }
 
-const clampBand = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+/** 软约束的取法。与内核 `rt_fit` 里那一条是同一条式子 —— 表由这里建、由内核读。 */
+const fitBand = (band: Band, d: number, i: number): number => {
+  const lv = band.levels[i]!;
+  const lo = band.lo[lv]!;
+  if (d < lo) return lo;
+  const hi = band.hi[lv]!;
+  return d > hi ? hi : d;
+};
 
 function finish(x: Float64Array, win: number, samples: number): Samples {
   let peak = 0;
@@ -474,112 +474,75 @@ async function glRefine(
   const { meta } = spec;
   const { win, hop, bins, frames, samples } = meta;
   const core = new Frames(win);
-  const full = core.bins;
-  const padded = samples + win;
-  const acc = new Float64Array(padded);
-  const prevRe = new Float32Array(frames * full);
-  const prevIm = new Float32Array(frames * full);
+  try {
+    const full = core.bins;
+    const padded = samples + win;
+    const acc = new Float64Array(padded);
+    const prevRe = new Float32Array(frames * full);
+    const prevIm = new Float32Array(frames * full);
 
-  const cover = coverage(win, hop, frames, padded);
-  let top = 0;
-  for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-  const floor = top * 0.05;
+    const cover = coverage(win, hop, frames, padded);
+    let top = 0;
+    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
+    const floor = top * 0.05;
 
-  const deadline = Date.now() + budgetMs;
-  let next = 0;
+    const deadline = Date.now() + budgetMs;
+    let next = 0;
+    let { re, im } = core.data();
 
-  for (let it = 0; it < iters; it++) {
-    acc.fill(0);
-    for (let f = 0; f < frames; f++) {
-      const base = f * bins;
-      const at = f * full;
-      core.analyse(x, f * hop);
-      for (let b = 0; b < full; b++) {
-        const cr = core.re[b]!;
-        const ci = core.im[b]!;
-        const d = Math.sqrt(cr * cr + ci * ci) || 1e-30;
-        // 硬投影：幅度一律改写成档中心。软约束：已在 [lo, hi] 内就原样留着。
-        const m =
-          b >= bins ? 0 : band ? clampBand(d, band.lo[base + b]!, band.hi[base + b]!) : target[base + b]!;
-        let pr = (cr / d) * m;
-        let pi = (ci / d) * m;
+    for (let it = 0; it < iters; it++) {
+      acc.fill(0);
+      for (let f = 0; f < frames; f++) {
+        const base = f * bins;
+        const at = f * full;
+        core.analyse(x, f * hop);
+        for (let b = 0; b < full; b++) {
+          const cr = re[b]!;
+          const ci = im[b]!;
+          const d = Math.sqrt(cr * cr + ci * ci) || 1e-30;
+          // 硬投影：幅度一律改写成档中心。软约束：已在 [lo, hi] 内就原样留着。
+          const m = b >= bins ? 0 : band ? fitBand(band, d, base + b) : target[base + b]!;
+          let pr = (cr / d) * m;
+          let pi = (ci / d) * m;
 
-        if (anchor && b < bins) {
-          const wv = (anchor.w[base + b]! / 255) * TUNE.anchorLambda;
-          if (wv > 0.01) {
-            const ar = ((anchor.cos[base + b]! - 127.5) / 127.5) * m;
-            const ai = ((anchor.sin[base + b]! - 127.5) / 127.5) * m;
-            const ah = Math.sqrt(ar * ar + ai * ai) || 1e-30;
-            pr += wv * ((ar / ah) * m - pr);
-            pi += wv * ((ai / ah) * m - pi);
+          if (anchor && b < bins) {
+            const wv = (anchor.w[base + b]! / 255) * TUNE.anchorLambda;
+            if (wv > 0.01) {
+              const ar = ((anchor.cos[base + b]! - 127.5) / 127.5) * m;
+              const ai = ((anchor.sin[base + b]! - 127.5) / 127.5) * m;
+              const ah = Math.sqrt(ar * ar + ai * ai) || 1e-30;
+              pr += wv * ((ar / ah) * m - pr);
+              pi += wv * ((ai / ah) * m - pi);
+            }
           }
-        }
 
-        let nr = pr;
-        let ni = pi;
-        if (it > 0) {
-          nr += TUNE.momentum * (pr - prevRe[at + b]!);
-          ni += TUNE.momentum * (pi - prevIm[at + b]!);
+          let nr = pr;
+          let ni = pi;
+          if (it > 0) {
+            nr += TUNE.momentum * (pr - prevRe[at + b]!);
+            ni += TUNE.momentum * (pi - prevIm[at + b]!);
+          }
+          prevRe[at + b] = pr;
+          prevIm[at + b] = pi;
+          re[b] = nr;
+          im[b] = ni;
         }
-        prevRe[at + b] = pr;
-        prevIm[at + b] = pi;
-        core.re[b] = nr;
-        core.im[b] = ni;
+        core.add(acc, f * hop);
       }
-      core.add(acc, f * hop);
-    }
-    for (let i = 0; i < padded; i++) x[i] = cover[i]! > floor ? acc[i]! / cover[i]! : 0;
+      for (let i = 0; i < padded; i++) x[i] = cover[i]! > floor ? acc[i]! / cover[i]! : 0;
 
-    onProgress?.((it + 1) / iters);
-    if (Date.now() >= next) {
-      if (alive && !alive()) throw new Aborted();
-      await yieldToUi();
-      next = Date.now() + SLICE_MS;
+      onProgress?.((it + 1) / iters);
+      if (Date.now() >= next) {
+        if (alive && !alive()) throw new Aborted();
+        await yieldToUi();
+        ({ re, im } = core.data());
+        next = Date.now() + SLICE_MS;
+      }
+      if (it + 1 >= GL_MIN_ITERS && Date.now() > deadline) break;
     }
-    if (it + 1 >= GL_MIN_ITERS && Date.now() > deadline) break;
+  } finally {
+    core.close();
   }
-}
-
-/**
- * 拿一组现成相位做一次加权叠接（WOLA）逆变换 —— 不迭代、不做一致性投影。
- * 只服务于消融：`TUNE.rtisi = false` 时它替代 `rtisiLa`，用来量「RTISI-LA 到底贡献了什么」。
- */
-function olaFromPhase(
-  target: Float64Array,
-  phase: Float64Array,
-  frames: number,
-  bins: number,
-  win: number,
-  hop: number,
-  samples: number,
-): Samples {
-  const core = new Frames(win);
-  const padded = samples + win;
-  const acc = new Float64Array(padded);
-  for (let f = 0; f < frames; f++) {
-    const base = f * bins;
-    for (let b = 0; b < bins; b++) {
-      const m = target[base + b]!;
-      core.re[b] = m * Math.cos(phase[base + b]!);
-      core.im[b] = m * Math.sin(phase[base + b]!);
-    }
-    for (let b = bins; b < core.bins; b++) {
-      core.re[b] = 0;
-      core.im[b] = 0;
-    }
-    core.add(acc, f * hop);
-  }
-
-  const cover = coverage(win, hop, frames, padded);
-  let top = 0;
-  for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-  const floor = top * 0.05;
-  const y = new Float32Array(samples);
-  for (let i = 0; i < samples; i++) {
-    const c = cover[win / 2 + i]!;
-    y[i] = c > floor ? acc[win / 2 + i]! / c : 0;
-  }
-  return y;
 }
 
 async function invert(
@@ -606,8 +569,7 @@ async function invert(
         iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
         budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
         warm,
-        lo: band?.lo ?? null,
-        hi: band?.hi ?? null,
+        band,
         tick: (m, total) => {
           if (Date.now() < next) return;
           if (alive && !alive()) throw new Aborted();

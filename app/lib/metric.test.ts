@@ -1,8 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
 import type { Samples } from "./arrays";
+import { attachKernel, loadDsp } from "./dsp";
 import { align, barkDistance, envelopeCorr } from "./metric";
 import { VOICE } from "./params";
 import { encode, synthesise } from "./spectrum";
+
+// `synthesise` 的还原只有内核里那一份实现（`moon/rtisi.mbt`），没有参照实现可退。
+beforeAll(async () => {
+  attachKernel(await loadDsp(compileWasm()));
+});
 
 const SR = 16000;
 

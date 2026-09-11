@@ -1,109 +1,106 @@
-import { describe, expect, test } from "vitest";
-import { STUB_ROWS, decodeStub, drawStub, stubBits, stubFits } from "./stub";
+import { beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
+import type { Pixels } from "./arrays";
+import { attachKernel, loadDsp, type Dsp } from "./dsp";
+import { decodeStub, drawStub, stubFits, stubLuma, stubRows } from "./stub";
 
-function draw(w: number, h: number, sr: number, win: number, exact: boolean): Uint8ClampedArray {
-  const px = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) {
-    px[i * 4] = 180;
-    px[i * 4 + 1] = 90;
-    px[i * 4 + 2] = 40;
-    px[i * 4 + 3] = 255;
-  }
-  drawStub(px, w, h, sr, win, exact);
-  return px;
-}
+/**
+ * 票根的**实现**整段在内核里，行为断言（逐宽度「装得下 ⟺ 认得回来」、CRC 拦坏位流、
+ * 两份冗余、三档宽度前缀）全在 `moon/stub_wbtest.mbt`。这里只剩跨边界的那一段：
+ *
+ *   ① 内核画出来的 `w × rows` RGBA 被搬到 ImageData 的**底部 8 行**（不是顶部、不是错行）；
+ *   ② 内核返回的打包 i32 被拆成 `{width, sr, win, exact}`（梯子问内核要）；
+ *   ③ `stubFits` 与 `stubLuma` 两条判据说的是同一件事。
+ *
+ * 这三件事在 `moon/` 里证不了 —— 它们说的正是「内核之外那一层」。
+ */
+describe("票根（跨边界的那一段）", () => {
+  let dsp: Dsp;
+  beforeAll(async () => {
+    dsp = await loadDsp(compileWasm());
+    attachKernel(dsp);
+  });
 
-function resampleProfile(px: Uint8ClampedArray, w: number, h: number, rows: number, s: number, noise: number): number[] {
-  const band = (y: number, x: number): number => {
-    const p = (y * w + x) * 4;
-    return 0.299 * px[p]! + 0.587 * px[p + 1]! + 0.114 * px[p + 2]!;
+  /** 一块「图」：只有底部 `rows` 行该被票根覆盖，其余填成醒目的哨兵值。 */
+  const sheet = (w: number, h: number, rows: number) => {
+    const px = new Uint8ClampedArray(w * h * 4) as Pixels;
+    px.fill(7);
+    return { px, rows, top: (h - rows) * w * 4 };
   };
-  const out: number[] = [];
-  for (let x = 0; x < Math.round(w * s); x++) {
-    const x0 = x / s;
-    const x1 = (x + 1) / s;
-    let sum = 0;
-    let n = 0;
-    for (let xi = Math.floor(x0); xi < Math.max(Math.floor(x0) + 1, Math.ceil(x1)) && xi < w; xi++) {
-      let rowSum = 0;
-      for (let y = h - rows; y < h; y++) rowSum += band(y, xi);
-      rowSum /= rows;
-      sum += rowSum;
-      n++;
-    }
-    const base = n > 0 ? sum / n : 0;
-    out.push(base + (Math.sin(x * 12.9898) * noise));
-  }
-  return out;
-}
 
-describe("stubBits / drawStub / decodeStub", () => {
-  test("1:1 精确往返", () => {
+  test("行数与格式一致：画在底部那几行，上面一格都不动", () => {
     const w = 400;
-    const px = draw(w, 130, 44100, 512, true);
-    const profile: number[] = [];
+    const h = 40;
+    const rows = stubRows();
+    expect(rows).toBeGreaterThan(0);
+    const { px, top } = sheet(w, h, rows);
+
+    drawStub(px, w, h, 44100, 512, true);
+
+    // 块内每一个像素都是不透明的、且 R = G = B（票根只有亮度这一维）
+    for (let i = top; i < px.length; i += 4) {
+      expect(px[i + 3]).toBe(255);
+      expect(px[i + 1]).toBe(px[i]);
+      expect(px[i + 2]).toBe(px[i]);
+    }
+    for (let i = 0; i < top; i++) expect(px[i]).toBe(7);
+  });
+
+  /** 抽回一条亮度剖面（内核认的就是这个，不是像素块）。 */
+  const profileOf = (px: Pixels, w: number, top: number): Float64Array => {
+    const rows = stubRows();
+    const prof = new Float64Array(w);
     for (let x = 0; x < w; x++) {
       let s = 0;
-      for (let y = 130 - STUB_ROWS; y < 130; y++) {
-        const p = (y * w + x) * 4;
-        s += 0.299 * px[p]! + 0.587 * px[p + 1]! + 0.114 * px[p + 2]!;
-      }
-      profile.push(s / STUB_ROWS);
+      for (let y = 0; y < rows; y++) s += px[top + y * w * 4 + x * 4]!;
+      prof[x] = s / rows;
     }
-    const info = decodeStub(profile);
-    expect(info).not.toBeNull();
-    expect(info!.width).toBe(w);
-    expect(info!.sr).toBe(44100);
-    expect(info!.win).toBe(512);
-    expect(info!.exact).toBe(true);
-  });
+    return prof;
+  };
 
-  test("缩放 0.5× / 0.75× / 0.9× + 模拟 JPEG 抖动后仍能解码", () => {
-    for (const s of [0.5, 0.75, 0.9]) {
-      const w = 600;
-      const h = 130;
-      const px = draw(w, h, 48000, 1024, false);
-      const profile = resampleProfile(px, w, h, STUB_ROWS, s, 6);
-      const info = decodeStub(profile);
-      expect(info, `scale ${s}`).not.toBeNull();
-      expect(info!.sr).toBe(48000);
-      expect(info!.win).toBe(1024);
-      expect(info!.width).toBe(w);
+  test("打包结果拆得回来（三档宽度前缀各走一遍，含双窗口）", () => {
+    for (const [w, sr, win] of [
+      [255, 96000, 2048],
+      [4095, 44100, 512],
+      [65535, 48000, 1024],
+    ] as const) {
+      const rows = stubRows();
+      const { px, top } = sheet(w, rows + 16, rows);
+      drawStub(px, w, rows + 16, sr, win, true);
+      expect(decodeStub(profileOf(px, w, top)), `w=${w}`).toEqual({
+        width: w,
+        sr,
+        win,
+        exact: true,
+      });
     }
   });
 
-  test("窄图一遍也能解（底 4 行即票根；混入内容行时靠递减行数策略）", () => {
-    const w = 160;
-    const px = draw(w, 90, 8000, 256, false);
-    const rows = (y0: number, y1: number): number[] => {
-      const out: number[] = [];
-      for (let x = 0; x < w; x++) {
-        let s = 0;
-        for (let y = y0; y < y1; y++) {
-          const p = (y * w + x) * 4;
-          s += 0.299 * px[p]! + 0.587 * px[p + 1]! + 0.114 * px[p + 2]!;
-        }
-        out.push(s / (y1 - y0));
+  /**
+   * `stubFits` 是产品侧唯一会用到的判据（`image.ts` 拿它决定留不留那几行）。
+   * 它说装得下，就**必须**真的画得出来、认得回来 —— 反方向不成立，也不必成立：
+   * 「画得下但剖面太短」是合法的中间态（`span + 2 ≤ w < 46`），那正是 `stub_min_decode`
+   * 存在的理由。真正的双向等价在 `moon/stub_wbtest.mbt`，那里逐宽度走了一遍。
+   */
+  test("stubFits 说装得下，画下去就真的画得出来、也认得回来", () => {
+    const rows = stubRows();
+    for (const w of [46, 60, 100, 255, 400, 4095, 65535]) {
+      if (!stubFits(w)) {
+        // 这个宽度本该被产品侧挡掉，那就不该有人去画它
+        expect(stubLuma(w, 44100, 512, false), `w=${w} 不该能画`).toBeNull();
+        continue;
       }
-      return out;
-    };
-    const info = decodeStub(rows(90 - STUB_ROWS, 90));
-    expect(info).not.toBeNull();
-    expect(info!.sr).toBe(8000);
-    expect(info!.win).toBe(256);
-    expect(decodeStub(rows(0, STUB_ROWS))).toBeNull();
+      const { px, top } = sheet(w, rows + 16, rows);
+      drawStub(px, w, rows + 16, 44100, 512, false);
+      let lit = 0;
+      for (let i = top; i < px.length; i += 4) if (px[i] !== 20) lit++;
+      expect(lit, `w=${w} 一个亮像素都没有`).toBeGreaterThan(0);
+      expect(decodeStub(profileOf(px, w, top)), `w=${w}`).not.toBeNull();
+    }
   });
 
-  test("位流参数放不下时返回 null", () => {
-    expect(stubBits(400, 12345, 512, false)).toBeNull();
-    expect(stubBits(400, 44100, 300, false)).toBeNull();
-    expect(stubBits(1, 44100, 512, false)).toBeNull();
-  });
-
-  test("太窄的图不写票根", () => {
-    expect(stubFits(100)).toBe(true);
-    expect(stubFits(160)).toBe(true);
-    expect(stubFits(42)).toBe(true);
-    expect(stubFits(30)).toBe(false);
+  test("认不出来的剖面给 null，而不是一个坏结果", () => {
+    expect(decodeStub(new Array(400).fill(111.2))).toBeNull();
+    expect(decodeStub([])).toBeNull();
   });
 });

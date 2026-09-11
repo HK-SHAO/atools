@@ -1,14 +1,19 @@
 import type { Samples } from "../lib/arrays";
+import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
+
+/** 质检要的三个数。口径在 `app/lib/metric.ts`，与 `bun run quality` 是同一份。 */
+export type { Metrics };
 
 /**
  * 数值流水线的主线程代理。
  *
- * 重采样、编码、还原、出图原先都在主线程上跑：编码与还原各自**已经**每 12 ms 让一次出
- * （`yieldToUi`），所以界面不是死的，但每次让出前都实打实占了 12 ms —— 60 fps 的预算是
- * 16.7 ms，等于把渲染整段挤掉；重采样更是几十毫秒一口气算完，中间一次都不让。搬进 Worker
- * 之后主线程一帧都不再让，每条让出自己的那次 `setTimeout` 往返也一并省了。
+ * 重采样、编码、还原、出图、**质检指标**原先都在主线程上跑：编码与还原各自**已经**每 12 ms
+ * 让一次出（`yieldToUi`），所以界面不是死的，但每次让出前都实打实占了 12 ms —— 60 fps 的
+ * 预算是 16.7 ms，等于把渲染整段挤掉；重采样更是几十毫秒一口气算完，中间一次都不让。
+ * 质检的 `align` 更狠：它在 `±span` 个时延上各扫一遍全长信号（`span` 到 2048，也就是
+ * 四千多倍素材长度），一次调用就把主线程按在地上。搬进 Worker 之后主线程一帧都不再让。
  *
  * 走这条路的都是**纯函数**（`app/lib/` 无 DOM 依赖），搬过去不用改一行算法。有 DOM 的部分
  * （读图要 canvas、可逆档出 PNG 要 `toBlob`、解码要 `AudioContext`）留在主线程，见 `useStudio`。
@@ -23,7 +28,8 @@ export type Job =
   | { kind: "resample"; pcm: Samples; from: number; to: number; fmax: number }
   | { kind: "encode"; pcm: Samples; sr: number; enc: Encode }
   | { kind: "synthesise"; spec: Spectrum; fine: boolean }
-  | { kind: "png"; spec: Spectrum };
+  | { kind: "png"; spec: Spectrum }
+  | { kind: "compare"; ref: Samples; got: Samples };
 
 export type JobRequest = { id: number } & Job;
 
@@ -31,7 +37,7 @@ export type ToWorker = JobRequest | { kind: "cancel"; ids: number[] };
 
 export type FromWorker =
   | { id: number; kind: "progress"; value: number }
-  | { id: number; kind: "done"; value: Spectrum | Samples | Blob }
+  | { id: number; kind: "done"; value: Spectrum | Samples | Blob | Metrics }
   | { id: number; kind: "error"; message: string }
   | { id: number; kind: "aborted" };
 
@@ -45,6 +51,8 @@ export interface Scope {
   ): Promise<Spectrum>;
   synthesise(spec: Spectrum, fine: boolean, onProgress?: (value: number) => void): Promise<Samples>;
   png(spec: Spectrum): Promise<Blob>;
+  /** 一段还原音与它的参照相比掉了多少。`align` 是主线程最不该碰的那种循环。 */
+  compare(ref: Samples, got: Samples): Promise<Metrics>;
   /** 作废这个 scope 里所有在算的活：新一代开始，旧的当场作废。 */
   cancel(): void;
 }
@@ -136,6 +144,7 @@ export function scope(name: string): Scope {
     synthesise: (spec, fine, onProgress) =>
       send<Samples>({ kind: "synthesise", spec, fine }, onProgress),
     png: spec => send<Blob>({ kind: "png", spec }),
+    compare: (ref, got) => send<Metrics>({ kind: "compare", ref, got }),
     cancel: () => {
       const live = wire;
       if (!live) return;
@@ -147,3 +156,12 @@ export function scope(name: string): Scope {
   scopes.set(name, made);
   return made;
 }
+
+// 模块一被引入就把 Worker 建起来，而不是等第一次 `send`。
+//
+// 它启动时要编 wasm（39 KB）、建三档窗长的表组、做掉必然的那一次内存增长 —— 三件事都只
+// 发生一次，而它们没有一件该落在用户第一次点「生成」的那一刻。这样做还有一层：**主线程那一份
+// 内核与这一份是并行加载的**（`app/frontend.tsx`），谁先要谁不等谁。
+//
+// 只有应用壳会引这个模块（评测台走 `bench/entry.ts`，自己挂内核），所以不会白起线程。
+void connect();

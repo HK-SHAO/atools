@@ -1,7 +1,11 @@
-import { describe, expect, test } from "vitest";
-import { recognizeExact, sniff } from "./image";
+import { beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
+import { recognizeExact, metaToText, sniff, spectrumToPng } from "./image";
 import type { Pixels } from "./arrays";
+import { startKernel } from "./dsp";
 import { RAMP } from "./palette";
+import { readMeta } from "./png";
+import type { Meta, Spectrum } from "./spectrum";
 
 const ftyp = (major: string) => {
   const b = new Uint8Array(16);
@@ -117,6 +121,47 @@ describe("recognizeExact（可逆图像素签名）", () => {
 
   test("太小的不认", () => {
     expect(recognizeExact(exactPixels(2, 8) as Pixels, 2, 8)).toBe(false);
+  });
+});
+
+/**
+ * 出图链（紧凑档）走一遍：`spectrumToPng` → `stubFits` → `stubLuma` → `stubRows` → PNG。
+ *
+ * 这条链上每一步都要问内核，而它属于**主线程那一份内核**的消费者（读图链是另一个）——
+ * 所以这里刻意不手工 `attachKernel`，只让入口起一次：门禁要的正是「入口起过就够了」。
+ * 少了那次 `startKernel`（或 `spectrumToPng` 漏了 `kernelReady()`），这条当场红。
+ *
+ * 可逆档那条分支要 canvas（`toBlob`），只在浏览器里跑得起来，由评测台覆盖。
+ */
+describe("紧凑档出图", () => {
+  // **不 await**：这就是真页面里的时序 —— wasm 还在路上，用户已经把文件拖进来了。
+  // `spectrumToPng` 自己会在开头等内核，所以这条用例顺带把那次等待钉住。
+  beforeAll(() => {
+    void startKernel(compileWasm(), { fft: false });
+  });
+
+  test("图出得来、tEXt 里的 meta 一字不差（票根链没把行数搞错）", async () => {
+    const meta: Meta = {
+      sr: 8000,
+      win: 256,
+      hop: 64,
+      frames: 300,
+      bins: 129,
+      samples: 19200,
+      bits: 8,
+      ref: 0,
+      exact: false,
+    };
+    const spec: Spectrum = {
+      meta,
+      levels: Uint8Array.from({ length: meta.frames * meta.bins }, (_, i) => (i * 7) & 255),
+      phaseCos: null,
+      phaseSin: null,
+    };
+
+    const bytes = new Uint8Array(await (await spectrumToPng(spec)).arrayBuffer());
+    expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(readMeta(bytes)).toBe(metaToText(meta));
   });
 });
 

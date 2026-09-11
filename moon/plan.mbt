@@ -104,30 +104,47 @@ pub fn plan(win : Int) -> Int {
   i
 }
 
+// 四张表都以「数组」的形式交出去，宿主自己取地址切视图（见 arena.mbt 顶部那条约定）。
+// 表建成之后只读、且**永不搬家**，所以宿主取一次就够了 —— 与作业区不同，不必每次重取。
+
 ///|
-#export_name("dsp_plan_rev_ptr")
-pub fn rev_ptr(i : Int) -> Int {
-  let a = plan_rev.unsafe_get(i)
-  addr_of_i32(a)
+fn plan_tables(i : Int) -> Bool {
+  i >= 0 && i < plan_count && plan_rev.unsafe_get(i).length() > 0
 }
 
 ///|
-#export_name("dsp_plan_cos_ptr")
-pub fn cos_ptr(i : Int) -> Int {
-  let a = plan_cos.unsafe_get(i)
-  addr_of_f64(a)
+/// 位反转索引表（`win` 个 i32）。窗长非法或还没立计划时给空表。
+#export_name("dsp_plan_rev")
+pub fn plan_rev_of(i : Int) -> FixedArray[Int] {
+  if !plan_tables(i) {
+    return FixedArray::make(0, 0)
+  }
+  plan_rev.unsafe_get(i)
 }
 
 ///|
-#export_name("dsp_plan_sin_ptr")
-pub fn sin_ptr(i : Int) -> Int {
-  let a = plan_sin.unsafe_get(i)
-  addr_of_f64(a)
+#export_name("dsp_plan_cos")
+pub fn plan_cos_of(i : Int) -> FixedArray[Double] {
+  if !plan_tables(i) {
+    return FixedArray::make(0, 0.0)
+  }
+  plan_cos.unsafe_get(i)
 }
 
 ///|
-#export_name("dsp_plan_hann_ptr")
-pub fn hann_ptr(i : Int) -> Int {
-  let a = plan_hann.unsafe_get(i)
-  addr_of_f64(a)
+#export_name("dsp_plan_sin")
+pub fn plan_sin_of(i : Int) -> FixedArray[Double] {
+  if !plan_tables(i) {
+    return FixedArray::make(0, 0.0)
+  }
+  plan_sin.unsafe_get(i)
+}
+
+///|
+#export_name("dsp_plan_hann")
+pub fn plan_hann_of(i : Int) -> FixedArray[Double] {
+  if !plan_tables(i) {
+    return FixedArray::make(0, 0.0)
+  }
+  plan_hann.unsafe_get(i)
 }
