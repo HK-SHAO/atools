@@ -23,7 +23,8 @@ bun run kernel           # 整链计时，判据是**实时倍率**（实测 0.0
 bun bench/run.ts         # 浏览器端到端评测（`CASES` / `FILES` 可选过滤）
 bun bench/offline.ts     # PWA 门禁：可装、预缓存逐项入缓存、断网可用（先 build:web）
 bun run perf             # 性能体检：重采样倍数与相位组合门禁，外加页面主线程长任务
-bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 重建相位，零异常（先 build:web）
+bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 重建相位 → 切「可逆」→ 质检，零异常
+                         # （先 build:web）；`UI_BASELINE=<改动前的 dist>` 再并排比两行 p.facts
 ```
 
 每个评测台的判据、参数与环境变量见 `bench/README.md`。
