@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { compileWasm } from "../../scripts/moon";
-import { loadDsp, planOf, type Dsp } from "./dsp";
+import { fftBuffers, loadDsp, openSlot, planOf, type Dsp } from "./dsp";
 import { FFT, hannWindow } from "./fft";
 
 /**
@@ -88,15 +88,16 @@ describe("FFT 内核与 TS 参照实现等价", () => {
     });
 
     test(`窗长 ${win}：正变换、反变换与 TS 一致（≤ ${ULP_BOUND} ulp）`, () => {
-      const plan = planOf(dsp, win);
+      const slot = openSlot(dsp, win)!;
+      const { re, im } = fftBuffers(dsp, slot);
       const inputRe = noise(win, 0x9e3779b9 + win);
       const inputIm = noise(win, 0x85ebca6b + win);
 
-      plan.re.set(inputRe);
-      plan.im.set(inputIm);
-      plan.forward();
-      const gotRe = Float64Array.from(plan.re);
-      const gotIm = Float64Array.from(plan.im);
+      re.set(inputRe);
+      im.set(inputIm);
+      dsp.kernel.dsp_fft(slot.id);
+      const gotRe = Float64Array.from(re);
+      const gotIm = Float64Array.from(im);
 
       const refRe = Float64Array.from(inputRe);
       const refIm = Float64Array.from(inputIm);
@@ -106,22 +107,41 @@ describe("FFT 内核与 TS 参照实现等价", () => {
       expect(peakUlps(gotIm, refIm)).toBeLessThanOrEqual(ULP_BOUND);
 
       // 反变换跑在正变换的输出上：除法的位置（/n 而不是 ×(1/n)）在这里才检得出来
-      plan.re.set(gotRe);
-      plan.im.set(gotIm);
-      plan.inverse();
+      re.set(gotRe);
+      im.set(gotIm);
+      dsp.kernel.dsp_ifft(slot.id);
       new FFT(win).transform(refRe, refIm, true);
 
-      expect(peakUlps(plan.re, refRe)).toBeLessThanOrEqual(ULP_BOUND);
-      expect(peakUlps(plan.im, refIm)).toBeLessThanOrEqual(ULP_BOUND);
+      expect(peakUlps(re, refRe)).toBeLessThanOrEqual(ULP_BOUND);
+      expect(peakUlps(im, refIm)).toBeLessThanOrEqual(ULP_BOUND);
 
       // 与参照实现无关的自洽性：正变换 → 反变换必须回到输入
-      expect(peakUlps(plan.re, inputRe)).toBeLessThanOrEqual(ULP_BOUND);
-      expect(peakUlps(plan.im, inputIm)).toBeLessThanOrEqual(ULP_BOUND);
+      expect(peakUlps(re, inputRe)).toBeLessThanOrEqual(ULP_BOUND);
+      expect(peakUlps(im, inputIm)).toBeLessThanOrEqual(ULP_BOUND);
+      slot.close();
     });
   }
 
   test("不接受非法窗长", () => {
     expect(() => planOf(dsp, 100)).toThrow();
     expect(() => planOf(dsp, 8192)).toThrow();
+    expect(() => openSlot(dsp, 100)).toThrow();
+    // 100 与 8192 之外，**梯子上每一档都必须收**：2048 曾因为表组少建一组而越界
+    for (const win of [256, 512, 1024, 2048, 4096]) {
+      const slot = openSlot(dsp, win);
+      expect(slot).not.toBeNull();
+      slot!.close();
+    }
+  });
+
+  test("槽位池满时给 null 而不是崩，关掉一个就能再拿", () => {
+    const held = Array.from({ length: 6 }, () => openSlot(dsp, 512));
+    expect(held.every(slot => slot !== null)).toBe(true);
+    expect(openSlot(dsp, 512)).toBeNull();
+    held[0]!.close();
+    const again = openSlot(dsp, 512);
+    expect(again).not.toBeNull();
+    for (const slot of held) slot?.close();
+    again!.close();
   });
 });

@@ -1,3 +1,4 @@
+import { attachKernel, loadDsp, wasmUrl } from "../lib/dsp";
 import { spectrumToPng } from "../lib/image";
 import { resample } from "../lib/resample";
 import { Aborted, encode, synthesise } from "../lib/spectrum";
@@ -10,6 +11,9 @@ import type { FromWorker, JobRequest, ToWorker } from "./pipeline";
  *
  * 取消是消息式的：`alive` 每 12 ms 被流水线问一次，而流水线每 12 ms 也让出一次事件循环，
  * 于是主线程发的取消消息一定来得及在某一轮让出时被读到。已经算完的活不受影响。
+ *
+ * MoonBit 数值内核也在这里加载：加载失败只是退回 TS 参照实现（慢一截但结果相同），
+ * 不是让整条流水线停摆 —— 所以 `ready` 只等「加载这件事结束」，不等「加载成功」。
  */
 
 interface Scope {
@@ -18,6 +22,12 @@ interface Scope {
 }
 
 const scope = self as unknown as Scope;
+
+// 内核落在应用根的 `wasm/dsp.wasm`；产物里 worker 在 `assets/`、源码里在 `app/ui/`，
+// 都是向上**一级**。dev 与 build 因此各自解析成不同路径，由 `scripts/moon.ts` 的中间件兜住。
+const ready = loadDsp(wasmUrl(new URL("..", import.meta.url).href))
+  .then(attachKernel)
+  .catch((error: unknown) => console.warn("数值内核没起来，退回 TS 参照实现", error));
 
 const cancelled = new Set<number>();
 
@@ -30,6 +40,7 @@ async function run(request: JobRequest): Promise<void> {
   const report = (value: number): void => scope.postMessage({ id, kind: "progress", value });
 
   try {
+    await ready;
     if (request.kind === "resample") {
       // 相位表缓存（最坏 4 MB）跟着住到这里：主线程一次都不再为它停。
       const pcm = resample(request.pcm, request.from, request.to, request.fmax);

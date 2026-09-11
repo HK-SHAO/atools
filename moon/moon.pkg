@@ -1,34 +1,23 @@
 // 宿主（JS）直调的数值库：无 _start、零 import，导出面即全部接口。
-//
-// 内存**不**静态定型。这一点与 shaofeng 的 sfengine 刻意不同：那份内核的缓冲上限是
-// 固定网格（约 17 MB），钉死 min=max 换来「宿主缓存的 typed view 永不 detach」；
-// 本项目的缓冲随素材涨 —— 像素预算 16M 时，目标幅度一张表就是 128 MB。
-// 手机上一开始就要 256 MB 是直接要不到，所以这里换成另一套更稳的契约：
-// **按 job 分配 → 全部就绪后取指针 → 再开始计算**。宿主在每个 job 开始时重读一遍地址，
-// 内存增长造成的 detach 于是落在契约之外，不靠「禁止增长」来保证。
-//
-// 运行时零分配靠的是「所有中间缓冲都在 begin 里一次配齐」，不是靠禁止增长。
+// 内存契约、缓冲上限与降级路径写在 session.mbt 顶部。
 pkgtype(kind: "foreign_library")
 
 supported_targets = "wasm"
 
 import {
   "moonbitlang/core/math",
-  "moonbitlang/core/cmp",
   "moonbitlang/core/v128",
 }
 
 import {
-  "moonbitlang/core/test",
-} for "test"
-
-import {
-  "moonbitlang/core/test",
   "moonbitlang/core/bench",
 } for "wbtest"
 
-// 导出面用 #export_name 逐函数在源码内标注（名字贴着实现）；此处只管内存契约。
+// 导出面用 #export_name 逐函数在源码内标注（名字贴着实现）。
+// alert_experimental 是刻意接受的：热循环要用 @v128 的双精度运算内建（见 fft.mbt 的 last_stage），
+// 它们标着实验性且没有替代品。其余警告一律照显。
 options(
+  warn_list: "-alert_experimental",
   link: {
     "wasm": {
       "export-memory-name": "memory",

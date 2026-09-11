@@ -172,60 +172,65 @@ export async function rtisiLa(
     if (k1 >= 0) unpack(k1, pair.r2, pair.i2);
   };
 
-  for (let m = 0; m < frames; m++) {
-    const act = Math.min(K + 1, frames - m);
-    const at = m * a;
+  try {
+    for (let m = 0; m < frames; m++) {
+      const act = Math.min(K + 1, frames - m);
+      const at = m * a;
 
-    load(at);
-
-    if (m === 0) {
-      if (warm) for (let k = 0; k < act; k++) put(k, k * bins);
-      else for (let k = 0; k < act; k += step) read(k, second(k, act));
-    } else {
-      for (let k = 0; k < act; k++) {
-        const next = (k + 1) * bins;
-        const here = k * bins;
-        if (k <= K - 1) {
-          cos.set(prevCos.subarray(next, next + bins), here);
-          sin.set(prevSin.subarray(next, next + bins), here);
-          amp.set(prevAmp.subarray(next, next + bins), here);
-        } else if (warm) put(k, (m + k) * bins);
-        else {
-          cos.fill(1, here, here + bins);
-          sin.fill(0, here, here + bins);
-          amp.fill(0, here, here + bins);
-        }
-      }
-      // 第 0 帧的相位从已经写进 out 的过去帧重读：逐帧推进才不会在帧界上出爆音。
-      read(0, -1);
-    }
-
-    for (let it = 0; it < iters; it++) {
       load(at);
-      for (let k = 0; k < act; k += step) lay(m, k, second(k, act));
-      for (let k = 0; k < act; k += step) read(k, second(k, act));
-    }
 
-    // 收尾：只写槽位 0，凑不出第二条，走单条复变换。
-    const base = m * bins;
-    for (let b = 0; b < bins; b++) {
-      const g = fit(amp[b]!, base + b);
-      work[b] = g * cos[b]!;
-      workIm[b] = g * sin[b]!;
-    }
-    for (let b = bins; b < full; b++) {
-      work[b] = 0;
-      workIm[b] = 0;
-    }
-    mirrorSpectrum(work, workIm, full, L);
-    solo.transform(work, workIm, true);
-    const room = Math.min(L, padded - at);
-    for (let n = 0; n < room; n++) out[at + n] = out[at + n]! + work[n]! * w[n]!;
+      if (m === 0) {
+        if (warm) for (let k = 0; k < act; k++) put(k, k * bins);
+        else for (let k = 0; k < act; k += step) read(k, second(k, act));
+      } else {
+        for (let k = 0; k < act; k++) {
+          const next = (k + 1) * bins;
+          const here = k * bins;
+          if (k <= K - 1) {
+            cos.set(prevCos.subarray(next, next + bins), here);
+            sin.set(prevSin.subarray(next, next + bins), here);
+            amp.set(prevAmp.subarray(next, next + bins), here);
+          } else if (warm) put(k, (m + k) * bins);
+          else {
+            cos.fill(1, here, here + bins);
+            sin.fill(0, here, here + bins);
+            amp.fill(0, here, here + bins);
+          }
+        }
+        // 第 0 帧的相位从已经写进 out 的过去帧重读：逐帧推进才不会在帧界上出爆音。
+        read(0, -1);
+      }
 
-    prevCos.set(cos);
-    prevSin.set(sin);
-    prevAmp.set(amp);
-    if (tick) await tick(m + 1, frames);
+      for (let it = 0; it < iters; it++) {
+        load(at);
+        for (let k = 0; k < act; k += step) lay(m, k, second(k, act));
+        for (let k = 0; k < act; k += step) read(k, second(k, act));
+      }
+
+      // 收尾：只写槽位 0，凑不出第二条，走单条复变换。
+      const base = m * bins;
+      for (let b = 0; b < bins; b++) {
+        const g = fit(amp[b]!, base + b);
+        work[b] = g * cos[b]!;
+        workIm[b] = g * sin[b]!;
+      }
+      for (let b = bins; b < full; b++) {
+        work[b] = 0;
+        workIm[b] = 0;
+      }
+      mirrorSpectrum(work, workIm, full, L);
+      solo.transform(work, workIm, true);
+      const room = Math.min(L, padded - at);
+      for (let n = 0; n < room; n++) out[at + n] = out[at + n]! + work[n]! * w[n]!;
+
+      prevCos.set(cos);
+      prevSin.set(sin);
+      prevAmp.set(amp);
+      if (tick) await tick(m + 1, frames);
+    }
+  } finally {
+    // 槽位是内核里有限的资源（6 个），拿去就必须还 —— 中途被作废也一样。
+    pair.dispose();
   }
 
   const cover = coverage(L, a, frames, padded);

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
@@ -7,6 +8,20 @@ import type { Plugin } from "vite";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const moonDir = path.join(root, "moon");
 const artifact = path.join(moonDir, "_build/wasm/release/build/dsp.wasm");
+
+/**
+ * moon 的安装位置跟 PATH 无关：官方安装器把它放进 `~/.moon/bin`，而 `bun run` 起的进程
+ * 未必继承到那条 PATH。这里自己找一遍，别让「工具链没装在 PATH 里」伪装成「内核编译失败」。
+ */
+const moonBin = (): string => {
+  if (process.env.MOON) return process.env.MOON;
+  const exe = process.platform === "win32" ? "moon.exe" : "moon";
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (dir && existsSync(path.join(dir, exe))) return path.join(dir, exe);
+  }
+  const installed = path.join(homedir(), ".moon", "bin", exe);
+  return existsSync(installed) ? installed : exe;
+};
 
 /** 内核在应用里的落点。固定名而非内容哈希：它由 HTML 的 preload 引用，必须能进应用壳。 */
 export const WASM_FILE = "wasm/dsp.wasm";
@@ -39,14 +54,14 @@ export function compileWasm(opts: { force?: boolean } = {}): Uint8Array<ArrayBuf
 
   rmSync(path.join(moonDir, "_build"), { recursive: true, force: true });
   const started = Date.now();
-  const done = spawnSync(process.env.MOON ?? "moon", ["build", "--release", "--target", "wasm"], {
+  const done = spawnSync(moonBin(), ["build", "--release", "--target", "wasm"], {
     cwd: moonDir,
     encoding: "utf8",
   });
   // 工具链缺失时 spawnSync 给的是 error（不是 status≠0），单独报，别让空白的 stdout 糊过去
   if (done.error)
     throw new Error(
-      `找不到 moon 工具链：装好 MoonBit 并把 moon 放进 PATH（本机在 ~/.moon/bin）。\n${done.error.message}`,
+      `找不到 moon 工具链：装好 MoonBit（本机在 ~/.moon/bin）或用 MOON 指路径。\n${done.error.message}`,
     );
   if (done.status !== 0) throw new Error(`moon 编译失败：\n${done.stdout ?? ""}\n${done.stderr ?? ""}`);
 
@@ -81,7 +96,9 @@ export function moonKernel(): Plugin {
     configureServer(server) {
       bytes = ensureWasm();
       server.middlewares.use((req, res, next) => {
-        if (req.url?.split("?")[0] !== `/${WASM_FILE}`) return next();
+        // 按后缀收：worker 用 `new URL("..", import.meta.url)` 解析内核落点，源码里解析成
+        // `/app/wasm/dsp.wasm`、产物里解析成 `/wasm/dsp.wasm`，两者都该由这里供上。
+        if (!req.url?.split("?")[0]?.endsWith(`/${WASM_FILE}`)) return next();
         res.setHeader("content-type", "application/wasm");
         res.end(bytes);
       });
@@ -129,12 +146,12 @@ if (import.meta.main) {
   // 与编译共用，免得在 package.json 里再写一遍裸 `moon`。
   const task = flags.includes("--bench") ? "bench" : flags.includes("--test") ? "test" : null;
   if (task) {
-    const done = spawnSync(process.env.MOON ?? "moon", [task, "--release", "--target", "wasm"], {
+    const done = spawnSync(moonBin(), [task, "--release", "--target", "wasm"], {
       cwd: moonDir,
       stdio: "inherit",
     });
     if (done.error)
-      throw new Error(`找不到 moon 工具链：装好 MoonBit 并把 moon 放进 PATH（本机在 ~/.moon/bin）。`);
+      throw new Error(`找不到 moon 工具链：装好 MoonBit（本机在 ~/.moon/bin）或用 MOON 指路径。`);
     process.exit(done.status ?? 1);
   }
   const bytes = ensureWasm({ force: flags.includes("--force") });

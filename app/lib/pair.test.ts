@@ -1,4 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { compileWasm } from "../../scripts/moon";
+import { attachKernel, loadDsp } from "./dsp";
 import { FFT, mirrorSpectrum } from "./fft";
 import { Pair } from "./pair";
 
@@ -47,7 +49,8 @@ function residueUlps(im: ArrayLike<number>, re: ArrayLike<number>): number {
   return worst / peak / EPSILON;
 }
 
-const noise = (n: number, seed: number): Float64Array => {  const out = new Float64Array(n);
+const noise = (n: number, seed: number): Float64Array => {
+  const out = new Float64Array(n);
   let s = seed >>> 0;
   for (let i = 0; i < n; i++) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
@@ -80,7 +83,36 @@ function soloInverse(
   return { re: full, im: fimi };
 }
 
-describe("两条实序列打成一个复变换", () => {
+/**
+ * 同一批用例跑两遍：`kernel` 走内核（`moon/pair.mbt`，默认真身），`reference` 走本仓的
+ * TS 实现。两遍都对着同一条老路量 ulp，所以「把算法搬进 wasm」这件事在这里是被证的，
+ * 而不是被相信的。
+ *
+ * `make` 里的 `expect(pair.via).toBe(mode)` 是这套门禁的支点：内核槽位只有 6 个，
+ * 漏掉 `dispose` 就会静默退回参照实现 —— 那样 `kernel` 那一遍等于什么都没验，而它仍然全绿。
+ */
+describe.each(["kernel", "reference"] as const)("两条实序列打成一个复变换（%s）", mode => {
+  const live: Pair[] = [];
+
+  beforeAll(async () => {
+    attachKernel(mode === "kernel" ? await loadDsp(compileWasm()) : null);
+  });
+
+  afterAll(() => attachKernel(null));
+
+  afterEach(() => {
+    for (const pair of live) pair.dispose();
+    live.length = 0;
+  });
+
+  /** 造一个 `Pair`，并盯住它真的走了这一遍该走的那条路。 */
+  const make = (size: number): Pair => {
+    const pair = new Pair(size);
+    expect(pair.via).toBe(mode);
+    live.push(pair);
+    return pair;
+  };
+
   for (const win of WINS) {
     /**
      * 反变换侧是整次改造的**回归锚点**：第二条喂零时 `Pair` 与老路必须逐位相同。
@@ -89,17 +121,22 @@ describe("两条实序列打成一个复变换", () => {
      * 连 DC 与奈奎斯特点的置零都落在同一处。这条钉住了 Hermite 那套约定没写歪 ——
      * 写歪了不会报错，只会让直流慢慢飘走。
      */
-    test(`窗长 ${win}：反变换在第二条喂零时与老路逐位相同`, () => {
+    test(`窗长 ${win}：反变换在第二条喂零时与老路一致`, () => {
       const size = win;
       const half = size / 2 + 1;
       const r = noise(half, 0x846ca68b + win);
       const i = noise(half, 0x9e3779b9 + win);
-      const pair = new Pair(size);
+      const pair = make(size);
       pair.r1.set(r);
       pair.i1.set(i);
       pair.inverse();
       const ref = soloInverse(r, i, size);
-      expect(differing(pair.x1, ref.re)).toBe(0);
+      // 参照实现与老路共用同一份旋转因子表（同一台 V8、同一个 `Math.cos`），所以逐位相同。
+      // 内核那份表是 MoonBit 的 `@math.cos` 建的，实测约 4% 的输入与 V8 差 1 ulp，于是整次变换
+      // 落在 8 ulp 内而**不再逐位** —— 那是唯一的差异来源（见 fft.test.ts 的说明），
+      // 所以这一条按实现分档，而不是把「逐位」这个强承诺悄悄放宽。
+      if (mode === "reference") expect(differing(pair.x1, ref.re)).toBe(0);
+      else expect(peakUlps(pair.x1, ref.re)).toBeLessThanOrEqual(ULP_BOUND);
     });
 
     /**
@@ -114,7 +151,7 @@ describe("两条实序列打成一个复变换", () => {
       const half = size / 2 + 1;
       const zeros = new Float64Array(size);
       const y = noise(size, 0x7feb352d + win);
-      const pair = new Pair(size);
+      const pair = make(size);
       pair.forward(y, zeros);
       const solo = soloForward(y, size);
       expect(peakUlps(pair.r1, solo.re.subarray(0, half))).toBeLessThanOrEqual(FORWARD_ULP);
@@ -127,7 +164,7 @@ describe("两条实序列打成一个复变换", () => {
       const y1 = noise(size, 0x9e3779b9 + win);
       const y2 = noise(size, 0xc2b2ae35 + win);
 
-      const pair = new Pair(size);
+      const pair = make(size);
       pair.forward(y1, y2);
 
       const a = soloForward(y1, size);
@@ -144,7 +181,7 @@ describe("两条实序列打成一个复变换", () => {
       const y1 = noise(size, 0x27d4eb2f + win);
       const y2 = noise(size, 0x165667b1 + win);
 
-      const pair = new Pair(size);
+      const pair = make(size);
       pair.forward(y1, y2);
       pair.inverse();
 
@@ -163,7 +200,7 @@ describe("两条实序列打成一个复变换", () => {
       const r2 = noise(half, 0xcc9e2d51 + win);
       const i2 = noise(half, 0x85ebca6b + win);
 
-      const pair = new Pair(size);
+      const pair = make(size);
       pair.r1.set(r1);
       pair.i1.set(i1);
       pair.r2.set(r2);

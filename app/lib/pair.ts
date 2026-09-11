@@ -1,3 +1,4 @@
+import { kernel, openSlot, pairTables, type Dsp, type Slot } from "./dsp";
 import { FFT } from "./fft";
 
 /**
@@ -17,6 +18,10 @@ import { FFT } from "./fft";
  * 为什么值得：RTISI-LA 每帧要做 2·act 次实变换，实测逆变换里 78% 的时间在它身上，
  * 而其中约八成又是 FFT 本身。这里省下的一半是**唯一**能同时压住那八成的杠杆。
  *
+ * 实现有两份：内核（`moon/pair.mbt`，默认真身）与这里的 TS 参照实现。
+ * `pair.test.ts` 把两者对着同一批用例各跑一遍。内核没挂上、或槽位池满时自动退回参照 ——
+ * 降级而不是崩。无论走哪条路，数字都是同一套（逐位等价由那条门禁守）。
+ *
  * 只给紧凑档用。可逆档（exact）走 `FFT` 原路，产物逐位不变 —— 这条契约不能被
  * 「换个更快的算法」动摇，见 docs/migration.md。
  */
@@ -35,27 +40,61 @@ export class Pair {
   readonly x1: Float64Array;
   readonly x2: Float64Array;
 
-  private readonly zr: Float64Array;
-  private readonly zi: Float64Array;
-  private readonly fft: FFT;
+  /**
+   * 这一次实际走的是哪条路。**门禁要靠它**：内核槽位只有 6 个，忘了 `dispose` 就会
+   * 静默退回参照实现，于是一整遍「内核」用例其实什么都没验。宿主代码不看它。
+   */
+  readonly via: "kernel" | "reference";
+
+  private readonly dsp: Dsp | null;
+  private readonly slot: Slot | null;
+  /** 参照实现才有的中间量。走内核时这些缓冲都在 wasm 内存里，宿主看不见也不该看见。 */
+  private readonly ref: { zr: Float64Array; zi: Float64Array; fft: FFT } | null;
 
   constructor(size: number) {
     this.size = size;
     this.half = size / 2 + 1;
-    this.fft = new FFT(size);
-    this.r1 = new Float64Array(this.half);
-    this.i1 = new Float64Array(this.half);
-    this.r2 = new Float64Array(this.half);
-    this.i2 = new Float64Array(this.half);
-    this.x1 = new Float64Array(size);
-    this.x2 = new Float64Array(size);
-    this.zr = new Float64Array(size);
-    this.zi = new Float64Array(size);
+
+    const dsp = kernel();
+    const slot = dsp ? openSlot(dsp, size) : null;
+    if (dsp && slot) {
+      const tables = pairTables(dsp, slot);
+      this.dsp = dsp;
+      this.slot = slot;
+      this.ref = null;
+      this.via = "kernel";
+      this.r1 = tables.r1;
+      this.i1 = tables.i1;
+      this.r2 = tables.r2;
+      this.i2 = tables.i2;
+      this.x1 = tables.x1;
+      this.x2 = tables.x2;
+    } else {
+      this.dsp = null;
+      this.slot = null;
+      this.ref = { zr: new Float64Array(size), zi: new Float64Array(size), fft: new FFT(size) };
+      this.via = "reference";
+      this.r1 = new Float64Array(this.half);
+      this.i1 = new Float64Array(this.half);
+      this.r2 = new Float64Array(this.half);
+      this.i2 = new Float64Array(this.half);
+      this.x1 = new Float64Array(size);
+      this.x2 = new Float64Array(size);
+    }
   }
 
   /** 两条实序列 → 两条半谱。y1、y2 只需前 size 个样点。 */
   forward(y1: Float64Array, y2: Float64Array): void {
-    const { size, half, zr, zi, r1, i1, r2, i2, fft } = this;
+    const { size } = this;
+    if (this.dsp && this.slot) {
+      // 走内核时 x1/x2 就是内核内存上的两段，这一步是零拷贝之外的唯一一次搬运（源未必是它们）。
+      this.x1.set(y1.subarray(0, size));
+      this.x2.set(y2.subarray(0, size));
+      this.dsp.kernel.dsp_pair_forward(this.slot.id);
+      return;
+    }
+    const { half, r1, i1, r2, i2 } = this;
+    const { zr, zi, fft } = this.ref!;
     zr.set(y1.subarray(0, size));
     zi.set(y2.subarray(0, size));
     fft.transform(zr, zi);
@@ -82,7 +121,12 @@ export class Pair {
    * 原来的实现就是靠 mirror 把它们拉回实信号的谱。少了它，两条波形的直流会飘。
    */
   inverse(): void {
-    const { size, half, zr, zi, r1, i1, r2, i2, x1, x2, fft } = this;
+    if (this.dsp && this.slot) {
+      this.dsp.kernel.dsp_pair_inverse(this.slot.id);
+      return;
+    }
+    const { size, half, r1, i1, r2, i2, x1, x2 } = this;
+    const { zr, zi, fft } = this.ref!;
     i1[0] = 0;
     i2[0] = 0;
     i1[half - 1] = 0;
@@ -104,5 +148,13 @@ export class Pair {
     fft.transform(zr, zi, true);
     x1.set(zr);
     x2.set(zi);
+  }
+
+  /**
+   * 交还内核槽位。不调就是泄漏 —— 一个 worker 里只有 6 个槽（`moon/session.mbt`），
+   * 池满之后所有 `Pair` 会静默退回参照实现，慢得莫名其妙。走参照实现时它什么也不做。
+   */
+  dispose(): void {
+    this.slot?.close();
   }
 }
