@@ -8,10 +8,18 @@
 
 | 步 | 干什么 |
 | --- | --- |
-| 0 | `ensureWasm()`：内核按 mtime 判 stale 后重编（`moon build --release --deny-warn --target wasm`） |
+| 0 | **import `scripts/moon.ts` 就把内核编了**：按 mtime 判 stale 后重编（`moon check/build --release --deny-warn --target wasm`）。放在 import 侧是为了给 `bun test` 的 preload 用，见 `moon.ts` |
 | 1 | 打包 worker（**独立入口**，先编 —— 应用那一步要拿它的名字做内联） |
 | 2 | 打包应用（HTML 入口：样式、图标与 manifest 一并按内容哈希落盘） |
-| 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 二次构建 `app/sw.ts`，把壳以 `__SHELL__` 注入 |
+| 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 再构建 `app/sw.ts`，把壳以 `__SHELL__` 注入 |
+
+三次打包共用一套选项（`target: "browser"` / `minify` / `sourcemap: "none"`），差异写在各自的
+调用里 —— 那套默认值只此一处。`sourcemap: "none"` 虽然是打包器的默认，仍然显式写着：部署端
+`upload_source_maps` 也是显式关的，这条「不公开源码」不该靠两个默认值恰好一致。
+
+顺带记一笔**没采纳**的：`bundler.md` 对 `target: "browser"` 推荐 `minChunkSize`（约 16 KiB）。
+实测**零效果** —— 12 个分包的名字与字节数一个没变（2.1~644 KB），因为它管的是静态导入的合并，
+而这里的 12 个全是动态 `import()` 的目标，本来就该各占一个请求。加上去只会多一行配置。
 
 **布局是扁平的**：带哈希的产物与 `index.html` 同级。默认命名本就如此，这里只把动态分包的
 `chunk-<hash>.js` 换成 `decode-mp3-<hash>.js` 这类读得懂的名字。这不是审美 ——
@@ -75,16 +83,18 @@ new Worker(WORKER, { type: "module" });
 | 来源 | 收什么 |
 | --- | --- |
 | 入口产物（`kind === "entry-point"`） | `index.html` 与入口脚本 |
+| **worker 那一遍的全部产物** | `pipeline.worker.js` 与它的资产（内核 `.wasm`）—— worker 也是应用的一部分，漏了它断网就废 |
 | 产物 `index.html` 上的 `./` 引用 | 样式、logo、apple-touch-icon |
 | manifest 自己引的图标 | 内容不经打包器改写，按字面路径由构建脚本手写补进 `dist/` |
-| 后缀与产物名挑出 | 内核 `.wasm`、worker |
+| 产物里后缀为 `.wasm` 的 | 只在 JS 里 `import`、HTML 上看不见的那几件 |
 
-那 12 个解码器分包是 `kind === "chunk"` 且 HTML 不引，两头都不沾，天然落在壳外按需 `import()`。
+那 12 个解码器分包是 `kind === "chunk"` 且 HTML 不引，两头都不沾，天然落在壳外按需 `import()`；
+演示音频同理（95 KB，只为「演示」那一下，交给运行期缓存）。
 
 **缓存名 = 壳的内容指纹**：壳里每个名字与每个字节一起喂 `Bun.hash`，取 base36 后 6 位
-（当前 `atools-399jrc`）。带哈希的资源改内容会连名字一起改，`index.html` 与图标不会，所以指纹
-取的是**字节**而不是清单。壳里少一样就是断网白屏，构建期对每一项在不在 `dist/` 里做一次核对 ——
-这类错只有断网才看得出来。
+（形如 `atools-l6gvkz`，**每改一次壳就变**，别照抄）。带哈希的资源改内容会连名字一起改，
+`index.html` 与图标不会，所以指纹取的是**字节**而不是清单。壳里少一样就是断网白屏，构建期对每
+一项在不在 `dist/` 里做一次核对 —— 这类错只有断网才看得出来。
 
 `sw.js` 是**第三次构建**的产物：它是应用的看门人，不在应用的依赖图里，壳以 `define` 注入
 `__SHELL__`。`define` 是文本替换，**键名写错不会让构建失败**，所以补一道残留检查：产物里还有
@@ -113,7 +123,8 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
   变了，照常整页刷新。
 - `bun start`（`--dist`）：静态服务 `dist/`，**找不到实体文件就回落到 `index.html`**，与 Cloudflare 的
   `not_found_handling: single-page-application` 同语义；顺带把 `/../../etc/passwd` 这类穿越挡在
-  `dist/` 里。
+  `dist/` 里。它**不碰内核**（`moon.ts` 是动态引入的）：本机没装 MoonBit 也跑得起来，因为它只
+  服务已经躺在 `dist/` 里的东西。
 
 不能合并的理由是**回落**：dev 也把 `/*` 一律回落到 `index.html`，于是 `/sw.js` 与
 `/manifest.webmanifest` 都会拿回 HTML（实测 `Content-Type: text/html`），PWA 在本地永远复现不出来。
