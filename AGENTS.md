@@ -1,6 +1,6 @@
 # AGENTS.md
 
-音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库；Bun 只跑脚本与测试。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序）。
+音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库；Bun 只跑脚本与测试。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序；原生解码一律按容器里的采样率建上下文，见 `audio.ts` 的 `containerRate`，M4A 刻意不读）。
 
 ## 命令
 
@@ -44,6 +44,7 @@ docs/        format-spec.md（图片格式契约）· algorithms.md（算法原�
 - `phase.ts` + `rtisi.ts` 相位重建（PGHI 暖启 → RTISI-LA → GL 打磨）
 - `image.ts` 容器嗅探、认图分级（可逆/紧凑/降级/通用）、缩放适配
 - `stub.ts` 底部条码票根（meta 丢失后的参数权威通道）
+- `audio.ts` 解码链（嗅探 → 原生 `decodeAudioData` → WASM 兜底）与 `containerRate`（按容器里的采样率建解码上下文；M4A 刻意不读，理由在该函数的注释里）
 - `pipeline.ts` + `pipeline.worker.ts` 数值流水线的跨线程代理与工作线程（重采样 / 编码 / 还原 / 出图；按 `scope` 分工、消息式取消）
 - `useStudio.ts` 流水线编排（含按需还原 `listen`），`usePlayback` 播放，`useAudit` 质检，`useDragDrop` 拖放
 

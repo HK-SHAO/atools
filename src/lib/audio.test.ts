@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodeAudioFile, sniffAudio } from "./audio";
+import { containerRate, decodeAudioFile, sniffAudio } from "./audio";
 import type { Samples } from "./arrays";
 
 const bytes = (...xs: number[]): Uint8Array => Uint8Array.from(xs);
@@ -172,5 +172,89 @@ describe("decodeAudioFile（全格式兜底矩阵）", () => {
     const junk = new Uint8Array(1024);
     for (let i = 0; i < junk.length; i++) junk[i] = (i * 37 + 11) & 0xff;
     expect(decodeAudioFile(junk.buffer)).rejects.toThrow("SILK");
+  });
+});
+
+describe("containerRate（素材自己的采样率）", () => {
+  const load = async (name: string): Promise<Uint8Array> =>
+    new Uint8Array(await Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer());
+
+  const rateOf = async (name: string): Promise<number | null> => {
+    const b = await load(name);
+    return containerRate(sniffAudio(b), b);
+  };
+
+  // 每个容器的真素材。右边那个数就是各 decodeAudioFile 用例里 decoder 报出来的采样率 ——
+  // 「按容器读出来的」与「真解出来的」对不上，就等于白按它建了一次上下文。
+  test("容器里写着采样率的五种，读出来都要等于真解出来的", async () => {
+    for (const [file, sr] of [
+      ["tone.wav", 44100],
+      ["tone.mp3", 44100],
+      ["tone.flac", 44100],
+      ["tone-vorbis.ogg", 44100],
+      ["tone-opus.ogg", 48000],
+    ] as const)
+      expect([file, await rateOf(file)]).toEqual([file, sr]);
+  });
+
+  // M4A 是刻意不读的：它的 mp4a 条目在 HE-AAC 上写的是核速率（22050），照它建上下文会
+  // 把 SBR 的高频带压没。所以这两个样本必须返回 null —— 不是读不出来，是不敢读。
+  test("M4A/MP4 不读（HE-AAC 上容器写的是核速率，照它建会丢高频带）", async () => {
+    expect(await rateOf("aac-lc.m4a")).toBeNull();
+    expect(await rateOf("he-aac.m4a")).toBeNull();
+    expect(await rateOf("alac.m4a")).toBeNull();
+  });
+
+  test("认不出的容器与读不出的字段一律 null（退回默认上下文）", async () => {
+    expect(await containerRate("SILK（微信语音专有）", new Uint8Array(64))).toBeNull();
+    expect(await containerRate("AAC（ADTS 裸流）", new Uint8Array(64))).toBeNull();
+    expect(await containerRate("WAV", ascii("RIFFxxxxWAVE"))).toBeNull();
+    expect(await containerRate("MP3", new Uint8Array(0))).toBeNull();
+    const junk = new Uint8Array(1024);
+    for (let i = 0; i < junk.length; i++) junk[i] = (i * 37 + 11) & 0xff;
+    for (const head of ["WAV", "MP3", "FLAC", "OGG", "OGG/Opus", "M4A/MP4"])
+      expect([head, await containerRate(head, junk)]).toEqual([head, null]);
+  });
+
+  /** 帧头四字节：同步 + 版本 + 层 + 采样率索引（码率索引随便填，本函数不看它）。 */
+  const frame = (version: number, layer: number, rateIdx: number): Uint8Array =>
+    bytes(0xff, 0xe0 | (version << 3) | (layer << 1) | 1, rateIdx << 2, 0);
+
+  const bySniff = (b: Uint8Array): Promise<number | null> => containerRate(sniffAudio(b), b);
+
+  test("mp3 帧头：三个版本族各自的采样率梯子", async () => {
+    expect(await bySniff(frame(3, 1, 0))).toBe(44100);
+    expect(await bySniff(frame(3, 1, 1))).toBe(48000);
+    expect(await bySniff(frame(3, 1, 2))).toBe(32000);
+    expect(await bySniff(frame(2, 1, 0))).toBe(22050);
+    expect(await bySniff(frame(2, 1, 1))).toBe(24000);
+    expect(await bySniff(frame(2, 1, 2))).toBe(16000);
+    expect(await bySniff(frame(0, 1, 0))).toBe(11025);
+    expect(await bySniff(frame(0, 1, 1))).toBe(12000);
+    expect(await bySniff(frame(0, 1, 2))).toBe(8000);
+  });
+
+  // 层位 00 的字节同时被 sniffAudio 认成 ADTS 裸流，所以这一条直接点名容器，绕过嗅探。
+  test("mp3 帧头的保留值不算数", async () => {
+    expect(await bySniff(frame(1, 1, 0))).toBeNull(); // 版本位 01 保留
+    expect(await containerRate("MP3", frame(3, 0, 0))).toBeNull(); // 层位 00 保留
+    expect(await bySniff(frame(3, 1, 3))).toBeNull(); // 采样率索引 11 保留
+  });
+
+  test("ID3 标签整段跨过去，正文里的假同步不算数", async () => {
+    const fake = frame(3, 1, 0); // 44100，藏在 ID3 正文里
+    const real = frame(3, 1, 1); // 48000，真正的第一帧
+    const tag = new Uint8Array(10 + fake.length);
+    tag.set(ascii("ID3"));
+    tag[3] = 3; // v2.3
+    tag[7] = (fake.length >> 14) & 0x7f; // 同步安全整数：每字节 7 位
+    tag[8] = (fake.length >> 7) & 0x7f;
+    tag[9] = fake.length & 0x7f;
+    tag.set(fake, 10);
+
+    const file = new Uint8Array(tag.length + real.length);
+    file.set(tag);
+    file.set(real, tag.length);
+    expect(await containerRate(sniffAudio(file), file)).toBe(48000);
   });
 });
