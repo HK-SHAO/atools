@@ -7,8 +7,7 @@ import { FINENESS, type Encode, type Mode } from "../app/lib/params";
 import { SYNTH_TUNE } from "../app/lib/spectrum";
 import { resample, slice } from "../app/lib/resample";
 import { encode, synthesise, type Spectrum } from "../app/lib/spectrum";
-import { phaseFromMagnitude, TUNE } from "../app/lib/phase";
-import { olaFromPhase, Frames, coverage, stftOf } from "../app/lib/stft";
+import { TUNE } from "../app/lib/phase";
 import type { Samples } from "../app/lib/arrays";
 
 await startKernel({ fft: true });
@@ -56,36 +55,6 @@ export interface Row {
 
 const log10 = Math.log10;
 
-export function atRate(pcm: Samples, sr: number, to: number): { pcm: Samples; sr: number } {
-  return { pcm: resample(pcm, sr, to, 0), sr: to };
-}
-
-function chunkCorr(a: Samples, b: Samples, chunk: number, span: number): number {
-  const n = Math.min(a.length, b.length);
-  let sum = 0;
-  let cnt = 0;
-  for (let s = 0; s + chunk <= n; s += chunk) {
-    let best = -2;
-    for (let lag = -span; lag <= span; lag++) {
-      let sa = 0;
-      let sb = 0;
-      let sab = 0;
-      for (let i = s; i < s + chunk; i++) {
-        const j = i + lag;
-        if (j < 0 || j >= n) continue;
-        sa += a[i]! * a[i]!;
-        sb += b[j]! * b[j]!;
-        sab += a[i]! * b[j]!;
-      }
-      const v = sab / Math.sqrt(Math.max(sa * sb, 1e-30));
-      if (v > best) best = v;
-    }
-    sum += best;
-    cnt++;
-  }
-  return cnt > 0 ? sum / cnt : 0;
-}
-
 function magSnr(ref: Samples, spec: Spectrum): number {
   const { meta, levels } = spec;
   const { win, hop, bins, frames } = meta;
@@ -115,10 +84,7 @@ function targetDb(level: number, meta: Spectrum["meta"]): number {
   return (meta.exact ? -120 : meta.ref - span) + (q / steps) * (meta.exact ? 120 : span);
 }
 
-const VIA_SPEC: Record<
-  string,
-  { scale: number; type: "image/png" | "image/jpeg" }
-> = {
+const VIA_SPEC: Record<string, { scale: number; type: "image/png" | "image/jpeg" }> = {
   png: { scale: 1, type: "image/png" },
   jpeg: { scale: 1, type: "image/jpeg" },
   half: { scale: 0.5, type: "image/png" },
@@ -183,87 +149,6 @@ export function setTune(
   if (t.anchorLambda !== undefined) TUNE.anchorLambda = t.anchorLambda;
   if (t.fine) Object.assign(TUNE.fine, t.fine);
   return JSON.stringify(TUNE);
-}
-
-export async function synthProbe(
-  pcm: Samples,
-  sr: number,
-  win: number,
-  hop: number,
-  bits: number,
-  seconds = 4,
-): Promise<string> {
-  const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
-  const samples = x.length;
-  const frames = Math.floor(samples / hop) + 1;
-  const scale = win / 4;
-  const { mag, ph: truth, bins } = stftOf(x, win, hop, frames);
-
-  let peak = 0;
-  for (let i = 0; i < mag.length; i++) if (mag[i]! > peak) peak = mag[i]!;
-  const span = bits * 12;
-  const steps = (1 << bits) - 1;
-  const ref = 20 * Math.log10(Math.max(peak, 1e-30) / scale) + 1;
-  const floorDb = ref - span;
-  const levels = new Uint8Array(frames * bins);
-  const target = new Float64Array(frames * bins);
-  for (let i = 0; i < levels.length; i++) {
-    const db = 20 * Math.log10(Math.max(mag[i]!, 1e-30) / scale);
-    const q = Math.round(((db - floorDb) / span) * steps);
-    const c = q <= 0 ? 0 : q >= steps ? steps : q;
-    levels[i] = Math.round((c * 255) / steps);
-    target[i] = Math.pow(10, (floorDb + (c / steps) * span) / 20) * scale;
-  }
-  const spec: Spectrum = {
-    meta: { sr, win, hop, frames, bins, samples, bits, ref, exact: false },
-    levels,
-    phaseCos: null,
-    phaseSin: null,
-  };
-
-  const wola = (ph: Float64Array): Samples => olaFromPhase(target, ph, frames, bins, win, hop, samples);
-
-  const ref0 = x as Samples;
-  const show = (label: string, y: Samples, ms: number): string => {
-    const a = align(ref0, y, Math.min(2048, Math.floor(samples / 4)));
-    const s = spectral(magnitudes(ref0, 1024, 256), magnitudes(y, 1024, 256));
-    const cc = chunkCorr(ref0, y, Math.round(sr * 0.05), Math.round(sr * 0.012));
-    return `${label} ${a.snr.toFixed(1)}dB/${a.corr.toFixed(3)}/窗内${cc.toFixed(3)}/LSD${s.lsd.toFixed(1)}/${Math.round(ms)}ms`;
-  };
-
-  const out: string[] = [];
-  let t = performance.now();
-  out.push(show("上限", wola(truth), performance.now() - t));
-
-  const gl = TUNE.rtisiGl > 0 ? TUNE.rtisiGl : 8;
-  const runs: [string, () => Promise<Samples>][] = [
-    ["PGHI", () => {
-      TUNE.rtisi = false;
-      TUNE.rtisiGl = 0;
-      return synthesise(spec);
-    }],
-    ["PGHI+GL", () => {
-      TUNE.rtisi = false;
-      TUNE.rtisiGl = gl;
-      return synthesise(spec);
-    }],
-    ["RTISI", () => {
-      TUNE.rtisi = true;
-      TUNE.rtisiGl = 0;
-      return synthesise(spec);
-    }],
-    ["RTISI+GL", () => {
-      TUNE.rtisi = true;
-      TUNE.rtisiGl = gl;
-      return synthesise(spec);
-    }],
-  ];
-  for (const [label, go] of runs) {
-    t = performance.now();
-    const y = await go();
-    out.push(show(label, y, performance.now() - t));
-  }
-  return `win=${win} hop=${hop} ${bits}bit  ${out.join("  ")}`;
 }
 
 export async function runCase(
@@ -341,68 +226,6 @@ export async function runCase(
   };
 }
 
-async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
-  const bitmap = await createImageBitmap(new Blob([bytes]), { colorSpaceConversion: "none" });
-  const w = bitmap.width;
-  const h = bitmap.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-  ctx.drawImage(bitmap, 0, 0);
-  const px = ctx.getImageData(0, 0, w, h).data;
-  bitmap.close();
-  canvas.width = 0;
-  canvas.height = 0;
-  const rows = Math.floor(h / 2);
-  const stepX = Math.max(1, Math.floor(w / 48));
-  const stepY = Math.max(1, Math.floor(rows / 24));
-  let total = 0;
-  let okB = 0;
-  let okR = 0;
-  let ok = 0;
-  let bMax = 0;
-  let rMin = 1e9;
-  let rMax = 0;
-  for (let y = 0; y < rows; y += stepY)
-    for (let x = 0; x < w; x += stepX) {
-      const p = ((rows + y) * w + x) * 4;
-      total++;
-      const b = px[p + 2]!;
-      if (b > bMax) bMax = b;
-      if (b <= 48) okB++;
-      const cr = px[p]! - 127.5;
-      const cs = px[p + 1]! - 127.5;
-      const r = Math.sqrt(cr * cr + cs * cs);
-      if (r < rMin) rMin = r;
-      if (r > rMax) rMax = r;
-      if (r >= 20 && r <= 200) okR++;
-      if (b <= 48 && r >= 20 && r <= 200) ok++;
-    }
-  const hit = await imageToSpectrum(new Blob([bytes.slice()]), "untitled.bin");
-  return (
-    `${w}×${h} rows=${rows} 采样 ${total}  B≤48: ${((okB / total) * 100).toFixed(0)}% (max ${bMax})  ` +
-    `半径20-200: ${((okR / total) * 100).toFixed(0)}% (${rMin.toFixed(0)}..${rMax.toFixed(0)})  ` +
-    `全过: ${((ok / total) * 100).toFixed(0)}%  → 认图 ${hit.mode}${hit.guessed ? "/guessed" : ""} rel=${hit.phaseReliability?.toFixed(2) ?? "-"}`
-  );
-}
-
-export async function sigProbe(
-  srcPcm: Samples,
-  srcSr: number,
-  via: Case["via"],
-): Promise<string> {
-  const enc: Encode = { mode: "exact", sr: 0, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 };
-  const sr = srcSr;
-  const tuned = resample(slice(srcPcm, srcSr, 0, 0), srcSr, sr, 0);
-  const spec = await encode(tuned, sr, enc);
-  const png = await spectrumToPng(spec);
-  const anon = via.endsWith("-anon");
-  const viaKey = (anon ? via.slice(0, -5) : via) as Case["via"];
-  const degraded = await degrade(png, viaKey);
-  return sigProbeBlob(new Uint8Array(await degraded.arrayBuffer()));
-}
-
 export async function pngCheck(bits: number[]): Promise<string[]> {
   const out: string[] = [];
   for (const b of bits) {
@@ -425,191 +248,4 @@ export async function pngCheck(bits: number[]): Promise<string[]> {
     }
   }
   return out;
-}
-
-export function phaseProbe(
-  pcm: Samples,
-  sr: number,
-  win: number,
-  hop: number,
-  gamma: number | null,
-  seconds = 3,
-): string {
-  if (gamma !== null) TUNE.gamma = gamma;
-  const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
-  const frames = Math.floor(x.length / hop) + 1;
-  const { mag, ph: truth, bins } = stftOf(x, win, hop, frames);
-  const est = phaseFromMagnitude(mag, frames, bins, win, hop);
-  let cr = 0;
-  let ci = 0;
-  let den0 = 0;
-  for (let i = 0; i < mag.length; i++) {
-    const wt = mag[i]! ** 2;
-    const d = est[i]! - truth[i]!;
-    cr += wt * Math.cos(d);
-    ci += wt * Math.sin(d);
-    den0 += wt;
-  }
-  const k = Math.atan2(ci, cr);
-  let num = 0;
-  for (let i = 0; i < mag.length; i++) {
-    const wt = mag[i]! ** 2;
-    let d = est[i]! - truth[i]! - k;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    num += wt * d * d;
-  }
-  const raw = Math.sqrt((1 - Math.hypot(cr, ci) / den0) * 2);
-  const rms = (Math.sqrt(num / Math.max(den0, 1e-30)) * 180) / Math.PI;
-  return (
-    `win=${win} hop=${hop} a/M=${(hop / win).toFixed(3)} γ=${TUNE.gamma}  ` +
-    `总误差 ${((raw * 180) / Math.PI).toFixed(0)}°  常数 ${((k * 180) / Math.PI).toFixed(0)}°  ` +
-    `去常数后 ${rms.toFixed(0)}°`
-  );
-}
-
-export function reconProbe(
-  pcm: Samples,
-  sr: number,
-  win: number,
-  hop: number,
-  quant: number,
-  seconds = 3,
-): string {
-  const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * seconds))) as Samples;
-  const frames = Math.floor(x.length / hop) + 1;
-  const { mag: rawMag, ph: truth, bins, padded } = stftOf(x, win, hop, frames);
-  let mag = rawMag;
-
-  if (quant > 0) {
-    let peak = 0;
-    for (let i = 0; i < mag.length; i++) if (mag[i]! > peak) peak = mag[i]!;
-    const span = quant * 12;
-    const steps = (1 << quant) - 1;
-    const lo = Math.log10(Math.max(peak, 1e-30)) - span / 20;
-    const q = new Float64Array(mag.length);
-    for (let i = 0; i < mag.length; i++) {
-      const db = 20 * Math.log10(Math.max(mag[i]!, 1e-30));
-      const t = Math.round(((db - 20 * lo) / span) * steps);
-      q[i] = Math.pow(10, (20 * lo + (Math.max(0, Math.min(steps, t)) / steps) * span) / 20);
-    }
-    mag = q;
-  }
-
-  const synth = (ph: Float64Array): Float32Array => olaFromPhase(mag, ph, frames, bins, win, hop, x.length);
-
-  const gl = (ph: Float64Array, iters: number): Float32Array => {
-    const core = new Frames(win);
-    try {
-      const cc = coverage(win, hop, frames, padded);
-      let top = 0;
-      for (let i = 0; i < padded; i++) if (cc[i]! > top) top = cc[i]!;
-      const buf = new Float64Array(padded);
-      const first = synth(ph);
-      for (let i = 0; i < first.length; i++) buf[win / 2 + i] = first[i]!;
-      for (let it = 0; it < iters; it++) {
-        const acc = new Float64Array(padded);
-        const { re, im } = core.data();
-        for (let f = 0; f < frames; f++) {
-          const base = f * bins;
-          core.analyse(buf, f * hop);
-          for (let b = 0; b < bins; b++) {
-            const d = Math.sqrt(re[b]! ** 2 + im[b]! ** 2) || 1e-30;
-            re[b] = (re[b]! / d) * mag[base + b]!;
-            im[b] = (im[b]! / d) * mag[base + b]!;
-          }
-          core.add(acc, f * hop);
-        }
-        for (let i = 0; i < padded; i++)
-          buf[i] = cc[i]! > top * 0.05 ? acc[i]! / cc[i]! : 0;
-      }
-      const out = new Float32Array(x.length);
-      for (let i = 0; i < out.length; i++) out[i] = buf[win / 2 + i]!;
-      return out;
-    } finally {
-      core.close();
-    }
-  };
-
-  const rand = (): Float64Array => {
-    const p = new Float64Array(mag.length);
-    let s = 0x9e3779b9;
-    for (let i = 0; i < p.length; i++) {
-      s ^= s << 13;
-      s ^= s >>> 17;
-      s ^= s << 5;
-      p[i] = ((s >>> 0) / 0xffffffff) * 2 * Math.PI - Math.PI;
-    }
-    return p;
-  };
-
-  const fit = (y: ArrayLike<number>): number => {
-    const { mag: got } = stftOf(Float32Array.from(y) as Samples, win, hop, frames);
-    let num = 0;
-    let den = 0;
-    for (let i = 0; i < mag.length; i++) {
-      num += (got[i]! - mag[i]!) ** 2;
-      den += mag[i]! ** 2;
-    }
-    return 10 * log10(Math.max(den, 1e-30) / Math.max(num, 1e-30));
-  };
-
-  const pghi = phaseFromMagnitude(mag, frames, bins, win, hop);
-  const ref = x as Samples;
-  const show = (label: string, y: ArrayLike<number>) => {
-    const a = align(ref, Float32Array.from(y) as Samples, Math.min(2048, Math.floor(x.length / 4)));
-    return `${label} ${a.snr.toFixed(1)}dB/${a.corr.toFixed(3)}/谱拟合${fit(y).toFixed(1)}`;
-  };
-
-  return (
-    `win=${win} hop=${hop}${quant ? ` ${quant}bit` : " 未量化"}  ` +
-    [
-      show("真相位", synth(truth)),
-      show("PGHI", synth(pghi)),
-      show("PGHI+GL30", gl(pghi, 30)),
-      show("PGHI+GL300", gl(pghi, 300)),
-      show("随机+GL300", gl(rand(), 300)),
-      show("随机+GL2000", gl(rand(), 2000)),
-    ].join("  ")
-  );
-}
-
-export function gradProbe(pcm: Samples, sr: number, win: number, hop: number): string[] {
-  const x = pcm.subarray(0, Math.min(pcm.length, Math.floor(sr * 3))) as Samples;
-  const frames = Math.floor(x.length / hop) + 1;
-  const { mag, ph, bins } = stftOf(x, win, hop, frames);
-  let top = 0;
-  for (let i = 0; i < mag.length; i++) if (mag[i]! > top) top = mag[i]!;
-  const floor = top * 1e-12;
-  const slog = new Float64Array(mag.length);
-  for (let i = 0; i < mag.length; i++) slog[i] = Math.log(Math.max(mag[i]!, floor));
-
-  const gamma = 0.25645 * win * win;
-  const cF = gamma / (hop * win);
-  const cT = (hop * win) / gamma;
-  const wrapd = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
-
-  const stat = (label: string, get: (f: number, b: number) => number | null) => {
-    let num = 0;
-    let den = 0;
-    let raw = 0;
-    for (let f = 1; f < frames - 1; f++)
-      for (let b = 1; b < bins - 1; b++) {
-        if (mag[f * bins + b]! < top * 0.1) continue;
-        const v = get(f, b);
-        if (v === null) continue;
-        const d = wrapd(v);
-        num += d * d;
-        raw += v * v;
-        den++;
-      }
-    return `${label}: 样本 ${den}  梯度 RMS ${Math.sqrt(raw / Math.max(den, 1)).toFixed(2)} rad  残差 ${((Math.sqrt(num / Math.max(den, 1)) * 180) / Math.PI).toFixed(1)}°`;
-  };
-
-  const dF = (f: number, b: number) =>
-    wrapd(ph[f * bins + b + 1]! - ph[f * bins + b]!) -
-    (-cF * (slog[(f + 1) * bins + b]! - slog[(f - 1) * bins + b]!) / 2);
-  const dT = (f: number, b: number) =>
-    wrapd(ph[(f + 1) * bins + b]! - ph[f * bins + b]!) -
-    (cT * (slog[f * bins + b + 1]! - slog[f * bins + b - 1]!) / 2 + (2 * Math.PI * hop * b) / win);
-  return [stat("频率方向 Δb", dF), stat("时间方向 Δf", dT)];
 }

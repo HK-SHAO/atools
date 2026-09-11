@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -31,7 +31,6 @@ interface Session {
   ev<R = unknown>(expression: string): Promise<R>;
   on(listener: (msg: any) => void): void;
   goto(url: string, ready: string): Promise<void>;
-  shot(path: string): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -131,10 +130,6 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
         }
         throw new Error(`导航超时：${target}`);
       },
-      shot: async path => {
-        const r = (await send("Page.captureScreenshot", { format: "png" })) as { data: string };
-        await writeFile(path, Buffer.from(r.data, "base64"));
-      },
       stop: async () => {
         ws.close();
         await stop();
@@ -146,7 +141,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
   }
 }
 
-export const contentType = (file: string): string => TYPES[file.slice(file.lastIndexOf("."))] ?? "application/octet-stream";
+const contentType = (file: string): string => TYPES[file.slice(file.lastIndexOf("."))] ?? "application/octet-stream";
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",

@@ -88,59 +88,6 @@ const load = async (file: string): Promise<[number, number]> => {
 
 const HEAD = `window.__src.pcm.subarray(0, Math.min(window.__src.pcm.length, ${MAX_SEC} * window.__src.sr))`;
 
-const probes = async (samples: string): Promise<void> => {
-  const sr = await ev<number>("return window.__src.sr");
-
-  if (process.env.SYNTH) {
-    await ev("window.__p8 = Bench.atRate(window.__src.pcm, window.__src.sr, 8000)");
-    for (const [win, hop] of JSON.parse(process.env.SYNTH) as [number, number][])
-      for (const q of [4, 8])
-        console.log("   ", await ev(`return await Bench.synthProbe(window.__p8.pcm, 8000, ${win}, ${hop}, ${q})`));
-  }
-
-  if (process.env.RECON) {
-    await ev("window.__p8 = Bench.atRate(window.__src.pcm, window.__src.sr, 8000)");
-    for (const [win, hop] of [
-      [256, 128],
-      [256, 64],
-      [256, 32],
-      [256, 16],
-      [512, 128],
-      [512, 64],
-    ] as [number, number][])
-      for (const q of [0, 4])
-        console.log("   ", await ev(`return Bench.reconProbe(window.__p8.pcm, 8000, ${win}, ${hop}, ${q})`));
-  }
-
-  if (process.env.PHASE)
-    for (const [win, hop] of [
-      [256, 128],
-      [256, 64],
-      [256, 32],
-      [256, 16],
-      [512, 256],
-      [512, 128],
-      [512, 64],
-      [1024, 256],
-    ] as [number, number][])
-      console.log("   ", await ev(`return Bench.phaseProbe(window.__src.pcm, ${sr}, ${win}, ${hop}, 0.25645)`));
-
-  if (process.env.GRAD)
-    for (const [win, hop] of [
-      [256, 64],
-      [256, 128],
-    ] as [number, number][])
-      console.log(`win=${win} hop=${hop}`, await ev(`return Bench.gradProbe(window.__src.pcm, ${sr}, ${win}, ${hop})`));
-
-  if (process.env.SIG)
-    for (const via of JSON.parse(process.env.SIG) as string[])
-      console.log(
-        "  签名",
-        via.padEnd(12),
-        await ev(`return await Bench.sigProbe(${samples}, window.__src.sr, ${JSON.stringify(via)})`),
-      );
-};
-
 try {
   await waitFor("bench bundle", async () => ((await ev("return typeof Bench")) === "object" ? true : null));
 
@@ -168,7 +115,6 @@ try {
           `  ${row.ms}ms`,
       );
     }
-    await probes(HEAD);
   }
 
   console.log("\nPNG 体检:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));

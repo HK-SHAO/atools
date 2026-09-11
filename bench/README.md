@@ -35,20 +35,14 @@
 `quality.ts` / `kernel.ts` 不经浏览器，但印的是给人看的表而不是红/绿断言，所以不并进单测；
 `kernel.ts` 有门禁退出码，`quality.ts --gate` 同样有。
 
-**2026-09 删减**：`scale.ts`（尺度门禁）、`smoke.ts`（界面行为门禁）、`ml/`（相位修正网络训练脚本）
-已从仓库移除 —— 它们绑死的都是当时的界面形态与列宽，每改一次布局就要跟着改。**代价要认**：
-「播放走的是 `synthesise(spec)` 而不是原声」与「`@property --u` 注册后令牌才锚在容器上」这两条
-静默失效的链，从此**没有自动门禁**，只在 `AGENTS.md` 里留了人工核对步骤。
-删掉的门禁内容仍在 git 历史里（`git show <commit>:bench/smoke.ts`）。
-
 ## 结构
 
-- `cdp.ts` —— Chromium 路径、CDP 会话（`send` / `ev` / `on` / `goto` / `shot`）、静态文件服务都在这里，
-  三个浏览器侧入口共用，别在各自文件里再抄一份。页面里的求值一律走 `ev`。
+- `cdp.ts` —— Chromium 路径、CDP 会话（`send` / `ev` / `on` / `goto`）、静态文件服务都在这里，
+  四个浏览器侧入口（`run` / `offline` / `perf` / `ui`）共用，别在各自文件里再抄一份。页面里的求值一律走 `ev`。
   **`ev` 把表达式塞进一个 async 函数体**，所以要取值就必须自己写 `return` —— 漏写不会报错，只会拿到
   `undefined`（`waitFor` 又把谓词抛的异常吞掉，症状是干等到超时，看不出为什么）。只做动作不求值的
   （点按钮那种）可以不写。
-- `entry.ts` —— 打进页面的评测内核（`window.Bench`），被 `run.ts` 重打成 `bundle-<PORT>.js`。
+- `entry.ts` —— 打进页面的评测内核（`window.Bench`），被 `run.ts` 重打成 `bundle.js` 从内存供出，不落盘。
 - 页面取样一律用语义类名（现存取样点：`.app` / `.drop` / `.params` / `.spec` / `.note` / `.facts`）；按钮按**文字**取，`button.act` 是动作、`button.chip` 是参数档位。这些类名是契约，改名要同步改这里。
 
 ## 质量回归（quality.ts）
@@ -91,10 +85,7 @@
 
 - `via` 降级方式：`png`（原样）、`jpeg`、`half`（0.5×）、`s75`、`s90`、`jpeg75`；加 `-anon` 后缀 = 连文件名一起丢（模拟微信转发，走像素签名认图）。
 - 每行输出：认图结果（exact/compact/degraded/foreign）、相位可靠性、SNR/相关/收敛/LSD、幅度一致性与层级偏差（两张谱形状不可比时记 `-1`，口径见 `app/lib/metric.ts` 的 `levelGap`）。
-- 内置探针（环境变量开关）：
-  - `SIG='["jpeg-anon","half-anon"]'` —— 像素签名诊断（B 通道分布、矢量半径分布、命中率），调 `recognizeExact` 阈值用。
-  - `SYNTH` / `RECON` / `PHASE` / `GRAD` —— 反演器横评、量化/相位分离、PGHI 梯度体检（详见 entry.ts 各 probe 注释）。
-- `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（CDP 端口与 bundle 文件名都从它派生，互不冲突）。
+- `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（HTTP 服务与 CDP 端口都从它派生，互不冲突）。
 - **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
 - 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
@@ -152,9 +143,9 @@
   建设备上下文，实测三位数毫秒（数字与消融见 `docs/algorithms.md` 的「解码链路与覆盖面」）。
   换回设备上下文之前，这条链与 `perf.ts` 的落 WAV 那半都会稳定出现一个 117~159 ms 的长任务。
 - `SUBPATH=/sub/path` **把 `dist` 的副本真的搬到 `<tmp>/sub/path/`，然后只服务那棵子树**。不能用
-  `serveDir` 的 `mounts` 代替：它对没命中的前缀仍会回到 `dist/<path>`，同一份文件在根上也取得到，
-  那一趟就什么也证明不了（试过，`base: "/"` 下两次都绿）。**违例跑过**：把 `base` 改成 `"/"` 重建后，
-  产物引用变成 `/assets/index-*.js`，根路径那趟照样绿、子路径那趟红在「超时：应用载入」。
+  `serve()` 的 `dir` + 一个前缀代替：它对没命中的前缀仍会回到 `dist/<path>`，同一份文件在根上也取得到，
+  那一趟就什么也证明不了（试过，两次都绿）。**违例跑过**：把产物里的引用改成根绝对路径后重建，
+  根路径那趟照样绿、子路径那趟红在「超时：应用载入」。
 
 ## 量数值改动的影响（消融纪律）
 
