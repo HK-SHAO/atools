@@ -512,3 +512,66 @@ while (iters > 1 && unit * (K + 1) * iters > budget) iters--;
 产物多出 5 个 `meta-*.js`（2.1~2.8 KB，gzip 1.2~1.3 KB），都是**懒加载**：只有真的落了对应容器的
 文件才去取。应用壳仍是 10 项（壳只收入口、产物 HTML 引用与 manifest 图标，动态 chunk 不入壳）。
 主 chunk 266.01 → 266.31 KB（+0.3 KB，就是那段分发）。
+
+## 里程碑 8：目录改名 `src/` → `app/`（2026-09-11，9638149）
+
+纯改名 + 引用同步。理由：这个目录放的是应用本身（入口、组件、样式、SW），与 `moon/`（内核源）、
+`scripts/`（构建）、`bench/`（评测台）、`docs/` 并列时，叫 `src/` 会被读成「源码根」，而它并不是。
+
+改动面：`index.html` 的入口、`vite.config.ts` 的 sw 入口、`bench/*.ts` 对 lib 的 import、
+`AGENTS.md` 与 docs 的结构描述、`moon/*.mbt` 注释里的路径引用。
+`docs/migration.md` 里指向前身（`src/index.ts`、`src/assets.d.ts`、`src/index.html`）的四处**刻意保留**
+—— 那些文件在里程碑 1 就已删除，改掉就篡改了当时的记录。
+顺手删掉 `bench/bundle-4330.js`（上一版自建打包器的陈旧产物，本就 gitignore）。
+
+bun test 164 通过、tsc 干净、产物与应用壳 10 项不变。
+
+## 里程碑 9：Service Worker 换成 workbox（2026-09-11）
+
+### 学的是什么
+
+`shaofeng` 的 SW 前后 5 个提交（`7bc2811` → `08497fa` → `5568702` → `6c5e949` → `3138ea7`），
+最后随 Cloudflare 部署整体下线（不是 SW 本身出问题）。它给出的完整形状是：`vite-plugin-pwa` 的
+`injectManifest` 模式 + `workbox-precaching` 的 `precacheAndRoute` + `workbox-routing` 的
+`NavigationRoute`；`manifest: false`（清单与图标是 `public/` 里的手写件，交给插件生成会把
+`<link rel="manifest">` 写成以 base 为前缀的路径，子路径部署就断了）；`rollupFormat: 'iife'`
+（默认输出保留裸 `import`，是 module SW，而 `register("./sw.js")` 按经典脚本加载）。
+
+### 改了本仓的什么
+
+删掉 `scripts/sw.ts` 整份（114 行）：按 HTML 引用推壳、给壳算内容指纹当缓存名、往 `dist/sw.js` 里
+替换 `__SHELL__` 槽位，以及围绕它的四条构建期校验。换成 `vite-plugin-pwa` 的十几行配置 ——
+清单由构建期 glob 产物生成：带哈希的按 URL 版本化，`index.html` 与图标按内容摘要版本化。
+`app/sw.ts` 从 96 行降到 56 行。
+
+副产品：Worker 产物名不再需要谁去认（清单是 glob 出来的），于是 `vite.config.ts` 的
+`worker.rollupOptions.output.entryFileNames` 与 `scripts/sw.ts` 的 `WORKER_FILE` 那份共用声明一并消失。
+构建期只留下一道校验（`scripts/pwa.ts`，39 行）：从**产物里的清单**核对 `index.html` 与
+`wasm/dsp.wasm` 都在 —— 判据取产物而不是复述配置，复述配置只能证明配置写对了。
+
+### 三处与 shaofeng 不同
+
+- **`clientsClaim` 留着**（`6c5e949` 把它与 `skipWaiting` 一起删了）。撕裂状态只由 `skipWaiting` 造成；
+  `clientsClaim` 只在 activate 时接管现有页面，没有 `skipWaiting` 时新版根本到不了 activate。
+  留着它，首次访问之后加载的演示音频与解码器分包才进得了 SW 缓存。
+- **清单排掉懒加载分包**：默认 `globPatterns: ['**/*']` 会把约 1.2 MB 的音频解码器全扫进壳；
+  本仓排掉 `assets/decode-*.js` 与 `assets/meta-*.js`。
+- **`injectRegister: null`**：注册保持在 `frontend.tsx`（生产才注册），不注入脚本。
+
+### 门禁与消融
+
+`bun bench/offline.ts` 全绿，逐项未放松：预缓存 10 项（与手写版逐项相同）、运行期 +2 项（含演示音频）、
+新版停在 waiting、SPA 回落不投毒、断网后 html / script / style / manifest / 演示音频全 200、
+断网重载出空态。`bun test` 164 通过、`tsc --noEmit` 干净、`bun run perf` 阻塞 133 ms / 1 个长任务
+（与迁移前 128 ms 同量级）、`bun run quality` 退出码 0。
+
+新门禁可证伪：把 `globPatterns` 收窄到 `**/*.txt`、以及只排掉 `wasm`，两次构建都红，
+报的分别是「清单是空的」与「预缓存清单里没有 wasm/dsp.wasm」。
+
+### 代价
+
+`dist/sw.js` 0.86 → 23.20 KB（gzip 0.47 → 7.68），是 workbox 的运行时；它在后台下载、不挡首屏，
+**首次访问要下的字节没变**（预缓存清单逐项相同）。开发依赖多 319 个包（`node_modules` 94 → 162 MB）。
+换来的是构建期 210 行自建链变成十几行配置，外加按 URL / 内容摘要的版本化、
+`ExpirationPlugin` 的缓存过期（手写版没有，哈希分包会随每次部署堆积）、
+`NavigationRoute` 的导航回退。

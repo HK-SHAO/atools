@@ -1,9 +1,7 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 import { moonKernel } from "./scripts/moon.ts";
-import { WORKER_FILE, serviceWorker } from "./scripts/sw.ts";
-
-const at = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
+import { pwaGate } from "./scripts/pwa.ts";
 
 /**
  * 纯静态产物，无后端。`dist/` 是唯一产物，另由 `scripts/toy.ts` 压成 `toy.zip`。
@@ -19,22 +17,43 @@ const at = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
  */
 export default defineConfig({
   base: "./",
-  plugins: [moonKernel(), serviceWorker()],
+  plugins: [
+    moonKernel(),
+    /**
+     * 应用壳的预缓存清单由 workbox 在构建期 glob `dist/` 生成，注入 `app/sw.ts` 的 `__WB_MANIFEST`。
+     * 壳因此是**产物自己**说了算，不再需要「按 HTML 引用推导壳 + 内容指纹定缓存名 + 槽位替换」那一套
+     * （也一并去掉了产物名与构建脚本之间的耦合）。
+     *
+     * `manifest: false`：清单与图标是 `public/` 里的手写件。交给插件生成会把 `<link rel="manifest">`
+     * 写成以 base 为前缀的路径，而本仓 base 是 `"./"` —— 子路径部署下的正确性由 `bench/offline.ts`
+     * 按 DOM 里的实际 href 判，不靠这一处。
+     *
+     * `injectRegister: null`：注册仍写在 `frontend.tsx`（生产构建才注册，静默失败）。
+     *
+     * `globIgnores` 排掉解码器分包：它们是懒加载的动态 import（合计约 1.2 MB），
+     * 进清单就等于首次访问强制下载全部格式；改由运行期缓存按需兜住。
+     */
+    VitePWA({
+      strategies: "injectManifest",
+      srcDir: "app",
+      filename: "sw.ts",
+      manifest: false,
+      injectRegister: null,
+      registerType: "prompt",
+      injectManifest: {
+        // iife：sw.js 由 `navigator.serviceWorker.register("./sw.js")` 按**经典脚本**加载
+        rollupFormat: "iife",
+        globPatterns: ["**/*.{html,css,js,wasm,svg,png,webmanifest}"],
+        globIgnores: ["**/assets/decode-*.js", "**/assets/meta-*.js"],
+      },
+    }),
+    pwaGate(),
+  ],
   // 端口与地址钉死：`bun dev` / `bun start` 原本都在 127.0.0.1:3000，评测台按它写。
   // 必须显式写 host —— Vite 默认只听 `[::1]`，而评测台与 PWA 只认 `127.0.0.1`
   // （回环上的 `http://` 才算安全上下文，Service Worker 才装得上）。
   server: { host: "127.0.0.1", port: 3000 },
   preview: { host: "127.0.0.1", port: 3000 },
-  /**
-   * 数值流水线 Worker。产物名在这里钉死，`scripts/sw.ts` 按同一份声明把它认进应用壳
-   * （Vite 把 worker 子构建的产物当 **asset** 交上来，没有 `facadeModuleId`，认不出入口）。
-   *
-   * 不设 `format`：默认 iife —— 模块 Worker 要 Firefox 114+，而这里的产物是自包含的，
-   * 用不上 import，没必要为它收窄兼容性。
-   */
-  worker: {
-    rollupOptions: { output: { entryFileNames: WORKER_FILE } },
-  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -43,12 +62,10 @@ export default defineConfig({
     sourcemap: false,
     modulePreload: false,
     rollupOptions: {
-      // sw.ts 与应用同一趟构建：它不 import 应用代码，产物天然自包含
-      input: { index: at("./index.html"), sw: at("./app/sw.ts") },
       output: {
-        // 用户可见的产物名只有一份：`sw.js` 必须落在 dist 根（注册与作用域都写着 `./sw.js`），
-        // 其余按内容哈希进 assets/，改内容即改名字，缓存自然换代。
-        entryFileNames: chunk => (chunk.name === "sw" ? "sw.js" : "assets/[name]-[hash].js"),
+        // 除 sw.js 外全部按内容哈希进 assets/：改内容即改名字，缓存自然换代。
+        // 数值流水线的 Worker 同样是这里的普通产物，它的名字不再需要谁去认。
+        entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
       },
