@@ -575,3 +575,34 @@ bun test 164 通过、tsc 干净、产物与应用壳 10 项不变。
 换来的是构建期 210 行自建链变成十几行配置，外加按 URL / 内容摘要的版本化、
 `ExpirationPlugin` 的缓存过期（手写版没有，哈希分包会随每次部署堆积）、
 `NavigationRoute` 的导航回退。
+
+## 里程碑 10：测试链换成 vitest，评测台不再自带打包器（2026-09-11）
+
+### 单测：`bun test` → `vitest`
+
+11 个测试文件的 `bun:test` 改成 `vitest`（matcher 完全兼容，一处都不用改写法），
+`package.json` 的 `test` 改成 `vitest run`。两处不是换个导入就行：
+
+- `audio.test.ts` 用 `Bun.file(...).arrayBuffer()` 读夹具 —— 换成 `node:fs/promises` 的 `readFile`，
+  测试链因此不绑运行时，`npx vitest run` 在 Node 上就跑得通（本机实测 164 通过 / 11 文件）。
+- 一处 `expect(promise).rejects.toThrow(...)` 没 `await`：bun 会替你等，vitest 会**判失败并说明原因**。
+
+内核的编译挪到 vitest 的 `globalSetup`（`scripts/test-setup.ts`）：`compileWasm` 判到 stale 会先
+`rm -rf moon/_build` 再全量重编，而 vitest 默认并行起多个测试文件 —— 各编各的会互相删掉对方的中间产物。
+`scripts/moon.ts` 的插件同时加了 `apply: (_c, env) => env.mode !== "test"`：测试期不需要
+那个 watcher 与中间件（`shaofeng` 的 `wasm-rebuild` 也是这么分的，理由相同）。
+
+`bench/` 那三个驱动真实 Chromium 的门禁**不并进来**：它们要关掉 HTTP 服务再冷加载页面、
+要按 device metrics 出图、要往页面注入自建 bundle，vitest 的 browser mode 表达不了这些控制。
+（`bench/quality.ts` 是不经浏览器的纯数值消融，但它印的是给人看的表而不是红/绿断言，同样留着。）
+
+### 评测台的入口不再用 `Bun.build`
+
+`bench/run.ts` 原本用 `Bun.build` 把 `bench/entry.ts` 打成 `bundle-<PORT>.js` ——
+那是仓库里的**第二个打包器**，它的转换语义与真应用产物不一致时，差异会悄悄混进指标里。
+改用 Vite 的编程式 `build({ configFile: false, write: false, lib: {...} })`，产物照旧落盘
+（`serve.ts` 是另一个进程，只能从文件读）。
+
+消融：同一批素材、同样两个用例，只换打包器，两次的 SNR / 相关 / 收敛 / LSD / 幅度 / 层级偏差 / 认图 /
+相位可靠**逐项相同**，PNG 体检的五个字节数也一字不差（仅耗时读数有别，那是机器噪声）。
+`errs: (none)`。

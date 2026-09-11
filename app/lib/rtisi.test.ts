@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { FFT, hannWindow } from "./fft";
 import { align, magnitudes, spectral } from "./metric";
 import type { Samples } from "./arrays";

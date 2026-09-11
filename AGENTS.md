@@ -1,6 +1,6 @@
 # AGENTS.md
 
-音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库；Bun 只跑脚本与测试。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序；原生解码一律按容器里的采样率建上下文，见 `audio.ts` 的 `containerRate`，M4A 刻意不读）。
+音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序；原生解码一律按容器里的采样率建上下文，见 `audio.ts` 的 `containerRate`，M4A 刻意不读）。
 
 ## 命令
 
@@ -8,22 +8,24 @@
 bun install
 bun dev                  # 开发服务器 http://localhost:3000（源码直出 + HMR）
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
-bun test                 # 全量测试（bun:test，勿用 jest/vitest）
+bun run test             # 全量单元测试（vitest，Node 上跑；`npx vitest` 可进监听模式）
 bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run build:wasm       # 单独重编 MoonBit 数值内核（--force 全量重编，否则按 mtime 判 stale）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun run quality          # 算法消融：15 用例 × 6 指标，改数值层前后逐项比
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
-bun bench/offline.ts     # PWA 门禁：manifest 可装、iOS 头标签齐备、应用壳逐项入缓存、断网可用；只加载一次页面，另验 SPA 回落不投毒、新版 SW 停在 waiting（先 build:web）
+bun bench/offline.ts     # PWA 门禁：manifest 可装、iOS 头标签齐备、预缓存逐项入缓存、断网可用；只加载一次页面，另验 SPA 回落不投毒、新版 SW 停在 waiting（先 build:web）
 bun run perf             # 性能体检：重采样相位表倍数 + 相位数最多组合「不得慢于逐样点」的门禁 + 页面主线程长任务
 ```
 
-包管理一律 Bun（`bun install` / `bunx`），不引入 npm/yarn 配置。
+包管理一律 Bun（`bun install` / `bunx`）。单元测试与构建不绑运行时 —— `vitest` / `vite` 在 Node 上同样跑得通；
+`bench/` 那三个**真实 Chromium** 的驱动是 Bun 脚本（要用 `Bun.serve` 起本地服务、`Bun.spawn` 拉浏览器），
+它们的浏览器控制（关掉 HTTP 服务再冷加载、按 device metrics 出图、注入自建 bundle）vitest 的 browser mode 表达不了。
 
 ## 架构
 
 ```
-app/lib/     算法层（纯函数，无 DOM 依赖，可被 Bun 直接测试）
+app/lib/     算法层（纯函数，无 DOM 依赖；单测跑在 vitest 上，不绑运行时）
 moon/        数值内核的 MoonBit 源（FFT 等密集计算），由 scripts/moon.ts 编成 wasm/dsp.wasm
 scripts/     moon.ts（编内核）· pwa.ts（核对预缓存清单）· toy.ts（压 toy.zip）；都是 Vite 插件或构建脚本
 app/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset/tokens/primitives/layout/spectrogram/workbench

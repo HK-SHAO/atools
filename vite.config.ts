@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import { VitePWA } from "vite-plugin-pwa";
 import { moonKernel } from "./scripts/moon.ts";
 import { pwaGate } from "./scripts/pwa.ts";
@@ -70,5 +70,20 @@ export default defineConfig({
         assetFileNames: "assets/[name]-[hash][extname]",
       },
     },
+  },
+  /**
+   * 单元测试跑在 vitest（Node）上，不是 `bun test` —— 测试链因此不绑运行时，
+   * `npx vitest run` 与 `bun run test` 是同一条路。
+   *
+   * `globalSetup` 先把 MoonBit 内核编一次：判到 stale 的 `compileWasm` 会先 `rm -rf moon/_build`
+   * 再全量重编，而 vitest 默认并行起多个测试文件 —— 各编各的就会互相删掉对方的中间产物。
+   *
+   * 真实浏览器的三道门禁（`bench/`）刻意不在这里：它们要关掉 HTTP 服务再冷加载页面、
+   * 要按 device metrics 出图、要注入自建 bundle，vitest 的 browser mode 表达不了这些控制，
+   * 于是自成一个用真实 Chromium 的评测台。
+   */
+  test: {
+    include: ["app/**/*.test.ts"],
+    globalSetup: ["./scripts/test-setup.ts"],
   },
 });

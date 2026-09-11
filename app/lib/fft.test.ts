@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "vitest";
 import { compileWasm } from "../../scripts/moon";
 import { loadDsp, planOf, type Dsp } from "./dsp";
 import { FFT, hannWindow } from "./fft";

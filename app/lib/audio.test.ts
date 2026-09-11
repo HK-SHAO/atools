@@ -1,6 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
+import { readFile } from "node:fs/promises";
 import { containerRate, decodeAudioFile, sniffAudio } from "./audio";
 import type { Samples } from "./arrays";
+
+/** 夹具字节。用 node:fs 而不是 `Bun.file` —— 测试链跑在 vitest（Node）上。 */
+const fixtureBytes = async (name: string): Promise<ArrayBuffer> => {
+  const bytes = await readFile(new URL(`./fixtures/${name}`, import.meta.url));
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+};
 
 const bytes = (...xs: number[]): Uint8Array => Uint8Array.from(xs);
 const ascii = (s: string): Uint8Array => {
@@ -67,8 +74,7 @@ describe("sniffAudio（音频容器识别）", () => {
 });
 
 describe("decodeAudioFile（AMR 专用解码）", () => {
-  const fixture = () =>
-    Bun.file(new URL("./fixtures/speech-nb.amr", import.meta.url)).arrayBuffer();
+  const fixture = () => fixtureBytes("speech-nb.amr");
 
   test("真实 AMR-NB 语音样本", async () => {
     const { pcm, sr } = await decodeAudioFile(await fixture());
@@ -106,9 +112,7 @@ describe("decodeAudioFile（AMR 专用解码）", () => {
 });
 
 describe("decodeAudioFile（M4A 兜底解码）", () => {
-  async function load(name: string): Promise<ArrayBuffer> {
-    return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
-  }
+  const load = fixtureBytes;
 
   const peakOf = (pcm: Samples): number => {
     let peak = 0;
@@ -138,9 +142,7 @@ describe("decodeAudioFile（M4A 兜底解码）", () => {
 });
 
 describe("decodeAudioFile（全格式兜底矩阵）", () => {
-  async function load(name: string): Promise<ArrayBuffer> {
-    return Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer();
-  }
+  const load = fixtureBytes;
 
   const peakOf = (pcm: Samples): number => {
     let peak = 0;
@@ -171,13 +173,13 @@ describe("decodeAudioFile（全格式兜底矩阵）", () => {
   test("彻底认不出的数据报错且带帮助文案", async () => {
     const junk = new Uint8Array(1024);
     for (let i = 0; i < junk.length; i++) junk[i] = (i * 37 + 11) & 0xff;
-    expect(decodeAudioFile(junk.buffer)).rejects.toThrow("SILK");
+    await expect(decodeAudioFile(junk.buffer)).rejects.toThrow("SILK");
   });
 });
 
 describe("containerRate（素材自己的采样率）", () => {
   const load = async (name: string): Promise<Uint8Array> =>
-    new Uint8Array(await Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).arrayBuffer());
+    new Uint8Array(await fixtureBytes(name));
 
   const rateOf = async (name: string): Promise<number | null> => {
     const b = await load(name);

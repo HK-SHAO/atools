@@ -1,4 +1,6 @@
 import { readdirSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { build } from "vite";
 import { ensureCached } from "./cache";
 import { open, sleep, waitFor } from "./cdp";
 import type { Row } from "./entry";
@@ -8,9 +10,24 @@ const MAX_SEC = Number(process.env.MAX_SEC ?? 8);
 const OUT = process.env.OUT ?? "/tmp/bench.json";
 const AUDIO_EXT = new Set([".mp3", ".m4a", ".ogg", ".wav"]);
 
-const built = await Bun.build({ entrypoints: [`${import.meta.dir}/entry.ts`], target: "browser" });
-if (!built.success) throw new AggregateError(built.logs, "bench bundle 构建失败");
-await Bun.write(`${import.meta.dir}/bundle-${PORT}.js`, built.outputs[0]!);
+// 评测台自己的入口也用 Vite 打包：仓库里只留一个打包器，指标的转换语义与真应用一致。
+// `write: false` 拿到产物再落盘 —— `serve.ts` 是另一个进程，只能从文件读。
+const bundle = await build({
+  configFile: false,
+  logLevel: "silent",
+  build: {
+    write: false,
+    minify: false,
+    target: "esnext",
+    lib: { entry: `${import.meta.dir}/entry.ts`, formats: ["es"], fileName: "bundle" },
+  },
+});
+const outputs = (Array.isArray(bundle) ? bundle : [bundle]) as {
+  output: { type: string; code?: string }[];
+}[];
+const chunk = outputs[0]?.output.find(o => o.type === "chunk" && o.code);
+if (!chunk?.code) throw new Error("评测台 bundle 构建失败");
+await writeFile(`${import.meta.dir}/bundle-${PORT}.js`, chunk.code);
 
 function discover(): string[] {
   const docs = `${import.meta.dir}/../docs`;

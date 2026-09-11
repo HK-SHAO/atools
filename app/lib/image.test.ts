@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { recognizeExact, sniff } from "./image";
 import type { Pixels } from "./arrays";
 import { RAMP } from "./palette";

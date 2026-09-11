@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { STUB_ROWS, decodeStub, drawStub, stubBits, stubFits } from "./stub";
 
 function draw(w: number, h: number, sr: number, win: number, exact: boolean): Uint8ClampedArray {

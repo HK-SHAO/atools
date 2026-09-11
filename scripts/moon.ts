@@ -69,6 +69,9 @@ export function moonKernel(): Plugin {
 
   return {
     name: "moon-kernel",
+    // 测试跑在 vitest 上，内核由 scripts/test-setup.ts 在 globalSetup 里编一次；
+    // 插件只服务真的 dev server 与构建 —— 否则测试每次也多起一个 watcher 与中间件。
+    apply: (_config, env) => env.mode !== "test",
     buildStart() {
       bytes = ensureWasm();
     },

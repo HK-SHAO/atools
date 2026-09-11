@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "vitest";
 import { compileWasm, WASM_FILE } from "../../scripts/moon";
 import { ABI, loadDsp, wasmUrl, type Dsp } from "./dsp";
 

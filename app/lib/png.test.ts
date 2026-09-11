@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { RAMP } from "./palette";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 

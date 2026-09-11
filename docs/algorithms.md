@@ -240,8 +240,8 @@ RTISI 是负贡献** —— 包络 0.737 对纯 PGHI 的 0.852、相关 0.153 �
 它的 `mp4a` 条目在 HE-AAC 上写的是核速率，照它建会压掉 SBR 的高频带 —— 比多转一道重采样糟得多。
 改前/改后的端到端消融表在 `docs/migration.md` 的里程碑 7。
 
-**Bun 没有 Web Audio**：`window.AudioContext` 不存在，`decodeNative` 恒返回 `null`。
-于是 `bun test` 里每个解码夹具都只走到 WASM 兜底引擎，**等价于「最坏浏览器」（原生全拒）下的链路**。
+**Node 没有 Web Audio**（vitest 跑在 Node 上）：`window.AudioContext` 不存在，`decodeNative` 恒返回 `null`。
+于是每个解码夹具都只走到 WASM 兜底引擎，**等价于「最坏浏览器」（原生全拒）下的链路**。
 原生成功路径、以及「原生失败 → 落到正确引擎」这段切换，测试覆盖不到，只由评测台
 （`bun bench/run.ts`）在真实浏览器里端到端覆盖 —— 动解码链时这一条要跑评测台，别只看单测。
 

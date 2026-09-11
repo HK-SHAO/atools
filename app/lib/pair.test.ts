@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { FFT, mirrorSpectrum } from "./fft";
 import { Pair } from "./pair";
 

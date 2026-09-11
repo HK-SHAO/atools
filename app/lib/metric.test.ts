@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import type { Samples } from "./arrays";
 import { align, barkDistance, envelopeCorr } from "./metric";
 import { VOICE } from "./params";
