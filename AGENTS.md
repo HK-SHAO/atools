@@ -1,6 +1,6 @@
 # AGENTS.md
 
-音频 ↔ 频谱图双向转换工具。Bun + React，无后端、无数据库。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序）。
+音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库；Bun 只跑脚本与测试。运行时依赖仅 react/react-dom 与 @audio/* 解码器（AMR、AAC/ALAC、MP3、WAV、Vorbis、Opus、FLAC，动态 import 单独分包，按需加载；解码链 = 浏览器原生 decodeAudioData 优先，失败按嗅探落 WASM 兜底，Ogg 按首包魔数定引擎序）。
 
 ## 命令
 
@@ -10,6 +10,7 @@ bun dev                  # 开发服务器 http://localhost:3000（源码直出 
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
 bun test                 # 全量测试（bun:test，勿用 jest/vitest）
 bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
+bun run build:wasm       # 单独重编 MoonBit 数值内核（--force 全量重编，否则按 mtime 判 stale）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun run quality          # 算法消融：15 用例 × 6 指标，改数值层前后逐项比
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
@@ -23,10 +24,13 @@ bun run perf             # 性能体检：重采样相位表倍数 + 相位数�
 
 ```
 src/lib/     算法层（纯函数，无 DOM 依赖，可被 Bun 直接测试）
+moon/        数值内核的 MoonBit 源（FFT 等密集计算），由 scripts/moon.ts 编成 wasm/dsp.wasm
+scripts/     moon.ts（编内核）· sw.ts（出应用壳并校验）· toy.ts（压 toy.zip）；三者都是 Vite 插件或构建脚本
 src/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset/tokens/primitives/layout/spectrogram/workbench
 src/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 src/ui/      组件与 hooks，只是结构与行为；样式一律在 src/styles/ 里，组件上只有语义类名
-src/sw.ts    Service Worker（应用壳预缓存 + 运行期缓存）；manifest 与 icons 同样立在 src/ 根
+src/sw.ts    Service Worker（应用壳预缓存 + 运行期缓存）
+public/      原样复制进 dist/ 根的字面资源：manifest.webmanifest、logo.svg、icons/*.png
 bench/       评测台（cdp.ts 会话壳；quality.ts 是纯数值消融，不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）
 ```
@@ -40,11 +44,12 @@ docs/        format-spec.md（图片格式契约）· algorithms.md（算法原�
 - `phase.ts` + `rtisi.ts` 相位重建（PGHI 暖启 → RTISI-LA → GL 打磨）
 - `image.ts` 容器嗅探、认图分级（可逆/紧凑/降级/通用）、缩放适配
 - `stub.ts` 底部条码票根（meta 丢失后的参数权威通道）
+- `pipeline.ts` + `pipeline.worker.ts` 数值流水线的跨线程代理与工作线程（重采样 / 编码 / 还原 / 出图；按 `scope` 分工、消息式取消）
 - `useStudio.ts` 流水线编排（含按需还原 `listen`），`usePlayback` 播放，`useAudit` 质检，`useDragDrop` 拖放
 
 ## 样式
 
-样式就是 CSS，分层放在 `src/styles/`，`index.css` 是唯一入口（reset → tokens → primitives → layout → spectrogram → workbench），`frontend.tsx` 是唯一导入点。组件只产出结构与语义类名，不写行内样式 —— 只有运行期才知道的值例外（如进度条宽度）。不套 `@layer`：未分层的普通声明无条件胜出于任何层。不引 CSS-in-JS、不引构建插件，Bun 原生打包 CSS 与静态资源。
+样式就是 CSS，分层放在 `src/styles/`，`index.css` 是唯一入口（reset → tokens → primitives → layout → spectrogram → workbench），`frontend.tsx` 是唯一导入点。组件只产出结构与语义类名，不写行内样式 —— 只有运行期才知道的值例外（如进度条宽度）。不套 `@layer`：未分层的普通声明无条件胜出于任何层。不引 CSS-in-JS，不引自动前缀插件；Vite 把 `@import` 链内联成**唯一**一个 css 产物，需要 `-webkit-` 就手写。
 
 「控件高度只有一套」的落点在 `primitives.css` 那组共用选择器里：`act` / `chip` / `num` / `icon-btn` / `drop-act` 同高同玻璃表面，各自只调 `padding-inline`；新增控件并入这组，不得自带高度或字号。需要 `-webkit-` 前缀就手写，压缩器不会替你补。
 
