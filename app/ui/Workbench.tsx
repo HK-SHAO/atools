@@ -52,9 +52,7 @@ function save(blob: Blob, filename: string): void {
 
 interface Props {
   spec: Spectrum;
-  /** 编码前的音频：质检的参照。 */
   ref: Samples;
-  /** 图里装的声音；还没还原出来时为 null（按播放/存音频时才补算）。 */
   audio: Samples | null;
   png: Blob;
   name: string;
@@ -87,7 +85,6 @@ export function Workbench({
 }: Props) {
   const busy = stage !== null;
   const { meta } = spec;
-  // 时间轴长度只由 meta 决定，与是否已经还原无关 —— 否则音频没算出来时时长会显示成 0。
   const duration = meta.samples / meta.sr;
   const sheet = useMemo(() => buildSheet(spec, SHEET_ROWS), [spec]);
   const { playing, toggle, seek, scrub, commit, nudge, headRef, timeRef } = usePlayback(
@@ -100,7 +97,6 @@ export function Workbench({
 
   const savePng = useCallback(() => save(png, downloadName(name, meta)), [meta, name, png]);
 
-  // 存的与听的是同一份：图里装的声音。
   const saveWav = useCallback(async () => {
     const y = audio ?? (await onListen());
     if (!y) return;

@@ -1,5 +1,5 @@
 import { decodeAudioFile } from "../app/lib/audio";
-import { loadDsp, warmKernel } from "../app/lib/dsp";
+import { startKernel } from "../app/lib/dsp";
 import { align, levelGap, magnitudes, spectral } from "../app/lib/metric";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../app/lib/image";
 import { FINENESS, type Encode, type Mode } from "../app/lib/params";
@@ -10,13 +10,7 @@ import { phaseFromMagnitude, TUNE } from "../app/lib/phase";
 import { olaFromPhase, Frames, coverage, stftOf } from "../app/lib/stft";
 import type { Samples } from "../app/lib/arrays";
 
-/**
- * 内核是整条链的前置条件 —— 数值只有 `moon/` 那一份，没有 TS 参照实现可退。
- * 探针里的 STFT / WOLA 也走它（`app/lib/stft.ts`），所以**先挂上再让 `Bench` 露面**：
- * 顶层 await 会把模块求值推迟到内核热好之后，`run.ts` 的 `waitFor("bench bundle")`
- * 因此天然地等到那一刻（`index.html` 拿到的是求值完的模块）。
- */
-await warmKernel(await loadDsp("/wasm/dsp.wasm"));
+await startKernel({ fft: true });
 
 interface Case {
   sr: number;
@@ -394,7 +388,6 @@ export async function synthProbe(
   const samples = x.length;
   const frames = Math.floor(samples / hop) + 1;
   const scale = win / 4;
-  // 谱只问 `stftOf` 要：变换在内核里，探针与产品链看到的是同一份谱。
   const { mag, ph: truth, bins } = stftOf(x, win, hop, frames);
 
   let peak = 0;
@@ -433,8 +426,6 @@ export async function synthProbe(
   let t = performance.now();
   out.push(show("上限", wola(truth), performance.now() - t));
 
-  // 四路要各自显式置位，别指望上一次跑留下的状态 —— TUNE.rtisiGl 默认是 0，
-  // 曾经这里标着「GL」的两行其实一轮 GL 都没跑（第三行因此与第二行一模一样）。
   const gl = TUNE.rtisiGl > 0 ? TUNE.rtisiGl : 8;
   const runs: [string, () => Promise<Samples>][] = [
     ["PGHI", () => {
@@ -704,8 +695,6 @@ export function reconProbe(
       const cc = coverage(win, hop, frames, padded);
       let top = 0;
       for (let i = 0; i < padded; i++) if (cc[i]! > top) top = cc[i]!;
-      // 归一化写回**整段** padded 缓冲：帧 0 之前那半个窗的反变换尾巴下一轮还会被读到，
-      // 只保留 `[win/2, win/2+n)` 会悄悄改掉 GL 的迭代轨迹。
       const buf = new Float64Array(padded);
       const first = synth(ph);
       for (let i = 0; i < first.length; i++) buf[win / 2 + i] = first[i]!;
@@ -714,7 +703,6 @@ export function reconProbe(
         const { re, im } = core.data();
         for (let f = 0; f < frames; f++) {
           const base = f * bins;
-          // 硬投影：幅度一律改写成目标值（`glRefine` 的软约束版另有内核实现）。
           core.analyse(buf, f * hop);
           for (let b = 0; b < bins; b++) {
             const d = Math.sqrt(re[b]! ** 2 + im[b]! ** 2) || 1e-30;

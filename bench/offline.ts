@@ -1,12 +1,8 @@
-// PWA 门禁：先 bun run build:web，再验证 manifest 可装 + 应用壳离线可用。
-// 离线判据是「cache: 'reload' 仍 200」——该模式强制绕过 HTTP 缓存。
-// 「断网」不靠 CDP 模拟（实测 Network.emulateNetworkConditions 对本机回环不起作用），
-// 而是直接关掉 HTTP 服务：源真的不可达，浏览器无从糊弄；
-// 同时探一个从没请求过的地址作对照，它若不为 0 就说明这门禁是空的。
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { open, serveDir, sleep, waitFor } from "./cdp";
+import { open, serve, sleep, waitFor } from "./cdp.ts";
 
-const project = path.resolve(import.meta.dir, "..");
+const project = path.resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.PORT ?? 4380);
 const CDP = PORT + 700;
 const APP = `http://127.0.0.1:${PORT}/`;
@@ -35,8 +31,6 @@ const INSPECT = `
       manifest: href('manifest'),
       icon: href('icon'),
       apple: href('apple-touch-icon'),
-      // 数值内核由 preload 声明 —— 它在壳里，所以从 DOM 里取，不从构建脚本抄
-      kernel: document.querySelector('link[rel="preload"][as="fetch"]')?.href ?? null,
     },
     hook: document.querySelector('meta[name="apple-mobile-web-app-capable"]')?.content ?? null,
     controlled: !!navigator.serviceWorker.controller,
@@ -52,15 +46,12 @@ const CACHED = `
   return out;
 `;
 
-// 第四个参数打开 SPA 回落：部署端 wrangler.jsonc 配的是
-// not_found_handling: single-page-application，不存在的路径会拿回 200 的 index.html。
-// 门禁要验的正是「这种响应不许进运行期缓存」，服务端不同语义就验不到。
-const server = serveDir(PORT, `${project}/dist`, {}, true);
+const server = serve(PORT, { dir: `${project}/dist`, spa: true });
 let serving = true;
 const shutDown = (): void => {
   if (!serving) return;
   serving = false;
-  server.stop(true);
+  server.stop();
 };
 const session = await open({ port: CDP, size: [1200, 900], url: APP });
 const status = async (url: string | null): Promise<number> =>
@@ -82,14 +73,6 @@ try {
   if (!ready) fail("Service Worker 十秒内没就绪：没注册上，或浏览器拒绝了（非安全上下文？）");
   else console.log("已注册：dist/sw.js");
 
-  // 整个门禁只加载这一次。若先加载第二遍再断网，安装期什么都没预热也照样能过
-  // —— 第一遍顺手就把壳填满了。shaofeng 当年删掉安装期预热之后，离线正是退化成
-  // 「得访问两次」才成立；所以「一次访问就够」必须由门禁自己钉住。
-  //
-  // 等到 `controllerchange` 而不是当场读 `controller`：`ready` 只说明有活着的 worker，
-  // `clients.claim()` 要再过一个任务才把控制权交到页面上，当场读是个竞态
-  // —— 实测同一条构建连跑两次，一次全绿一次挂四项，根因都在这一行。
-  // 断言本身没放松：真没发 claim 的话，等多久 `controller` 都不会出现。
   const controlled = await session.ev<boolean>(`
     if (navigator.serviceWorker.controller) return true;
     return await Promise.race([
@@ -132,7 +115,6 @@ try {
     if (!manifest.mime?.includes("manifest"))
       fail(`manifest 的 MIME 是 ${manifest.mime}，应为 application/manifest+json`);
     if (manifest.display !== "standalone") fail(`display=${manifest.display}，装不成独立窗口`);
-    // manifest 必须落在应用根：它一旦挪进子目录，scope/start_url 会被解析成那个子目录
     if (manifest.scope !== manifest.root || manifest.start !== manifest.root)
       fail(`scope/start_url 解析成 ${manifest.scope}/${manifest.start}，应用根是 ${manifest.root}`);
     for (const [src, code] of manifest.icons)
@@ -149,8 +131,6 @@ try {
   }
   if (online.hook !== "yes") fail(`apple-mobile-web-app-capable=${online.hook}，iOS 独立窗口起不来`);
 
-  // 壳 = index.html 直接引到的那几件 + manifest 自己引的图标。逐项对照：
-  // 少一项就是「断网白屏」，而这只有断网才看得出来，必须在这里挡住。
   const wanted: [string, string][] = [
     ["index.html", "/index.html"],
     ["入口脚本", new URL(online.href.script!).pathname],
@@ -159,16 +139,9 @@ try {
     ["favicon", new URL(online.href.icon!).pathname],
     ["apple-touch-icon", new URL(online.href.apple!).pathname],
   ];
-  // 数值内核：没有它首屏之后什么也编不了，所以它必须在壳里。取法同上 —— 从 DOM 的 preload 取，
-  // 缺了 preload 就说明内核掉出壳了，直接判不合格（而不是把这条断言悄悄跳过）。
-  if (!online.href.kernel) fail("页面里没有 as=fetch 的 preload：数值内核掉出了应用壳，断网后编不了");
-  else wanted.push(["数值内核", new URL(online.href.kernel).pathname]);
   for (const [src] of manifest?.icons ?? [])
     wanted.push([`manifest 图标 ${src}`, new URL(src, online.href.manifest!).pathname]);
 
-  // 等它凑齐再判：装到一半的缓存会被误报成「漏装」。
-  // 超时也不在这里下结论 —— 读回现状交给下面的逐项对照，这样报出来的是**具体缺哪一项**，
-  // 而不是笼统的「一项都没预缓存」。真的空手而归时再单说。
   const shell =
     (await waitFor(
       "应用壳入缓存",
@@ -179,9 +152,12 @@ try {
       10000,
     ).catch(() => null)) ?? (await session.ev<string[]>(CACHED));
   if (!shell.length) fail("Service Worker 一项都没预缓存");
+
+  const kernel = shell.find(at => at.endsWith(".wasm"));
+  if (!kernel) fail(`应用壳 ${shell.length} 项里没有 .wasm：数值内核掉出了壳，断网后编不了`);
+  else wanted.push(["数值内核", kernel]);
   for (const [what, at] of wanted) if (!shell.includes(at)) fail(`预缓存里没有${what}（${at}）`);
 
-  // 反向的不变量：sw.js 自己绝不能进壳，否则 Service Worker 会把旧的自己喂回来
   if (shell.some(at => at.endsWith("/sw.js")))
     fail("sw.js 自己进了预缓存：浏览器再也拿不到新的 Service Worker");
   console.log(`预缓存 ${shell.length} 项：${shell.join(" ")}`);
@@ -207,14 +183,10 @@ try {
   if (!demo.length) fail("演示音频没进运行期缓存：用过一次的素材应当离线可用");
   else console.log(`运行期缓存 +${grown!.length - shell.length} 项（含演示音频 ${demo.join(" ")}）`);
 
-  // 更新语义：新版装好必须停在 waiting，不能把正在用的页面抽掉。
-  // 就地给 dist/sw.js 追加一行注释来制造「新版」—— serveDir 每次请求都读盘，
-  // 浏览器比对字节就能发现它变了。真的发了 skipWaiting 的话，新版会当场 activate
-  // 并清掉旧缓存，waiting 会是空的 —— 这条断言正是冲着那个差别去的。
   const swPath = path.join(project, "dist/sw.js");
-  const swBytes = await Bun.file(swPath).text();
+  const swBytes = await readFile(swPath, "utf8");
   try {
-    await Bun.write(swPath, `${swBytes}\n// 更新探针 ${Date.now()}\n`);
+    await writeFile(swPath, `${swBytes}\n// 更新探针 ${Date.now()}\n`);
     await session.ev(`
       const reg = await navigator.serviceWorker.getRegistration();
       await reg?.update();
@@ -236,11 +208,9 @@ try {
     const kept = await session.ev<string[]>(CACHED);
     for (const [what, at] of wanted) if (!kept.includes(at)) fail(`更新检测之后壳里少了${what}（${at}）`);
   } finally {
-    await Bun.write(swPath, swBytes);
+    await writeFile(swPath, swBytes);
   }
 
-  // 部署端是 SPA 回落：不存在的路径拿回 200 的 index.html。这种响应绝不能进运行期缓存，
-  // 否则一次偶发缺文件就被固化成永久坏死，此后再取还是这份 HTML。
   const ghost = "./__no-such-chunk__.js";
   const ghostResp = await session.ev<{ status: number; type: string }>(`
     const r = await fetch(${JSON.stringify(ghost)}).catch(() => null);
@@ -270,6 +240,7 @@ try {
       script: await status(document.querySelector('script[type="module"]').src),
       style: await status(document.querySelector('link[rel="stylesheet"]').href),
       manifest: await status(document.querySelector('link[rel="manifest"]').href),
+      kernel: await status(${JSON.stringify(kernel ?? "")}),
       offline: await status(${JSON.stringify(CONTROL)}),
     };
     ${demo[0] ? `out.demo = await status(${JSON.stringify(demo[0])});` : ""}
@@ -278,7 +249,7 @@ try {
   console.log(`断网探针（cache:reload 绕过 HTTP 缓存）：${JSON.stringify(probe)}`);
   if (probe.offline !== 0)
     fail(`对照地址 ${CONTROL} 断网后仍拿到 ${probe.offline} —— 离线这半段是空的`);
-  for (const key of ["html", "script", "style", "manifest"])
+  for (const key of ["html", "script", "style", "manifest", "kernel"])
     if (probe[key] !== 200) fail(`断网后 ${key} 拿不到（${probe[key]}）`);
   if (demo[0] && probe.demo !== 200) fail(`断网后演示音频拿不到（${probe.demo}）`);
   if (!probe.controlled) fail("断网后页面丢了 Service Worker 控制");

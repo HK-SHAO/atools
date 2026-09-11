@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+
 const CHROME =
   "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
 
@@ -31,9 +35,9 @@ interface Options {
 
 export async function open({ port, size, url, args = [] }: Options): Promise<Session> {
   const [w, h] = size;
-  const proc = Bun.spawn(
+  const proc = spawn(
+    CHROME,
     [
-      CHROME,
       "--headless=new",
       `--remote-debugging-port=${port}`,
       "--no-first-run",
@@ -45,7 +49,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       `--user-data-dir=/tmp/cdp-${port}-${Date.now()}`,
       url,
     ],
-    { stdout: "ignore", stderr: "ignore" },
+    { stdio: "ignore" },
   );
 
   const stop = async (): Promise<void> => {
@@ -110,7 +114,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       },
       shot: async path => {
         const r = (await send("Page.captureScreenshot", { format: "png" })) as { data: string };
-        await Bun.write(path, Buffer.from(r.data, "base64"));
+        await writeFile(path, Buffer.from(r.data, "base64"));
       },
       stop: async () => {
         ws.close();
@@ -144,38 +148,66 @@ const TYPES: Record<string, string> = {
   ".wav": "audio/wav",
   ".flac": "audio/flac",
   ".amr": "audio/amr",
+  ".wasm": "application/wasm",
 };
 
-export function serveDir(
-  port: number,
-  dir: string,
-  mounts: Record<string, string> = {},
-  spa = false,
-): ReturnType<typeof Bun.serve> {
-  return Bun.serve({
-    port,
-    async fetch(req) {
-      const path = new URL(req.url).pathname;
-      const mount = Object.keys(mounts).find(prefix => path.startsWith(prefix));
-      const file = mount
-        ? `${mounts[mount]}${path.slice(mount.length)}`
-        : path === "/"
-          ? `${dir}/index.html`
-          : `${dir}${path}`;
-      const body = Bun.file(file);
-      if (await body.exists()) return new Response(body, { headers: { "content-type": contentType(file) } });
-
-      // spa=true 时与部署端 wrangler.jsonc 的 not_found_handling: single-page-application
-      // 同语义：任何不匹配实体文件的路径都拿回 200 的 index.html。
-      // 默认关掉 —— 其余评测台靠 404 暴露写错的资源路径，回落会把它们糊成 HTML。
-      if (spa) {
-        const fallback = Bun.file(`${dir}/index.html`);
-        if (await fallback.exists())
-          return new Response(fallback, {
-            headers: { "content-type": contentType("index.html") },
-          });
-      }
-      return new Response("missing", { status: 404 });
-    },
-  });
+export interface Site {
+  dir?: string;
+  files?: Record<string, string | Uint8Array>;
+  spa?: boolean;
 }
+
+export function serve(port: number, site: Site): { stop(): void } {
+  const server = createServer((req, res) => {
+    const path = decode(new URL(req.url ?? "/", "http://127.0.0.1").pathname);
+    void respond(res, site, path).catch((error: unknown) => {
+      if (res.headersSent) return;
+      res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+      res.end(`静态服务供不出 ${path}：${String(error)}`);
+    });
+  });
+  server.listen(port, "127.0.0.1");
+  return {
+    stop: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
+const decode = (path: string): string => {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+};
+
+const asName = (path: string): string => (path === "/" ? "index.html" : path);
+
+async function respond(res: ServerResponse, site: Site, path: string): Promise<void> {
+  const exact = site.files?.[path];
+  if (exact)
+    return put(
+      res,
+      typeof exact === "string" ? await readFile(exact) : exact,
+      typeof exact === "string" ? exact : asName(path),
+    );
+
+  if (site.dir) {
+    const file = path === "/" ? `${site.dir}/index.html` : `${site.dir}${path}`;
+    const body = await readFile(file).catch(() => null);
+    if (body) return put(res, body, file);
+    if (site.spa) {
+      const fallback = await readFile(`${site.dir}/index.html`).catch(() => null);
+      if (fallback) return put(res, fallback, "index.html");
+    }
+  }
+  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  res.end("missing");
+}
+
+const put = (res: ServerResponse, body: Uint8Array, name: string): void => {
+  res.writeHead(200, { "content-type": contentType(name) });
+  res.end(body);
+};

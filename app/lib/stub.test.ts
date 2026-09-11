@@ -1,19 +1,9 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { compileWasm } from "../../scripts/moon";
 import type { Pixels } from "./arrays";
 import { attachKernel, loadDsp, type Dsp } from "./dsp";
 import { decodeStub, drawStub, stubFits, stubLuma, stubRows } from "./stub";
 
-/**
- * 票根的**实现**整段在内核里，行为断言（逐宽度「装得下 ⟺ 认得回来」、CRC 拦坏位流、
- * 两份冗余、三档宽度前缀）全在 `moon/stub_wbtest.mbt`。这里只剩跨边界的那一段：
- *
- *   ① 内核画出来的 `w × rows` RGBA 被搬到 ImageData 的**底部 8 行**（不是顶部、不是错行）；
- *   ② 内核返回的打包 i32 被拆成 `{width, sr, win, exact}`（梯子问内核要）；
- *   ③ `stubFits` 与 `stubLuma` 两条判据说的是同一件事。
- *
- * 这三件事在 `moon/` 里证不了 —— 它们说的正是「内核之外那一层」。
- */
 describe("票根（跨边界的那一段）", () => {
   let dsp: Dsp;
   beforeAll(async () => {
@@ -21,7 +11,6 @@ describe("票根（跨边界的那一段）", () => {
     attachKernel(dsp);
   });
 
-  /** 一块「图」：只有底部 `rows` 行该被票根覆盖，其余填成醒目的哨兵值。 */
   const sheet = (w: number, h: number, rows: number) => {
     const px = new Uint8ClampedArray(w * h * 4) as Pixels;
     px.fill(7);
@@ -37,7 +26,6 @@ describe("票根（跨边界的那一段）", () => {
 
     drawStub(px, w, h, 44100, 512, true);
 
-    // 块内每一个像素都是不透明的、且 R = G = B（票根只有亮度这一维）
     for (let i = top; i < px.length; i += 4) {
       expect(px[i + 3]).toBe(255);
       expect(px[i + 1]).toBe(px[i]);
@@ -46,7 +34,6 @@ describe("票根（跨边界的那一段）", () => {
     for (let i = 0; i < top; i++) expect(px[i]).toBe(7);
   });
 
-  /** 抽回一条亮度剖面（内核认的就是这个，不是像素块）。 */
   const profileOf = (px: Pixels, w: number, top: number): Float64Array => {
     const rows = stubRows();
     const prof = new Float64Array(w);
@@ -76,17 +63,10 @@ describe("票根（跨边界的那一段）", () => {
     }
   });
 
-  /**
-   * `stubFits` 是产品侧唯一会用到的判据（`image.ts` 拿它决定留不留那几行）。
-   * 它说装得下，就**必须**真的画得出来、认得回来 —— 反方向不成立，也不必成立：
-   * 「画得下但剖面太短」是合法的中间态（`span + 2 ≤ w < 46`），那正是 `stub_min_decode`
-   * 存在的理由。真正的双向等价在 `moon/stub_wbtest.mbt`，那里逐宽度走了一遍。
-   */
   test("stubFits 说装得下，画下去就真的画得出来、也认得回来", () => {
     const rows = stubRows();
     for (const w of [46, 60, 100, 255, 400, 4095, 65535]) {
       if (!stubFits(w)) {
-        // 这个宽度本该被产品侧挡掉，那就不该有人去画它
         expect(stubLuma(w, 44100, 512, false), `w=${w} 不该能画`).toBeNull();
         continue;
       }

@@ -1,16 +1,16 @@
 # AGENTS.md
 
-音频 ↔ 频谱图双向转换工具。Vite + React，无后端、无数据库。运行时依赖仅 react/react-dom 与 `@audio/*` 解码器（动态 import 单独分包，按需加载）。
+音频 ↔ 频谱图双向转换工具。Bun + React（打包、本地服务、单元测试、包管理全在 Bun 内），无后端、无数据库。运行时依赖仅 react/react-dom 与 `@audio/*` 解码器（动态 import 单独分包，按需加载）。
 
 ## 命令
 
 ```bash
 bun install
-bun dev                  # 开发服务器 http://localhost:3000（源码直出 + Fast Refresh）
+bun dev                  # 开发服务器 http://localhost:3000（Bun 的 HTML 路由 + HMR；必须走这条脚本，它带 scripts/dev.env）
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
-bun run typecheck        # `tsc -b`：三个工程一起检查（app / test / node，见下）
+bun run typecheck        # `tsc -b`：两个工程一起检查（app / bun，见下）
 bun run lint             # oxlint（含 React Compiler 那一组规则）
-bun run test             # 全量单元测试（vitest，Node 上跑；`npx vitest` 进监听模式）
+bun run test             # 全量单元测试（bun test；`bun test --watch` 进监听模式）
 bun run test:kernel      # 内核白盒门禁：`moon test --release --target wasm`
 bun run moon:ports       # 内核同一份源码在 js / native 上也要能编（「只用标准库」的可证伪形式）
 bun run bench:kernel     # 内核自带基准：`moon bench --release --target wasm`
@@ -28,11 +28,11 @@ bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 
 
 每个评测台的判据、参数与环境变量见 `bench/README.md`。
 
-包管理一律 Bun（`bun install` / `bunx`）。单元测试与构建不绑运行时 —— `vitest` / `vite` 在 Node 上同样跑得通；`bench/` 那三个**真实 Chromium** 的驱动是 Bun 脚本（要用 `Bun.serve` 起本地服务、`Bun.spawn` 拉浏览器），它们的浏览器控制（关掉 HTTP 服务再冷加载、按 device metrics 出图、注入自建 bundle）vitest 的 browser mode 表达不了。
+包管理、打包、本地服务、单元测试全在 Bun 内（`bun install` / `Bun.build` / `Bun.serve` / `bun test`），仓库里没有第二个打包器、也没有第二个测试运行时。`bench/` 那几个驱动也是 Bun 脚本，但它们要的浏览器控制（关掉 HTTP 服务再冷加载、按 device metrics 出图、注入自建 bundle）没有现成的壳，所以静态服务与进程拉起直接用 `node:http` / `node:child_process` —— 在 Bun 上照跑。
 
-**tsconfig 拆三个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` 只给 `vite/client`）、`tsconfig.test.json`（`app/**/*.test.ts`，加 node 类型）、`tsconfig.node.json`（`vite.config.ts` / `scripts/` / `bench/`，node + bun 类型）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dir`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。
+**tsconfig 拆两个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` **留空**，只认 `app/assets.d.ts` 的资源声明与 `app/browser.d.ts` 的构建期常量）、`tsconfig.bun.json`（`scripts/` / `bench/` / 测试 / `app` 的其余部分，`types: ["bun"]`）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dirname`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。测试不再单列一个工程：它们与构建脚本跑在同一个运行时上、要同一套类型。
 
-**React 走官方插件 + `babel-plugin-react-compiler`**（`vite.config.ts`）。实测：`@vitejs/plugin-react` 本身对产物**零字节影响**（与不接逐字节相同），全部 +6.4 KB 都来自 React Compiler 的记忆化。`.oxlintrc.json` 里那一组 `react/*` 规则就是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 10 条 warn，全部落在 `set-state-in-effect` / 依赖数组上：那是几个 effect 有意「取消在飞的作业 + 重置派生状态」，要改得重排异步取消与 ref 生命周期，属于另一件事。
+**React Compiler 走 `Bun.build` 的 `reactCompiler: true`**（`scripts/build.ts`），不需要 `@vitejs/plugin-react` + `@rolldown/plugin-babel` 那一串。`.oxlintrc.json` 里那一组 `react/*` 规则是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 11 条 warn，全部落在 `set-state-in-effect` / 依赖数组上：那是几个 effect 有意「取消在飞的作业 + 重置派生状态」，要改得重排异步取消与 ref 生命周期，属于另一件事。
 
 ## 架构
 
@@ -43,23 +43,32 @@ app/lib/     算法层（纯函数，无 DOM 依赖）。
              一整遍用例悄悄退化成「参照 == 参照」。
              宿主侧剩下的三块都不是数值实现：`spectrum.ts` 的量化与重建**调度**（fast / fine）、
              `resample.ts` 的相位表重采样、`stft.ts` 的骨架（窗与变换都取自内核表组）。
-             数值行为断言一律在 `moon/*_wbtest.mbt`；vitest 只管**跨边界与浏览器侧**：
+             数值行为断言一律在 `moon/*_wbtest.mbt`；`bun test` 只管**跨边界与浏览器侧**：
              内核装载与握手（含两个线程各起一份）、视图的寿命、DOM / canvas、端到端契约。
 app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/styles/，组件上只有语义类名。
              数值流水线走 Worker（`pipeline.ts` 代理 + `pipeline.worker.ts`）：模块被引入就建
              Worker，内核在 worker 里启动即加载 + 预热；**worker 与主线程各挂一份**（wasm 实例
              不跨线程），主线程那一份由 `frontend.tsx` 顶层同时起。主线程那份只用票根编解码。
-moon/        数值内核（MoonBit → `wasm/dsp.wasm`）。零 import、只用标准库（`moon.pkg`），
-             所以 js / native 也编得过（`bun run moon:ports` 盯着）。三层内存、边界约定、导出面
-             与搬迁流程见 `moon/README.md`。
-scripts/     moon.ts（编内核）、pwa.ts（核对产物里的 PWA 契约）、test-setup.ts（vitest 的
-             globalSetup：先编一次内核，免得并行起的测试文件互相删中间产物）、toy.ts（压 toy.zip）
+             Worker 的地址**只能由构建期告诉入口**（Bun 不打包 `new Worker(new URL(...))`）：
+             产物里是与入口同目录的哈希名，dev 里是 `serve.ts` 供的那条路由，两者都经由
+             `process.env.PIPELINE_WORKER` 这一处内联。
+moon/        数值内核（MoonBit → `moon/_build/…/dsp.wasm`，由 `app/lib/dsp.ts` 导入成产物里的
+             一个普通资产）。零 import、只用标准库（`moon.pkg`），所以 js / native 也编得过
+             （`bun run moon:ports` 盯着）。三层内存、边界约定、导出面与搬迁流程见 `moon/README.md`。
+scripts/     build.ts（五步：编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
+             serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核：dev 期盯源码重编、构建前先编）、
+             toy.ts（压 toy.zip）、test-setup.ts（`bun test` 的 preload：先编一次内核）、
+             dev.env（dev 要内联给浏览器的常量）
 app/styles/  样式，`index.css` 一个 `@import` 入口，按 reset → tokens → primitives → layout →
              spectrogram → workbench 分层
-app/sw.ts    Service Worker（workbox：预缓存清单由 vite-plugin-pwa 构建期注入 + 运行期缓存）
-public/      原样复制进 dist/ 根的字面资源：manifest.webmanifest、logo.svg、icons/*.png
-fixtures/    单测的音频夹具（10 个真容器样本）。`app/` 只放会进产物的东西，唯一的例外是
-             `app/icons/icon.svg` —— 三个 PNG 图标的 maskable 作图源，不留注释、不进产物
+app/index.html  唯一入口（Bun 的 HTML loader 的入口约定），与 `frontend.tsx` 同级；它引到的
+             一切都在 `app/` 或 `app/public/` 之下，仓库根只留工程配置与文档。
+app/public/  按字面路径被引的静态件：`logo.svg`（favicon）、`manifest.webmanifest`、`icons/*.png`。
+             **目录名只是位置，Bun 不认 public 语义** —— HTML 里写 `/x` 会被当成文件系统里的
+             绝对路径去找，所以引用一律相对。`icons/icon.svg` 是三个 PNG 的 maskable 作图源，
+             全仓唯一一件「在 app/ 下却不进产物」的东西。
+app/sw.ts    Service Worker（自建预缓存：壳由构建期推出来、以 `__SHELL__` 注入 + 运行期缓存）
+fixtures/    单测的音频夹具（10 个真容器样本）
 bench/       评测台（`cdp.ts` 会话壳）。quality.ts 与 kernel.ts 不经浏览器；run.ts 跑
              `bench/index.html` 这份自建页；offline.ts / perf.ts / ui.ts 驱动真实 dist 页面
 docs/        format-spec.md（图片格式契约）、algorithms.md（算法原理与实测）、build.md（构建、
@@ -70,7 +79,7 @@ docs/        format-spec.md（图片格式契约）、algorithms.md（算法原�
 
 关键模块职责：
 
-- `dsp.ts` 内核装载、握手、访存（`Job` / `Slot` / `Plan` 三件套，**视图只现切、不持有**）；`startKernel(url, {fft})` 是每一侧的启动入口（同一线程只加载一次）。
+- `dsp.ts` 内核装载、握手、访存（`Job` / `Slot` / `Plan` 三件套，**视图只现切、不持有**）；`startKernel({ fft }, source = kernelUrl())` 是每一侧的启动入口（同一线程只加载一次），`source` 只留给测试传字节。
 - `stft.ts` STFT 宿主骨架：一个 `Frames` 占一个内核会话槽，窗与变换都来自内核表组。
 - `rtisi.ts` / `stub.ts` / `phase.ts` 三个薄壳（上传与分块推进），实现分别在 `moon/rtisi.mbt` / `moon/stub.mbt` / `moon/pghi.mbt`。
 - `spectrum.ts` 量化与重建调度（fast / fine，已裁定**不搬**：实测 30 s 细档合计 1.7 ms，是 `synthesise` 135 ms 的 1.2%，且搬它要把作业句柄穿进三个消费者 —— 见 `docs/algorithms.md`）；`image.ts` 容器嗅探、认图分级（可逆 / 紧凑 / 降级 / 通用）、缩放适配。
@@ -103,3 +112,4 @@ docs/        format-spec.md（图片格式契约）、algorithms.md（算法原�
 - 高内聚低耦合、解耦、模块化、易理解、易维护、非必要不注释、零注释（要让工程、架构、代码本身易理解，而不是依靠注释）
 - 第一性原理是用户体验、玩家体验、遵守规则
 - 积极采用或参考可靠的经验、轮子，引入依赖项之前要研究是否值得
+- 能用标准库就用标准库，不造轮子；判「有没有现成的」要全仓扫一遍，不为历史妥协

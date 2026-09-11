@@ -1,12 +1,9 @@
-// 性能体检：数值内核的比值对照 + 真实页面里加载一条长音频的主线程卡顿。
-// 「比值」是机器无关的，可以当门禁；「长任务」随机器快慢浮动，只报数不设阈值。
-// 用法：bun bench/perf.ts        （SECS=60 可改合成素材时长，PAGE=0 跳过浏览器那半）
 import path from "node:path";
 import type { Samples } from "../app/lib/arrays";
-import { resample } from "../app/lib/resample";
-import { open, serveDir, sleep } from "./cdp";
+import { resample } from "../app/lib/resample.ts";
+import { open, serve, sleep } from "./cdp.ts";
 
-const project = path.resolve(import.meta.dir, "..");
+const project = path.resolve(import.meta.dirname, "..");
 const SECS = Number(process.env.SECS ?? 60);
 const SR = 44100;
 
@@ -17,8 +14,6 @@ const signal = (n: number, sr: number): Samples => {
   return out as Samples;
 };
 
-// 对照实现：与「相位表」逐位一致的逐样点现算版本（spectrum.test.ts 有比位用例钉着），
-// 只用来量省下了多少，别拿它当第二份真相。
 const naive = (x: Samples, from: number, to: number): Float32Array => {
   const ratio = from / to;
   const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
@@ -70,9 +65,6 @@ for (const to of [8000, 16000, 48000]) {
   if (ratio < 3) failures.push(`→${to} 相位表只快 ${ratio.toFixed(1)}×，缓存没生效或又被绕过了`);
 }
 
-// 相位数最多的那几个组合：既约分母大 + 浮点漂移，实际相位数可达一万（11025→32000 实测 10001）。
-// 相位表上限若设小了，这些组合会从「省钱」变成「每样点一次未命中 + 一次分配」，
-// 曾经实测比逐样点现算还慢 1.18×。这里把它们钉住：慢于逐样点就是不合格。
 console.log("\n相位种类最多的几个组合（相位表最容易退化的地方）");
 console.log("  组合              样点      相位表      逐样点现算     倍数");
 for (const [from, to] of [
@@ -118,12 +110,10 @@ if (process.env.PAGE !== "0") {
     return new File([head, pcm.buffer], 'perf.wav', { type: 'audio/wav' });
   `;
 
-  const server = serveDir(PORT, `${project}/dist`);
+  const server = serve(PORT, { dir: `${project}/dist` });
   const session = await open({ port: CDP, size: [1200, 900], url: `http://127.0.0.1:${PORT}/` });
   try {
     await session.goto(`http://127.0.0.1:${PORT}/`, ".app");
-    // 素材先造好、表后开：合成那 ${SECS} s 的 sin 循环是**测量台自己**的开销（实测 55 ms 上下），
-    // 记进去会让「长任务」这项永远挂着一个与页面无关的底噪，读数就没法用了。
     await session.ev(`
       window.__perf = { tasks: [], notes: [], file: (() => { ${WAV} })() };
       return true;
@@ -171,7 +161,7 @@ if (process.env.PAGE !== "0") {
     console.log(`  合计阻塞 ${total}ms，共 ${perf.tasks.length} 个长任务`);
   } finally {
     await session.stop();
-    server.stop(true);
+    server.stop();
   }
 }
 

@@ -38,7 +38,7 @@ Reading adapts to what survived in the image: intact phase → near-lossless; ou
 ```bash
 bun i
 bun dev              # 源码直出 + HMR → http://localhost:3000
-bun run test         # 算法与格式测试 / tests（vitest）
+bun run test         # 算法与格式测试 / tests（bun test）
 bun run build:web    # 生产构建 → dist/ / build
 bun start            # 静态服务 dist/，本地就能验证 PWA 与离线
 ```

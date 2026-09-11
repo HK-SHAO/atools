@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { compileWasm } from "../../scripts/moon";
 import type { Samples } from "./arrays";
 import { attachKernel, loadDsp } from "./dsp";
@@ -6,7 +6,6 @@ import { align, barkDistance, envelopeCorr } from "./metric";
 import { VOICE } from "./params";
 import { encode, synthesise } from "./spectrum";
 
-// `synthesise` 的还原只有内核里那一份实现（`moon/rtisi.mbt`），没有参照实现可退。
 beforeAll(async () => {
   attachKernel(await loadDsp(compileWasm()));
 });
@@ -23,7 +22,6 @@ function rng(seed: number): () => number {
   };
 }
 
-/** 带音节包络的谐波人声，能量只落在低频几条带里，高频带近似全静。 */
 function voice(seconds = 2, sr = SR): Samples {
   const n = sr * seconds;
   const x = new Float32Array(n);
@@ -63,9 +61,6 @@ describe("perceptual metrics", () => {
     }
   });
 
-  // 不带地板时，还原侧某条带全静（能量 0）就意味着 −∞：该带的地板是
-  // peak·0，log10(0) 直接把整条距离撑成 Infinity/NaN，指标当场失效
-  // （曾实测严苛素材算出 38~54）。带地板后差值被夹在 24 dB 以内。
   test("a wholly silent take stays finite and bounded", () => {
     const x = voice(1);
     const d = barkDistance(x, new Float32Array(x.length) as Samples, SR);
@@ -88,8 +83,6 @@ describe("perceptual metrics", () => {
     expect(envelopeCorr(x, y, SR)).toBeGreaterThan(0.99);
   });
 
-  // 这条是这个指标存在的理由：相位重建出来的波形与原波形对不上（相关只有 0.2 上下），
-  // 但**包络**几乎原样 —— 人耳听的就是包络。若两者一起崩，说明指标没量到点子上。
   test("envelope correlation outlives waveform correlation", async () => {
     const sr = 8000;
     const x = voice(3, sr);

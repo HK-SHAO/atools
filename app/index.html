@@ -5,13 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="音频与频谱图双向无损转换：音频转成可下载的频谱图，频谱图还原成可播放的音频。" />
     <meta name="theme-color" content="#fdf7ec" />
-    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <!-- 数值内核是首屏必需品：编码与还原都靠它，先把它要下来。路径须与 scripts/moon.ts 的 WASM_FILE
-         一致；crossorigin 须与 app/lib/dsp.ts 那次 fetch 的凭据模式匹配（same-origin → anonymous），
-         对不上浏览器就当两笔请求，这份预热白做。两条都由 scripts/pwa.ts 在构建期核对。 -->
-    <link rel="preload" href="./wasm/dsp.wasm" as="fetch" crossorigin="anonymous" />
+    <link rel="icon" type="image/svg+xml" href="./public/logo.svg" />
+    <link rel="manifest" href="./public/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./public/icons/apple-touch-icon.png" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -20,6 +16,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/app/frontend.tsx"></script>
+    <script type="module" src="./frontend.tsx"></script>
   </body>
 </html>

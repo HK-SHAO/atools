@@ -1,13 +1,16 @@
 # `dsp` — the numeric kernel of atools
 
 MoonBit source for the single numeric implementation behind the audio ↔ spectrogram tool.
-It is compiled to `wasm/dsp.wasm` and loaded by both threads of the web app (worker + main).
+It is compiled to `moon/_build/wasm/release/build/dsp.wasm`; `app/lib/dsp.ts` imports that file as
+an asset (Bun's `.wasm` loader hands back a **path string**, not a URL) and both threads of the web
+app load it (worker + main).
 There is **no JavaScript fallback**: if a host cannot load this module, it must fail loudly
 rather than silently switch to a second implementation nobody maintains.
 
 ```
-moon/            source (this directory)         →  scripts/moon.ts  →  dist/wasm/dsp.wasm
-app/lib/dsp.ts   host loader: fetch, handshake, typed-view slicing
+moon/            source (this directory)   →  scripts/moon.ts  →  moon/_build/…/dsp.wasm
+app/lib/dsp.ts   host loader: kernelUrl() folds the asset path to an absolute URL, then fetch,
+                 handshake, typed-view slicing
 ```
 
 ## Why a kernel at all
@@ -20,6 +23,26 @@ app/lib/dsp.ts   host loader: fetch, handshake, typed-view slicing
    accessors it is **1.5× faster** (see `docs/algorithms.md`).
 3. **No imports, no `extern`.** `moon.pkg` allows only the standard library, so the same
    source type-checks for `wasm`, `js` and `native` (`bun run moon:ports`).
+
+## Standard library first
+
+A hand-rolled helper looks harmless at this size, which is exactly why the rule is written down:
+**if the standard library has it, call it.** `log2` replaced doubling loops in `rtisi_open` and
+`plan_of`; `clamp` / `min` / `max` come from `Double` / `Int` through the prelude.
+`rtisi_wbtest.mbt` pins `@math.log2` as the exact step count on every reachable window length —
+that equality is what makes the swap sound, and it deliberately does *not* hold off the ladder
+(3000 → 11.55 against 12).
+
+Two helpers stay hand-written, each with its measurement in `docs/algorithms.md`: the counting sort
+in `pghi.mbt` (`Array::sort` is documented **unstable**, and the visit order *is* the result) and
+`sqrt(re² + im²)` in `rtisi.mbt` (`@math.hypot` differs by 1 ulp on about a third of the plane, and
+this feeds the phase estimate).
+
+`using @math {…}` imports **functions only**. A `pub const` cannot come along — `using @math
+{log2, PI}` is a hard `Error 0002` under `--deny-warn` — so `@math.PI` stays qualified everywhere;
+that is a compiler fact, not a style choice. An imported name also **loses to a local of the same
+name**, so `plan.mbt` (which declares `let cos`) could not import `cos` even if it wanted to. Today
+only `rtisi.mbt` qualifies: its whole `@math` surface is importable and collision-free.
 
 ## Three kinds of memory
 
@@ -84,7 +107,7 @@ call, but they are plain `fn`s now, so a grep for `dsp_` in `app/` and `bench/` 
 ## Build and verify
 
 ```bash
-bun run build:wasm       # compile this directory → wasm/dsp.wasm (--force for a full rebuild)
+bun run build:wasm       # compile this directory → moon/_build/…/dsp.wasm (--force = full rebuild)
 bun run test:kernel      # white-box tests:      moon test  --release --deny-warn --target wasm
 bun run bench:kernel     # kernel benchmarks:    moon bench --release --deny-warn --target wasm
 bun run moon:ports       # moon check --target js / native  (proves "standard library only")

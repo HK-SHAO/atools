@@ -3,59 +3,117 @@
 纯静态产物，无后端。源码一份，出两个包：`dist/` 目录给静态服务器（`bun run build:web`），
 `toy.zip` 给 B站 Toy（`bun run build:toy` = 构建 + `scripts/toy.ts` 打包）。
 
-## 构建：Vite，两个自家插件
+## 构建：Bun.build，四步
 
-`vite build`。`vite.config.ts` 里挂两个自家插件，各自只管一件事：
+`bun run build:web` → `scripts/build.ts`，纯 `Bun.build`、零第三方插件：
 
-| 插件 | 干什么 | 为什么不是别的东西 |
-| --- | --- | --- |
-| `scripts/moon.ts` | 编译 MoonBit 内核（`moon build --release --target wasm`），以**固定名** `wasm/dsp.wasm` 交给 Vite：构建期 `emitFile`，dev 期中间件直出并盯 `moon/` 里的源码变更重编 | 内核的源头不是 TS。固定名而非内容哈希 —— 它被 HTML 的 preload 与 `app/lib/dsp.ts` 按字面路径写死，哈希名没法写进这两处 |
-| `scripts/pwa.ts` | 出完产物后从 `dist/sw.js` 里读出预缓存清单，核对 `index.html` 与数值内核都在；再从 `dist/index.html` 里核对内核那条 preload 的路径与 `crossorigin` 取对了；任一条不成立就**让构建失败** | 这几点缺了都只在断网那一刻、或「首屏悄悄慢一点」上暴露，判据必须在构建期 |
+| 步 | 干什么 |
+| --- | --- |
+| 0 | `ensureWasm()`：内核按 mtime 判 stale 后重编（`moon build --release --deny-warn --target wasm`） |
+| 1 | 打包 worker（**独立入口**，先编 —— 应用那一步要拿它的名字做内联） |
+| 2 | 打包应用（HTML 入口：样式、图标与 manifest 一并按内容哈希落盘） |
+| 3 | 推应用壳 → 取壳的内容指纹当缓存名 → 二次构建 `app/sw.ts`，把壳以 `__SHELL__` 注入 |
 
-**应用壳的清单不在这两个插件里**：它由 `vite-plugin-pwa` 在构建期 glob `dist/` 生成（见 PWA 一节）。
+**布局是扁平的**：带哈希的产物与 `index.html` 同级。默认命名本就如此，这里只把动态分包的
+`chunk-<hash>.js` 换成 `decode-mp3-<hash>.js` 这类读得懂的名字。这不是审美 ——
+`manifest.webmanifest` 是手写件、每个相对地址都按它自己解析，`"scope": "./"` 与
+`"./icons/icon-192.png"` 只有与入口同级才分别解析成应用根与 `/icons/…`；一旦挪进子目录，
+`scope` 就变成那个子目录，装出来的 PWA 直接打不开。**这条由 `bench/offline.ts` 抓着**：
+实测把命名改成 `assets/…` 之后，门禁当场报「scope/start_url 解析成 /assets/，应用根是 /」。
 
-两个入口：`index.html`，以及由 `app/ui/pipeline.ts` 的 `new Worker(new URL(...))` 引出的
-`pipeline.worker`。应用产物一律按内容哈希进 `assets/`；`sw.js` 由 PWA 插件另出一份、落在 `dist/` 根
-（注册与作用域都写着 `./sw.js`），所以它进不了 `assets/` 的 glob，也不会被谁认错。
+源码侧与产物侧解耦：入口在 `app/index.html`，字面资源在 `app/public/`（`logo.svg`、
+`manifest.webmanifest`、`icons/*.png`），HTML 按 `./public/…` 引它们。打包器把引到的资源
+**摊平**进 `dist/` 根并加内容哈希 —— 源里多深都一样 —— 而 manifest 自己引的图标不经打包器，
+由 `build.ts` 从 `app/public/` 按字面路径抄进 `dist/`。所以「manifest 必须落在应用根」说的是
+**产物位置**，源文件放哪层都不影响它。
 
-Worker 不设 `format`：默认 iife —— 模块 Worker 要 Firefox 114+，而这份产物自包含，用不上 `import`。
-它的产物名也不需要谁去认：预缓存清单是 glob 出来的，谁被 `new Worker(new URL(...))` 引到都算数。
+### 内核在产物里怎么被找到
 
-`base: "./"`：引用全为相对路径，`dist/` 因此可以落在任意子路径（B站 Toy 的 `/toy/<slug>/`）。
+唯一一条规则，写在 `app/lib/dsp.ts` 一处：`import kernelWasm from "…/dsp.wasm"`。
 
-`modulePreload: false`：Vite 默认给入口插 `<link rel="modulepreload">`，Safari 不消费这份缓存
-却会报 "preloaded but not used"；关掉它同时也让共享 chunk 不再进应用壳（壳只认 HTML 里真写的引用）。
+- `.wasm` 是 Bun 的**内置 loader**：导入拿到的是**路径字符串**，不是模块对象、也不是 DataURL。
+  dev 下是根绝对路径 `/_bun/asset/<hash>.wasm`；产物里是 `dsp-<hash>.wasm`，与引用它的 chunk 同目录。
+- 拿到之后要**补成绝对地址再用**（`kernelUrl()`）：产物里给的是相对模块自身的路径，直接 `fetch`
+  会按**文档**地址解析，深链（`/toy/<slug>/a/b`）下就取错文件。dev 那条本来就是绝对路径，原样放行。
+- **谁进壳**：按 `.wasm` 后缀显式挑进壳。读图链在主线程上，每一步都要问内核，断网后编不了图
+  就等于应用废了。
+- 首屏并不需要它**下载完成**：它在入口 chunk 执行时开始取，与 React 首次渲染并行，而真正用到它的
+  动作（拖进文件）远在其后 —— 实测 `bench/perf.ts` 的六个时间点与长任务数都不受影响。
 
-React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@rolldown/plugin-babel` 的
-`reactCompilerPreset()`）。同一轮三档构建的**分层实测**：
+早先那套「固定名 + HTML preload + 按模块上一级解析 + 构建期对账两层路径」整段删掉（见
+`docs/migration.md` 的「内核改走打包器」）。`?url` 这个后缀也一并删掉 —— Bun 不支持它，直接写
+`.wasm` 导入即可。
 
-| 接法 | 入口 chunk | 预缓存壳 |
-|---|---|---|
-| 都不接 | 264 421 B | 339.88 KiB |
-| 只接 `react()` | 264 421 B（**逐字节相同**） | 339.88 KiB |
-| 再加 React Compiler | 270 801 B（+6 380 B / +2.4%） | 346.11 KiB |
+### worker 是独立入口
 
-即：**插件本身零字节代价**（JSX 仍由打包器原生转换，它做的是 Fast Refresh 与 jsx-runtime 接线），
-多出来的 6.4 KB 全是编译器的自动记忆化（产物里 9 处 `react.memo_cache_sentinel`）。
+Bun **不打包** `new Worker(new URL(…, import.meta.url))`（把它列成 entrypoint 也不改写），
+所以 worker 自己编，地址由外面告诉入口：
 
-早先「接上却逐字节不变，故不引」那条结论**已作废**：当时走的是 `react({ babel: ... })` 通道，
-而那条通道根本没挂载，量到的是一个空操作（重测记在 `docs/migration.md` 的「被否掉的方案」）。
+- **产物侧**：`naming: "pipeline.worker-[hash].[ext]"`，地址经 `define` 内联进
+  `process.env.PIPELINE_WORKER`，值是相对**入口脚本自己**的那一段（两者同目录，由一道构建期校验
+  兜住：不同目录即构建失败）。
+- **dev 侧**：`scripts/serve.ts` 现编现供（`/worker/*`），路由由 `scripts/dev.env` 给出。
+- 两侧都经 `process.env.PIPELINE_WORKER` 这**同一个式子**，所以 `app/` 里只有这一处依赖注入。
+- 拉起方式是 `new Worker(url, { type: "module" })`，产物自包含（零顶层 `import`）。
+
+**那个值必须在进程启动前就存在**：`bunfig.toml` 的 `[serve.static] env` 在启动时就把匹配到的
+变量收进内联表，脚本里再 `process.env.X = …` 已经晚了（实测：产物里原样留着 `process.env.X`）。
+所以 dev 由 `bun --env-file=scripts/dev.env` 送进去 —— 见 `package.json` 的 `dev`。
+
+### 应用壳：推出来，不是挑出来的
+
+四路来源取并集后**排序**（排序是为了让指纹与输出稳定 —— 打包器给产物的顺序不是契约）：
+
+| 来源 | 收什么 |
+| --- | --- |
+| 入口产物（`kind === "entry-point"`） | `index.html` 与入口脚本 |
+| 产物 `index.html` 上的 `./` 引用 | 样式、logo、apple-touch-icon |
+| manifest 自己引的图标 | 内容不经打包器改写，按字面路径由构建脚本手写补进 `dist/` |
+| 后缀与产物名挑出 | 内核 `.wasm`、worker |
+
+那 12 个解码器分包是 `kind === "chunk"` 且 HTML 不引，两头都不沾，天然落在壳外按需 `import()`。
+
+**缓存名 = 壳的内容指纹**：壳里每个名字与每个字节一起喂 `Bun.hash`，取 base36 后 6 位
+（当前 `atools-399jrc`）。带哈希的资源改内容会连名字一起改，`index.html` 与图标不会，所以指纹
+取的是**字节**而不是清单。壳里少一样就是断网白屏，构建期对每一项在不在 `dist/` 里做一次核对 ——
+这类错只有断网才看得出来。
+
+`sw.js` 是**第三次构建**的产物：它是应用的看门人，不在应用的依赖图里，壳以 `define` 注入
+`__SHELL__`。`define` 是文本替换，**键名写错不会让构建失败**，所以补一道残留检查：产物里还有
+`__SHELL__` 就退出。`sw.ts` 顶部一次性解构那个对象 —— `define` 会把对象字面量在**每一处**整份
+内联（实测 6 处 → 2.0 KB），解构后只剩那一处。
+
+### React Compiler
+
+走 `Bun.build` 的 `reactCompiler: true`，不需要 `@vitejs/plugin-react` + `@rolldown/plugin-babel`
+那一串。代价实测 **+6.4 KB**（入口 chunk 264 421 → 270 801 B，产物里 9 处
+`react.memo_cache_sentinel`），全部都是编译器的自动记忆化。`.oxlintrc.json` 里那一组 `react/*`
+规则就是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint
+让「没被优化」可见。
+
+Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<link rel="modulepreload">`；
+本仓入口的 12 个分包全是动态 `import()`，所以 `dist/index.html` 里只有一条样式与一条入口脚本
+（实测）—— 当年 Vite 那条「Safari 报 preloaded but not used」没有回来的路。
 
 ## 本地两个服务器
 
-职责不重叠，合成一条不行：
+`scripts/serve.ts` 一个文件两种模式，职责不重叠，合成一条不行：
 
-- `bun dev` → `vite`：源码直出 + HMR。
-- `bun start` → `vite preview`：静态服务 `dist/`，并且**找不到实体文件就回落到 `index.html`**
-  （实测 `/assets/nope.js` 拿回 200 的 `text/html`），与 Cloudflare 的
-  `not_found_handling: single-page-application` 同语义。
+- `bun dev`：Bun 的 HTML 路由（源码直出 + HMR），另供一条 `/worker/*` —— worker 是独立入口，
+  dev 里没有构建期可注入的名字，索性现编现供（几毫秒），改完 worker 刷新即生效。
+  它还盯着 `moon/`：`.mbt` 一改就重编内核；产物被重写后 Bun 自己的 dev 服务器看到那个 import
+  变了，照常整页刷新。
+- `bun start`（`--dist`）：静态服务 `dist/`，**找不到实体文件就回落到 `index.html`**，与 Cloudflare 的
+  `not_found_handling: single-page-application` 同语义；顺带把 `/../../etc/passwd` 这类穿越挡在
+  `dist/` 里。
 
 不能合并的理由是**回落**：dev 也把 `/*` 一律回落到 `index.html`，于是 `/sw.js` 与
 `/manifest.webmanifest` 都会拿回 HTML（实测 `Content-Type: text/html`），PWA 在本地永远复现不出来。
 `bun start` 存在的理由就是：在 localhost 这个安全上下文里，能用真浏览器验证安装与离线。
 
-端口与地址都钉死在 `127.0.0.1:3000`。必须显式写 `host` —— Vite 默认只听 `[::1]`，
-而评测台与 PWA 只认 `127.0.0.1`（回环上的 `http://` 才算安全上下文，Service Worker 才装得上）。
+端口与地址钉死在 `127.0.0.1:3000`：PWA 只认回环上的 `http://`（那才算安全上下文，Service Worker
+才装得上）。dev 那条路由的路径与内联给浏览器的值**同源**（都来自 `scripts/dev.env`），所以改一处
+就够。
 
 `dist/` 是默认产物，多文件，交给任意静态服务器。`scripts/toy.ts` 在原地产出 `dist/` 之后把它压成
 `toy.zip`，`index.html` 落在包根。zip 是「更新」语义（已存在的包不会自动剔除消失的文件），
@@ -64,7 +122,7 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
 ## 样式：分层 CSS
 
 样式就是 CSS，按职责分层放在 `app/styles/`，由 `index.css` 一个 `@import` 入口按序串起来，
-`app/frontend.tsx` 是唯一导入点。Vite 会把整条 `@import` 链内联进同一个 css chunk，
+`app/frontend.tsx` 是唯一导入点。Bun 的 CSS loader 会把整条 `@import` 链内联进同一个 css chunk，
 所以 `dist/` 里始终**只有一个** css 产物。dev 与生产走同一条链。
 
 | 文件 | 职责 |
@@ -124,21 +182,20 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
 ## 评测台按语义类名取样
 
 `bench/` 直接用类选择器取元素：`perf.ts` 用 `.app` / `.note` / `.params`，`offline.ts` 用
-`.spec` / `.drop` / `.params`（外加 `link[rel=…]` / `script[type=module]` / `link[rel=preload]` 这类
-按语义取头标签的写法）。不给组件加 `data-*` 中转：类名本身就是稳定的语义钩子，
+`.spec` / `.drop` / `.params`（外加 `link[rel=…]` / `script[type=module]` 这类按语义取头标签的写法）。不给组件加 `data-*` 中转：类名本身就是稳定的语义钩子，
 多一层只会让同一件事有两个出处。反过来说，这些类名是**契约**，改名要同步改 `bench/`。
 
 ## PWA 与离线
 
-产物另有三样：`sw.js`、`manifest.webmanifest` 与 `icons/`。后两样连同 `logo.svg` 放在 `public/`，
-由 Vite 按**字面路径**原样复制到 `dist/` 根 —— 它们不经过打包器改写，所以路径写错不会报错，
-只会让条目静默消失。
+产物另有三样：`sw.js`、`manifest.webmanifest` 与 `icons/`。后两样是**手写件**：manifest 自己引的
+图标由构建脚本按字面路径补进 `dist/`，`logo.svg` 与 apple-touch-icon 由 HTML 引到、经打包器按内容
+哈希落盘 —— 它们不经过打包器改写的那几处，路径写错不会报错，只会让条目静默消失。
 
-- **manifest 必须落在应用根**（`start_url` 与 `scope` 都写 `"./"`）：它一旦挪进子目录，
+- **manifest 必须落在应用根**（`start_url` 与 `scope` 都写 `"./"`）：它的**产物**一旦挪进子目录，
   这两个值就会被解析成那个子目录，装出来的应用直接打不开。门禁里有一条专门盯它。
-- **图标**：iOS 不认 SVG，`apple-touch-icon` 必须是 PNG。三个 PNG 由 `app/icons/icon.svg` 光栅化而来
-  （这份稿子只留着作图源，不进产物；产物里的是 `public/icons/*.png`）。那份图稿是 `public/logo.svg`
-  （favicon）去掉 `rx=8` 的圆角、
+- **图标**：iOS 不认 SVG，`apple-touch-icon` 必须是 PNG。三个 PNG 由 `app/public/icons/icon.svg`
+  光栅化而来（这份稿子只留着作图源，不进产物；产物里的是 `icons/*.png`）。那份图稿是
+  `app/public/logo.svg`（favicon）去掉 `rx=8` 的圆角、
   四条竖杠**以中心为原点等比缩到 0.82** 得到的（`x' = 16 + (x − 16) · 0.82`，`w' = 0.82w`，`y'`
   按底边对齐），满幅底色加内容缩进安全区，一份就能同时声明 `any` 与 `maskable`。
   **两份 SVG 是同一枚标识的手写源，改一份必须改另一份**；交叉说明写在 `icon.svg` 的注释里，
@@ -146,65 +203,50 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
   本机没有 rsvg/inkscape，光栅化用的是仓库自带的 Chromium 快照：照 `bench/cdp.ts` 的 `open()`
   开该 SVG，`Emulation.setDeviceMetricsOverride` 定尺寸后 `Page.captureScreenshot`（180 / 192 / 512
   各一张）。一次性产物，改图稿要重出，别把这套塞进构建。
-- **Service Worker 用 workbox**：`vite-plugin-pwa` 的 `injectManifest` 模式，源码就是 `app/sw.ts`。
-  构建期 glob `dist/` 生成预缓存清单注入 `__WB_MANIFEST`：带哈希的资源按 URL 版本化，`index.html`
-  与图标按内容摘要版本化。于是「壳是什么」由**产物**说了算 —— 不再需要按 HTML 引用推导壳、
-  给壳算内容指纹当缓存名、再往 `sw.js` 里替换 `__SHELL__` 槽位那一整套。
-- **进清单的只有壳**。`globPatterns` 收 `html/css/js/wasm/svg/png/webmanifest`，`globIgnores` 排掉
-  `assets/decode-*.js` 与 `assets/meta-*.js`：它们是懒加载的动态分包（合计约 1.2 MB），进清单等于
-  首次访问强制下载全部音频格式，改由运行期缓存按需兜住 —— 用过一次的格式此后离线可用。
-  数值流水线的 Worker 同样是普通产物，被 glob 收进来，不必再有人去认它的名字。
-  当前清单 **10 项 / 339.9 KiB**（入口脚本 264 KB、内核 44.1 KB、worker 20 KB 占了绝大部分），
-  与手写版逐项相同。体积按 `dist/sw.js` 里的清单逐项求和得来。
-- **运行期缓存**：同源 GET 命中即用（`CacheFirst`），`ExpirationPlugin` 限 64 项 / 30 天。
-  过期是手写版没有的：哈希分包随每次部署换代，不收就无限堆积。带 `Range` 的请求不碰，
-  免得把半截响应写进缓存。
-- **导航回退**：`NavigationRoute(createHandlerBoundToURL("index.html"))`，网络优先、离线回退预缓存里的
-  `index.html`，深链因此离线也能直达应用。`denylist` 排除带扩展名的路径与 `_` 前缀 —— 那些按 URL
-  精确命中预缓存，不该被回落成一份 HTML。
-- **构建期校验分两段**。一、从 `dist/sw.js` 读出预缓存清单，核对 `index.html` 与数值内核都在
-  （「每一项都得真在 `dist/` 里」不用再查 —— 清单是 glob 出来的，匹配不到的文件根本进不去）。
-  二、从 `dist/index.html` 里核对内核那条 preload 的 `href` 与 `crossorigin`。第二段非有不可：
-  壳改成 glob 之后，preload 的路径不再由「按 HTML 引用推壳」顺带覆盖，写错的后果也不再是
-  「那种资源静默不进壳」这种可观察的缺失，而只是这份资源掉出壳、断网后编不了。
-  违例跑过：`globPatterns` 收窄到 `.txt`、只排掉 `wasm`、preload 路径改成 `./wasm/dsp2.wasm`，
-  三次构建都红。
-- **内核 preload 的 `crossorigin` 要与真实那次 fetch 对齐**。`as="fetch"` 的预热按规范必须带它
-  （同源也一样），且取值须匹配请求的凭据模式：`app/lib/dsp.ts` 用 `credentials: "same-origin"`，
-  对应 `anonymous`。判据按**枚举语义**取 —— 空值与非法值都落回 `anonymous`，只有 `use-credentials`
-  是另一种模式（凭据 `include`），所以不写死字面值。取错时浏览器只当它是另一笔请求，症状是首屏
-  白白多下一次 18 KB，没人查得出来。违例跑过：去掉 `crossorigin`、改成 `use-credentials`，两次都红。
-- **预缓存缺一项就不接管**：workbox 的 `install` 也是 `Promise.all`，任一壳资源失败即安装失败，
-  旧的 Worker 继续服役，浏览器下次导航重试。换成「缺了也照样激活」的话，要等到断网白屏才暴露，
-  而那时用户和日志之间已经隔了很远。
+- **Service Worker 是自建的一百行**（`app/sw.ts`，产物 1.2 KB）：壳（`__SHELL__` 里那份清单）由
+  构建期推出来，运行期没有任何第三方运行时。当前壳 **10 项 / 339.8 KB** ——
+  入口脚本 257.2 KB、内核 44.1 KB、worker 20.3 KB 占了绝大部分。
+- **进壳的只有壳**。那 12 个懒加载的解码器分包（`decode-*` / `meta-*`，合计约 1.7 MB）刻意不进壳：
+  进壳等于首次访问强制下载全部音频格式，改由运行期缓存按需兜住 —— 用过一次的格式此后离线可用，
+  没用过的离线时优雅失败。
+- **运行期缓存与壳同住一个缓存名**：运行期只往里写应用自己的资源（哈希分包 + 演示音频），集合有限；
+  换代时 `activate` 把其余缓存整代删掉，所以旧代不会堆积。workbox 那版的 `ExpirationPlugin`
+  （64 项 / 30 天）是给「同代内可能无限堆积」准备的，这里同代内没有那个来源，所以不引。
+  带 `Range` 的请求照样不碰，免得把半截响应写进缓存。
+- **导航回退**：只对**导航**这么做 —— 网络优先、离线回退预缓存里的 `index.html`，深链因此离线也能
+  直达应用；其余同源 GET 走缓存优先。
+- **SPA 回落出来的 HTML 不许进运行期缓存**。部署端配的是 `not_found_handling: single-page-application`：
+  任何不匹配实体文件的路径（**包括 `.js`**）都会拿回 200 的 `index.html`。这种响应一旦被缓存优先的
+  那一支写进缓存，一次偶发的缺文件就固化成永久坏死 —— 此后每次取到的都是这份 HTML，直到缓存换代。
+  判据在 `cacheable()`：`response.ok` 且 `Content-Type` 不以 `text/html` 开头才收。
+  （`index.html` 归预缓存清单管，本来也不走这条路。）
+- **预缓存缺一项就不接管**：`install` 用 `Promise.all` 而**不是** `allSettled` —— 任一壳资源失败即
+  安装失败，旧 Worker 继续服役，浏览器下次导航重试。`allSettled` 会让缺一项的半壳照样激活，
+  要等到断网白屏才暴露，而那时用户和日志之间已经隔了很远。
 - **更新语义 = 下次启动接管**。`app/sw.ts` 刻意**不调 `skipWaiting`**：新版装好就停在 `waiting`，
-  旧 Worker 与旧缓存继续服务，等标签页全关掉、下次启动才 `activate` 并清旧条目。发了 `skipWaiting`
+  旧 Worker 与旧缓存继续服务，等标签页全关掉、下次启动才 `activate` 并清掉上一代。发了 `skipWaiting`
   的话，新版一 `activate` 就整代删掉旧的预缓存，而正在用的页面还揣着旧的 HTML —— 它剩下没加载过的
   动态分包会连同旧缓存一起消失。
   但 `clients.claim` **要发**：它只在 `activate` 时接管现有页面，而 `skipWaiting` 缺席时新版根本
   到不了 `activate`，两者叠不出撕裂状态；首次安装本来就直接 `activate`，于是 claim 让**当前这次访问
   之后**加载的东西（演示音频、按需的解码器分包）也走 SW 缓存。门禁断言「首次加载后就受控」钉的正是
   这条（判据是等 `controllerchange`，不是读 `ready` —— `ready` 只说明有活着的 worker）。
-- **SPA 回落出来的 HTML 不许进运行期缓存**。部署端配的是 `not_found_handling: single-page-application`：
-  任何不匹配实体文件的路径（**包括 `.js`**）都会拿回 200 的 `index.html`。这种响应一旦被缓存优先的
-  那一支写进缓存，一次偶发的缺文件就固化成永久坏死 —— 此后每次取到的都是这份 HTML，直到缓存换代。
-  判据在 `cacheWillUpdate`：`response.ok` 且 `Content-Type` 不以 `text/html` 开头才收。
-  （`index.html` 归预缓存清单管，本来也不走这条路。）
-- **只在生产注册**：`frontend.tsx` 以 `import.meta.env.PROD` 为界，dev 下不注册，免得旧缓存顶着源码。
-  判据刻意**不**取 `import.meta.hot` 的有无 —— 本模块不导出组件，改它只能是整页重载，
-  「有没有热更新运行时」与「生产 / 开发」是两件事。注册脚本不用插件注入（`injectRegister: null`）。
+- **只在生产注册**：`frontend.tsx` 以 `import.meta.hot` 的**有无**为界。Bun 没有
+  `import.meta.env.PROD`，而 `Bun.build` 实测把 `import.meta.hot` 折叠成 `undefined`
+  （`if (!import.meta.hot)` → `if (true)`），dev 服务器注入的则是一个真对象 —— 于是它同时是
+  「有没有热更新运行时」和「是不是生产」。注册一行 `register("./sw.js")`，静默失败（不支持的环境与
+  隐私模式都会拒，不该让首屏报错）。
 - **门禁**：`bun bench/offline.ts`。**只加载一次页面**，后面所有断言都建立在这一次之上 ——
   若先加载第二遍再断网，安装期什么都没预热也照样能过（第一遍顺手就把壳填满了）。
   其中的「断网」是直接关掉 HTTP 服务，不是 CDP 模拟 —— 实测 `Network.emulateNetworkConditions`
   对回环不起作用，探针的对照地址照样拿到 404，整段断言会是空的。
   离线的 200 用 `fetch(url, { cache: 'reload' })` 判定：该模式强制绕过 HTTP 缓存，源又真的不可达，
   此时还能拿到 200 就只可能是 Service Worker 给的。预缓存是**逐项**对照的：期望清单从**运行中的 DOM**
-  现取（入口脚本、样式、manifest、favicon、apple-touch-icon、preload 的内核，加上 manifest 自己引的
-  两份图标），凑齐再判（免得把「装到一半」误报成「漏装」）；DOM 取不到那份内核就直接判不合格，
-  而不是把这条断言悄悄跳过。另钉住 `sw.js` 不在其中。
+  现取（入口脚本、样式、manifest、favicon、apple-touch-icon，加上 manifest 自己引的两份图标）与
+  **清单里的那份 `.wasm`**，凑齐再判（免得把「装到一半」误报成「漏装」）。另钉住 `sw.js` 不在其中。
   （这条对照是 `⊇` 而不是相等：壳里多出来的项由构建期那道核对管，门禁管的是「DOM 要的一样都不少」。）
-  另外两条：服务端以 `serveDir(..., true)` 打开 SPA 回落、与部署端同语义，然后主动请求一个不存在的
-  `.js`，断言它确实拿回 200 的 `text/html`（否则这条断言是空的）**且没有进缓存**；更新语义则是就地给
+  另外两条：服务端以 `spa: true` 打开 SPA 回落、与部署端同语义，然后主动请求一个不存在的 `.js`，
+  断言它确实拿回 200 的 `text/html`（否则这条断言是空的）**且没有进缓存**；更新语义则是就地给
   `dist/sw.js` 追加一行注释制造「新版」，调 `registration.update()` 后断言 `registration.waiting`
   非空、当前页面仍受控、壳仍完整。
 
@@ -222,28 +264,26 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
 
 `5568702` 那版一次装了六个包（`vite-plugin-pwa` + `workbox-core` / `precaching` / `routing` /
 `strategies` / `window`），最终态只 `import` 了两个 —— `workbox-precaching` 与 `workbox-routing`。
-本仓库按同一份清单接：`precaching`（预缓存与 `__WB_MANIFEST`）、`routing`（导航回退）、`core`
-（`clientsClaim`）、`strategies`（运行期那一支的 `CacheFirst`）、`expiration`（缓存过期）。
-`workbox-window` 不引 —— 它是给页面侧注册器用的，而本仓库的注册就一行 `register("./sw.js")`。
+本仓库照着同一份清单接过一次：`precaching`（预缓存与 `__WB_MANIFEST`）、`routing`（导航回退）、
+`core`（`clientsClaim`）、`strategies`（运行期那一支的 `CacheFirst`）、`expiration`（缓存过期）。
+那次是为构建期那 210 行自建链（壳推导 114 行 + SW 96 行）买的单：要按 HTML 引用推壳、给壳算内容
+指纹当缓存名、再往产物里替换 `__SHELL__` 槽位，每一环都是「写错只断网时才暴露」的那一类。
+workbox 的代价：`bun add` 装 319 个包、`node_modules` 94 MB → 162 MB，`dist/sw.js`
+0.86 → 23.20 KB（gzip 0.47 → 7.68），另加 `vite.config.ts` 十余行配置。
 
-**本仓库为什么还是引了它**（此处 2026-09 的实测数字，与上一版「不引」的结论同源，只是权衡变了）：
-上一版的理由是「手写 SW 才 1.2 KB，而这一套要 338 个包 / 101 MB」。本仓这次要为的不是运行时，
-是**构建期那 210 行自建链**（壳推导 114 行 + SW 96 行）—— 它要按 HTML 引用推壳、给壳算内容指纹当
-缓存名、再往产物里替换 `__SHELL__` 槽位，每一环都是「写错只断网时才暴露」的那一类。
-交给 workbox 之后，这些全成了十几行配置，另外白得三件手写版没有的东西：按 URL / 内容摘要的
-版本化、`ExpirationPlugin` 的缓存过期、`createHandlerBoundToURL` 的导航回退。
+**后来撤了，因为当初买的那件东西已经不值钱了。** 壳推导不再是「按 Vite 的 manifest 猜」——
+`Bun.build` 的产物直接报 `kind === "entry-point"`，壳就是产物 ∪ HTML 的 `./` 引用，
+96 行 SW 也原样搬回来（`docs/migration.md` 里程碑 9 记着它当时的形状）。而 workbox 换来的三件里：
 
-代价如实记（本仓实测）：
+| workbox 给的 | 现在由什么覆盖 |
+| --- | --- |
+| 按 URL / 内容摘要版本化 | 缓存名 = 壳的内容指纹（名字 + 字节一起喂 `Bun.hash`），换版即换代 |
+| `createHandlerBoundToURL` 的导航回退 | 手写的三行 `HOME` 匹配（`caches.match(HOME)`） |
+| `ExpirationPlugin` 的缓存过期 | **不做了** —— 同代内只有应用自己的资源会进运行期缓存，没有无限增长源；跨代由 `activate` 整代清 |
 
-| | 手写 | workbox |
-| --- | --- | --- |
-| 构建期 + SW 源码 | 114 + 96 行 | 39 + 56 行（另 `vite.config.ts` 十余行配置） |
-| `dist/sw.js` | 0.86 KB（gzip 0.47） | 23.20 KB（gzip 7.68） |
-| 预缓存清单 | 10 项 | 10 项（与手写版同一组） |
-| 开发依赖 | — | `bun add` 装 319 个包，`node_modules` 94 MB → 162 MB |
-
-`sw.js` 大出来的 22 KB 是 workbox 的预缓存与路由运行时：它在后台下载、不挡首屏，换来的是上面那三件。
-**首次访问要下的字节没有变**（预缓存清单逐项相同）。
+撤回后的实测：`dist/sw.js` **1.2 KB**（workbox 版 23.20 KB），开发依赖少 13 个包，
+壳清单 10 项 / 339.8 KB —— **清单与 workbox 那版逐项相同**，字节比它少 5.8 KiB（345.6 → 339.8，
+−1.7%）。这点差在两个压缩器的取舍上，不是少了什么：逐项对照过，名字与条数一个不差。
 
 同一条线上的三个位置，本仓库与它不同：
 
@@ -251,25 +291,23 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
   像是把两者当成同一件事。但撕裂状态只由 `skipWaiting` 造成；`clientsClaim` 只在 `activate` 时接管
   现有页面，而 `skipWaiting` 缺席时新版根本到不了 `activate`。留着它，首次访问之后加载的演示音频与
   解码器分包才进得了 SW 缓存（门禁的「演示资源入缓存」与「首次加载后就受控」两条都钉在这上面）。
-- **清单只收壳**。它用默认的 `globPatterns: ['**/*']`；本仓库必须排掉约 1.2 MB 的动态分包 ——
+- **清单只收壳**。它用默认的 `globPatterns: ['**/*']`；本仓库必须排掉约 1.7 MB 的动态分包 ——
   这不是洁癖，是「首次访问不该下载七种音频解码器」。它的第 2 版是另一条反面教材：删掉安装期预热
   就等于丢掉了首次访问的离线能力，所以本仓库的门禁改成**只加载一次**就必须全绿，不接受「第二遍才离线」。
-- **`manifest: false` 与它一致**，理由也一样：manifest 与图标是 `public/` 里的手写件，交插件生成会把
-  `<link rel="manifest">` 写成以 base 为前缀的路径，`/toy/<slug>/` 这类子路径部署就断了。
-  `injectRegister: null` 则保持注册写在 `frontend.tsx`。
-  另：`injectManifest` 默认输出保留裸 `import`（module SW），得配 `rollupFormat: 'iife'` 才回到 classic。
+- **manifest 与图标不进打包器的改写范围**，理由也一样：它们交出去生成会把 `<link rel="manifest">`
+  与 `scope` / `start_url` 写成以 base 为前缀的路径，`/toy/<slug>/` 这类子路径部署就断了。
 - **`_headers` 不需要**。它当年给 `/sw.js` 写 `Cache-Control: no-cache`；而 Cloudflare Workers 的静态
   资源**默认**就是 `Cache-Control: public, max-age=0, must-revalidate` + `ETag`，每次回源校验，
   `sw.js` 不会卡在旧版本。哈希资源同理不配 `immutable` —— 受控页面根本不走 HTTP，走的是 SW 缓存。
   少一个文件，也少一条要与部署端对齐的规则。
-- **深链回退交给 workbox 的 `NavigationRoute`**（它当年也是这么做的）。手写版的 `HOME` 匹配已经是过去式。
+- **深链回退回到手写版**：导航网络优先、离线回落 `HOME`。`NavigationRoute` 随 workbox 一起走了。
 
 ## 平台基线：哪些浏览器跑得起来（2026-09 定案）
 
-门槛由两条决定，其余都更宽。三条来源都在产物里可核对：指令集读 `wasm/dsp.wat`，CSS 读
-`assets/index-*.css`，API 看宿主代码里用到的构造。
+门槛由两条决定，其余都更宽。三条来源都在产物里可核对：指令集读内核产物（临时反汇编成 wat 看的，
+不入库），CSS 读 `index-*.css`，API 看宿主代码里用到的构造。
 
-**WebAssembly**（`wasm/dsp.wasm`，44.1 KB，**零 `import`，不需要 WASI**）：
+**WebAssembly**（`dsp-<hash>.wasm`，44.1 KB，**零 `import`，不需要 WASI**）：
 
 | 用到的特性 | 产物里的证据 | Chrome | Firefox | Safari |
 | --- | --- | --- | --- | --- |
@@ -280,7 +318,7 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
 
 没有用到符号扩展、多值返回、`memory64`、尾调用、异常处理；`memory.grow` 是通用能力。
 
-**CSS**（`assets/index-*.css`，6.8 KB）：
+**CSS**（`index-*.css`，7.2 KB）：
 
 | 用到的特性 | 用处 | Chrome | Firefox | Safari |
 | --- | --- | --- | --- | --- |
@@ -297,10 +335,11 @@ React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@r
 | --- | --- | --- | --- | --- |
 | `CompressionStream` / `DecompressionStream` | PNG 的 zlib | 80 | 113 | **16.4** |
 | `OfflineAudioContext` | 按容器速率建解码上下文（带 `webkit` 前缀兜底） | 14 | 25 | 6 |
-| `Worker`（classic） | 数值流水线；`assets/pipeline.worker-*.js` 是 `(function(){` 开头的 IIFE，零顶层 `import` | 4 | 3.5 | 5 |
+| `Worker`（**module**） | 数值流水线；`pipeline.worker-*.js` 零顶层 `import`，但按 `{ type: "module" }` 拉起 | 80 | **114** | 15 |
 
 合起来是 **Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**。Safari 被 `@property` 与 `v128`
-同时钉在 16.4；Firefox 被 `@property` 钉在 128，是整条线里最新的一条。
+同时钉在 16.4；Firefox 被 `@property` 钉在 128，是整条线里最新的一条（module Worker 的 114 更宽，
+不构成门槛）。
 
 实测（2026-09-11，真实 `dist/` 产物，本机）：
 

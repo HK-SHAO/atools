@@ -1,18 +1,4 @@
-// White-box invariants of the RTISI kernel.
-//
-// The host-visible behaviour (correlation, packed-transform ablation, ulp bounds) is tested in
-// app/lib/rtisi.test.ts. What lives here is what only the kernel can see: the region layout,
-// the freedom of chunked advancement, the budget shrink rule, and the "byte → table" path of the
-// magnitude soft constraint. All of them share one failure mode — wrong but finite — so every
-// assertion either compares against an independent quantity or pins a known extreme.
-//
-// Thresholds come from measurements recorded in docs/algorithms.md. Not thresholds: with true
-// phases the correlation to the original measures 0.9989 / 0.9994 / 0.9976 (three window
-// lengths), without them it wanders between −0.01 and 0.90 — the two lines are 0.1 apart, so the
-// gates sit at 0.99 / 0.9.
-
 ///|
-/// The job record for `h`; aborts on a stale handle.
 fn job_of(h : Int) -> RtJob {
   match rt_at(h) {
     Some(job) => job
@@ -33,9 +19,6 @@ fn peak_of(a : FixedArray[Double]) -> Double {
 }
 
 ///|
-/// Zero-lag normalized correlation. The output is aligned with the original at zero lag — the
-/// padding convention plus `out[win/2 + i]` in the finish step guarantee it — so scanning lags
-/// is unnecessary, and scanning would partly excuse "wrote into the wrong plane" mistakes.
 fn corr_of(a : FixedArray[Double], b : FixedArray[Double]) -> Double {
   let mut n = 0.0
   let mut da = 0.0
@@ -49,9 +32,6 @@ fn corr_of(a : FixedArray[Double], b : FixedArray[Double]) -> Double {
 }
 
 ///|
-/// A pure tone and its STFT. The padding convention matches the host: `pad[win/2 + i] = x[i]`
-/// and frame `f` reads `pad[f*hop …]`. Getting it wrong means the original is no longer a fixed
-/// point, and "true phases are a fixed point" is the first thing to fail.
 priv struct Fx {
   x : FixedArray[Double]
   mag : FixedArray[Double]
@@ -71,7 +51,7 @@ fn make_fx(frames : Int, win : Int, hop : Int, freq : Double) -> Fx raise {
   for i = 0; i < samples; i = i + 1 {
     x.unsafe_set(
       i,
-      0.6 * @math.sin(2.0 * 3.141592653589793 * freq * i.to_double() / 8000.0),
+      0.6 * @math.sin(2.0 * @math.PI * freq * i.to_double() / 8000.0),
     )
   }
   let pad = FixedArray::make(samples + win, 0.0)
@@ -102,9 +82,6 @@ fn make_fx(frames : Int, win : Int, hop : Int, freq : Double) -> Fx raise {
 }
 
 ///|
-/// Runs one job to completion and returns a copy of `y` (closing hands the regions back).
-/// `chunk` is the frame count per chunk: chunked advancement is part of the API, not a style
-/// preference.
 fn run_rtisi(
   fx : Fx,
   iters : Int,
@@ -132,7 +109,6 @@ fn run_rtisi(
   )
   assert_true(h >= 1)
   let job = job_of(h)
-  // Views are taken after `open`: the job's buffers only exist once the handle does.
   let arena = job_d(h)
   let bseg = job_b(h)
   let fb = fx.frames * fx.bins
@@ -153,8 +129,6 @@ fn run_rtisi(
   }
   match levels {
     Some(lv) => {
-      // Same calls the host makes: the byte segment is a segment of its own, so the offset is
-      // segment-relative and no base address is involved.
       let off = rtisi_levels(h, 0)
       for i = 0; i < fb; i = i + 1 {
         bseg.unsafe_set(off + i, lv.unsafe_get(i).to_byte())
@@ -178,7 +152,6 @@ fn run_rtisi(
 }
 
 ///|
-/// Reads back only the shrunk (K, iters), ignoring the output.
 fn shrink_of(
   frames : Int,
   win : Int,
@@ -197,7 +170,6 @@ fn shrink_of(
 }
 
 ///|
-/// Regions of a job in the order `rtisi_open` lays them out.
 fn layout_of(job : RtJob) -> FixedArray[Int] {
   [
     job.off_mag,
@@ -219,15 +191,11 @@ fn layout_of(job : RtJob) -> FixedArray[Int] {
 }
 
 ///|
-/// Walks the layout alongside the per-region sizes and requires every region to start where the
-/// previous one ended. The double buffer must end at `at` and the byte segment must be exactly
-/// `fb`; both lengths are compared against the kernel's own readings, never against addresses.
 fn walk_layout(h : Int, frames : Int, win : Int, samples : Int) -> Unit raise {
   let job = job_of(h)
   let bins = win / 2 + 1
   let fb = frames * bins
   let padded = samples + win
-  // K is shrunk by the budget, so it is not frames−1: ask the kernel instead of re-deriving it.
   let state = (job.k + 1) * bins
   let size : FixedArray[Int] = [
     fb,
@@ -253,8 +221,6 @@ fn walk_layout(h : Int, frames : Int, win : Int, samples : Int) -> Unit raise {
     at = at + size.unsafe_get(i)
   }
   assert_eq(at, job_words_of(h))
-  // One element of `levels` is one byte (16 MB instead of 128 MB for a 16M-pixel material), so
-  // it lives in the byte segment at offset 0 for exactly `fb` bytes.
   assert_eq(rtisi_levels(h, 0), 0)
   assert_eq(rtisi_levels(h, 1), fb)
   assert_eq(job_bytes_of(h), fb)
@@ -281,7 +247,6 @@ test "white box: the layout is unchanged while another job is open" {
   let h = rtisi_open(frames, win / 2 + 1, win, hop, frames * hop, 4, 0, 1, 0.0)
   assert_true(h >= 1)
   walk_layout(h, frames, win, frames * hop)
-  // The neighbour is a separate array, so its offsets cannot interfere with this job's layout.
   assert_true(job_d(pad).length() == 1000)
   assert_eq(job_bytes_of(pad), 0)
   rtisi_close(h)
@@ -290,11 +255,6 @@ test "white box: the layout is unchanged while another job is open" {
 }
 
 ///|
-/// `levels` reaches the kernel through the same path the host uses: `rt_fit` reads
-/// `levels[i]` out of the byte segment at the offset the host wrote to. This behaviour half is
-/// what remains after the addressing half became structurally impossible to get wrong: all
-/// levels are 1, so table entry 1 applies and entry 0 does not. A kernel that ignored `levels`
-/// and always took entry 0 would not produce zero.
 test "white box: levels are read from byte 0 of the byte segment in the frame loop" {
   let win = 256
   let hop = 64
@@ -308,7 +268,6 @@ test "white box: levels are read from byte 0 of the byte segment in the frame lo
   let bseg = job_b(h)
   let fb = frames * bins
   let off_levels = rtisi_levels(h, 0)
-  // Entry 0 = [1.0, 1e300] (let through); every other entry is [0, 0] (clamped to 0).
   arena.unsafe_set(job.off_band, 1.0)
   arena.unsafe_set(job.off_band + 256, 1.0e300)
   for i = 0; i < fb; i = i + 1 {
@@ -347,10 +306,6 @@ test "white box: two runs with the same parameters are bit-identical" {
 }
 
 ///|
-/// The main **numeric correctness** gate: true phases are a fixed point of this iteration, so
-/// giving them should return the signal nearly unchanged. It replaces weak gates like
-/// "correlation > 0.2" because reading the wrong plane still produces finite, deterministic,
-/// chunk-consistent output — only this gate fails.
 test "white box: true phases are a fixed point, absent phases clearly are not" {
   let fx = make_fx(501, 512, 128, 440.0)
   let with_warm = run_rtisi(fx, 8, 100000, 0.0, true, None, None)
@@ -359,8 +314,6 @@ test "white box: true phases are a fixed point, absent phases clearly are not" {
   let cc = corr_of(cold, fx.x)
   assert_true(cw > 0.99)
   assert_true(cc < 0.9)
-  // The magnitude has to stay in a sane range too: correct phases scaled by 100× would pass
-  // the correlation check on its own.
   let px = peak_of(fx.x)
   let py = peak_of(with_warm)
   assert_true(py > 0.2 * px && py < 5.0 * px)
@@ -370,12 +323,6 @@ test "white box: true phases are a fixed point, absent phases clearly are not" {
 test "white box: the magnitude soft constraint goes through levels bytes and a 256-entry table" {
   let fx = make_fx(9, 256, 64, 440.0)
   let fb = fx.frames * fx.bins
-  // Entry 0 = [1.0, 1e300], every other entry [0, 0]. With true phases the magnitude is a
-  // constant 1.0, so the output is the original with a different scale.
-  //
-  // True phases are required here: a spectrum with constant magnitude and zero phase *is* an
-  // impulse at n = 0, where the Hann window is exactly 0, so the window eats everything and the
-  // output is identically zero.
   let alive = FixedArray::make(512, 0.0)
   alive.unsafe_set(0, 1.0)
   alive.unsafe_set(256, 1.0e300)
@@ -384,20 +331,14 @@ test "white box: the magnitude soft constraint goes through levels bytes and a 2
   let ones = FixedArray::make(fb, 1)
   let band = run_rtisi(fx, 4, 100000, 0.0, true, Some(alive), Some(zeros))
   assert_true(peak_of(band) > 0.0)
-  // Once the magnitude is flattened the waveform is no longer the original (a pure tone's main
-  // lobe is spread over the whole band), so this only pins that the soft constraint really ran.
-  // An all-zero table clamps every magnitude to 0, so the output must be identically zero.
   assert_eq(
     peak_of(run_rtisi(fx, 4, 100000, 0.0, true, Some(dead), Some(zeros))),
     0.0,
   )
-  // All levels are 1 while entry 1 is still all zeros: a kernel that ignored `levels` would not
-  // produce zero here.
   assert_eq(
     peak_of(run_rtisi(fx, 4, 100000, 0.0, true, Some(alive), Some(ones))),
     0.0,
   )
-  // No table means a hard projection onto the target magnitude, unlike all three above.
   let hard = run_rtisi(fx, 4, 100000, 0.0, true, None, None)
   assert_true(peak_of(hard) > 0.0)
   let mut same = 0
@@ -410,15 +351,6 @@ test "white box: the magnitude soft constraint goes through levels bytes and a 2
 }
 
 ///|
-/// The overlap normalization of the finish step can be recomputed independently from `out`,
-/// `cover` and the Hann window, so it should not rest on "it runs to completion" alone.
-/// (1) accumulate `cover` in frame order and compare bit for bit; (2) recompute `y` from the
-/// kernel's `out` and that cover and compare bit for bit.
-///
-/// Added after a fault-injection sweep: writing the window instead of its square, accumulating
-/// `cover` in reverse, and forgetting to divide `y` by cover all passed every gate — they change
-/// the numbers only slightly, and the true-phase gate uses correlation (0.99945 clean versus
-/// 0.99917…0.99980 injected, indistinguishable from noise).
 test "white box: the finish-step overlap normalization recomputes independently" {
   let win = 256
   let hop = 64
@@ -431,13 +363,11 @@ test "white box: the finish-step overlap normalization recomputes independently"
   let job = job_of(h)
   let arena = job_d(h)
   let fb = frames * bins
-  // Non-flat magnitudes and phases, so every kind of corruption lands at a comparable scale.
   for i = 0; i < fb; i = i + 1 {
     arena.unsafe_set(job.off_mag + i, 1.0 + (i % 7).to_double())
     arena.unsafe_set(job.off_warm + i, 0.25 * (i % 11).to_double())
   }
   ignore(rtisi_run(h, 0, frames))
-  // (1) accumulate cover independently, in frame order
   let expect = FixedArray::make(padded, 0.0)
   for f = 0; f < frames; f = f + 1 {
     let s = f * hop
@@ -449,12 +379,10 @@ test "white box: the finish-step overlap normalization recomputes independently"
       )
     }
   }
-  // `cover` is written by the finish step, not by `run`, so finish before comparing.
   rtisi_finish(h)
   for i = 0; i < padded; i = i + 1 {
     assert_true(expect.unsafe_get(i) == arena.unsafe_get(job.off_cover + i))
   }
-  // (2) recompute y from the kernel's out and our own cover
   let mut top = 0.0
   for i = 0; i < padded; i = i + 1 {
     if expect.unsafe_get(i) > top {
@@ -481,44 +409,56 @@ test "white box: the budget shrinks K and iters until they fit" {
   let hop = 128
   let frames = 501
   let bound = 8
-  // Ceiling = min(frames−1, round(win/hop)−1)
   let ceil_k = win / hop - 1
   let unit = frames.to_double() * win.to_double() * @math.log2(win.to_double())
   let (k1, it1) = shrink_of(frames, win, hop, bound, 5.0e7)
   assert_true(k1 >= 1 && k1 <= ceil_k)
   assert_true(it1 >= 1 && it1 <= bound)
-  // Termination: either it fit the budget or it is already pressed to the floor. Without this
-  // the shrink becomes "press a few times and hope".
   assert_true(
     unit * (k1 + 1).to_double() * it1.to_double() <= 5.0e7 ||
     k1 == 1 ||
     it1 == 1,
   )
-  // Monotone: a smaller budget may only shrink K and iters.
   let (k2, it2) = shrink_of(frames, win, hop, bound, 1.0e7)
   assert_true(k2 <= k1 && it2 <= it1)
-  // A large budget shrinks nothing.
   let (k3, it3) = shrink_of(frames, win, hop, bound, 1.0e18)
   assert_eq(k3, ceil_k)
   assert_eq(it3, bound)
-  // A tiny budget presses both to 1.
   let (k4, it4) = shrink_of(frames, win, hop, bound, 1.0)
   assert_eq(k4, 1)
   assert_eq(it4, 1)
 }
 
 ///|
-/// When `hop` does not divide the window length, `R = round(L/a)` and integer division `L/a`
-/// differ — and `hop` only equals win/4 on the default level, so that case needs its own gate.
-/// The assertion reads K and iters rather than the output, which would mix in other differences.
+test "white box: @math.log2 is the exact step count on every reachable window length" {
+  let mut w = min_win
+  let mut idx = 0
+  while w <= max_win {
+    let mut steps = 0
+    while 1 << steps < w {
+      steps = steps + 1
+    }
+    assert_eq(@math.log2(w.to_double()), steps.to_double())
+    assert_eq(plan(w), idx)
+    w = w * 2
+    idx = idx + 1
+  }
+  assert_eq(idx, plan_count)
+  let mut off = 0
+  while 1 << off < 3000 {
+    off = off + 1
+  }
+  assert_eq(off, 12)
+  assert_true(@math.log2(3000.0) != off.to_double())
+  assert_eq(@math.log2(3000.0).to_int(), 11)
+}
+
+///|
 test "white box: K rounds rather than divides when hop does not divide the window" {
-  // 512/130 = 3.938 → round gives 4, K = 3; dividing gives 3, K = 2.
   let (k, _) = shrink_of(501, 512, 130, 1, 1.0e18)
   assert_eq(k, 3)
-  // 512/100 = 5.12 → round gives 5, K = 4.
   let (k2, _) = shrink_of(501, 512, 100, 1, 1.0e18)
   assert_eq(k2, 4)
-  // Too few frames clamps to frames−1.
   let (k3, _) = shrink_of(3, 512, 128, 1, 1.0e18)
   assert_eq(k3, 2)
 }
@@ -530,8 +470,6 @@ test "white box: illegal parameters are rejected, not crashed on" {
   assert_eq(rtisi_open(0, 129, 256, 64, 0, 8, 0, 0, 0.0), 0)
   assert_eq(rtisi_open(-3, 129, 256, 64, 0, 8, 0, 0, 0.0), 0)
   assert_eq(rtisi_open(4, 129, 8192, 2048, 1024, 8, 0, 0, 0.0), 0)
-  // Every entry point must no-op on an invalid handle rather than index out of bounds. Offset
-  // accessors return -1 (not 0 — 0 is a legal offset, `levels` sits at byte 0), lengths return 0.
   assert_eq(rtisi_off(0, 0), -1)
   assert_eq(rtisi_off(max_jobs + 1, 2), -1)
   assert_eq(rtisi_off(0, 3), -1)
@@ -551,7 +489,6 @@ test "white box: a full job pool makes rtisi_open return 0" {
   }
   assert_true(hs.unsafe_get(max_jobs - 1) >= 1)
   assert_eq(rtisi_open(8, 129, 256, 64, 8 * 64, 4, 0, 0, 0.0), 0)
-  // Each RTISI job also holds a session slot; after releasing them both pools are usable again.
   for h in hs {
     rtisi_close(h)
   }

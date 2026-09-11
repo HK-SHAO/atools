@@ -1,36 +1,24 @@
 import { readdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { build } from "vite";
-import { ensureCached } from "./cache";
-import { open, sleep, waitFor } from "./cdp";
-import type { Row } from "./entry";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { cachePath, ensureCached } from "./cache.ts";
+import { open, serve, sleep, waitFor } from "./cdp.ts";
+import type { Row } from "./entry.ts";
 
 const PORT = Number(process.env.BENCH_PORT ?? 4330);
 const MAX_SEC = Number(process.env.MAX_SEC ?? 8);
 const OUT = process.env.OUT ?? "/tmp/bench.json";
 const AUDIO_EXT = new Set([".mp3", ".m4a", ".ogg", ".wav"]);
 
-// 评测台自己的入口也用 Vite 打包：仓库里只留一个打包器，指标的转换语义与真应用一致。
-// `write: false` 拿到产物再落盘 —— `serve.ts` 是另一个进程，只能从文件读。
-const bundle = await build({
-  configFile: false,
-  logLevel: "silent",
-  build: {
-    write: false,
-    minify: false,
-    target: "esnext",
-    lib: { entry: `${import.meta.dir}/entry.ts`, formats: ["es"], fileName: "bundle" },
-  },
+const built = await Bun.build({
+  entrypoints: [`${import.meta.dirname}/entry.ts`],
+  target: "browser",
+  naming: "bundle.[ext]",
 });
-const outputs = (Array.isArray(bundle) ? bundle : [bundle]) as {
-  output: { type: string; code?: string }[];
-}[];
-const chunk = outputs[0]?.output.find(o => o.type === "chunk" && o.code);
-if (!chunk?.code) throw new Error("评测台 bundle 构建失败");
-await writeFile(`${import.meta.dir}/bundle-${PORT}.js`, chunk.code);
+if (!built.success) throw new AggregateError(built.logs, "评测台 bundle 构建失败");
 
 function discover(): string[] {
-  const docs = `${import.meta.dir}/../docs`;
+  const docs = `${import.meta.dirname}/../docs`;
   const out: string[] = [];
   const walk = (rel: string): void => {
     for (const e of readdirSync(`${docs}/${rel}`, { withFileTypes: true })) {
@@ -60,11 +48,17 @@ const CASES = JSON.parse(
     ]),
 );
 
-const server = Bun.spawn([process.execPath, `${import.meta.dir}/serve.ts`], {
-  env: { ...process.env, PORT: String(PORT) },
-  stdout: "ignore",
-  stderr: "inherit",
-});
+const files: Record<string, string | Uint8Array> = {
+  "/": new Uint8Array(await readFile(`${import.meta.dirname}/index.html`)),
+};
+for (const output of built.outputs)
+  files[`/${path.basename(output.path)}`] = new Uint8Array(await output.arrayBuffer());
+for (const rel of list) {
+  files[`/audio/${rel}`] = `${import.meta.dirname}/../docs/${rel}`;
+  files[`/pcm/${rel}`] = cachePath(rel);
+}
+
+const server = serve(PORT, { files });
 
 const session = await open({
   port: PORT + 1000,
@@ -87,9 +81,6 @@ session.on(m => {
 const ev = session.ev;
 const rows: Row[] = [];
 
-// 赋值那一步**不能**带 `return`：`ev` 一律 returnByValue，而 `__src.pcm` 是整段素材
-// （一首歌几百万个样点），把按值序列化回来会当场卡死 —— 症状是「一条日志都没有」，
-// 而它发生在第一条日志之前，看起来像启动挂了。要什么就只取那点标量。
 const load = async (file: string): Promise<[number, number]> => {
   await ev(`window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)});`);
   return ev<[number, number]>("return [window.__src.sr, window.__src.pcm.length]");
@@ -154,12 +145,13 @@ try {
   await waitFor("bench bundle", async () => ((await ev("return typeof Bench")) === "object" ? true : null));
 
   if (process.env.NEURAL) {
-    await ev(`Bench.setNeural(${JSON.stringify(await Bun.file(process.env.NEURAL).json())})`);
+    await ev(`Bench.setNeural(${JSON.stringify(JSON.parse(await readFile(process.env.NEURAL, "utf8")))})`);
     console.log("神经修正已启用:", process.env.NEURAL);
   }
 
   if (process.env.DATA) {
-    const dir = `${import.meta.dir}/.data`;
+    const dir = `${import.meta.dirname}/.data`;
+    await mkdir(dir, { recursive: true });
     for (const file of list) {
       await ev(`window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)});`);
       const tag = file.replaceAll("/", "_").replace(/\.[^.]+$/, "");
@@ -178,7 +170,7 @@ try {
           console.log(`  跳过 ${tag}.${via}（读回无相位）`);
           continue;
         }
-        await Bun.write(`${dir}/${tag}.${via}.bin`, Buffer.from(b64, "base64"));
+        await writeFile(`${dir}/${tag}.${via}.bin`, Buffer.from(b64, "base64"));
         console.log(`  ${tag}.${via}.bin`);
       }
     }
@@ -211,11 +203,11 @@ try {
     }
 
     console.log("\nPNG 体检:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));
-    await Bun.write(OUT, JSON.stringify(rows, null, 2));
+    await writeFile(OUT, JSON.stringify(rows, null, 2));
     console.log("\nerrs:", errors.length ? errors.slice(0, 3).join(" | ") : "(none)");
   }
 } finally {
   await session.stop();
-  server.kill();
+  server.stop();
   await sleep(300);
 }

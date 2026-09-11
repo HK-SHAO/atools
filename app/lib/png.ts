@@ -61,10 +61,6 @@ function assemble(pieces: Uint8Array[]): Bytes {
 
 export const isPng = (b: Uint8Array): boolean => SIGNATURE.every((v, i) => b[i] === v);
 
-/**
- * 一行的字节数。`depth < 8` 时它**不是** `width` 字节，而是 `ceil(width·depth/8)`：按 width
- * 取会让长度校验直接失败（自家 2/4 bit 图读回来恒为 null）。读写两侧共用这一条。
- */
 const rowBytesOf = (width: number, depth: number): number => Math.ceil((width * depth) / 8);
 
 function chunk(type: string, data: Uint8Array): Uint8Array {
@@ -296,7 +292,6 @@ export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | 
   if (!raw) return null;
   const { width, height } = info;
   const depth = info.bitDepth;
-  // 滤波的 bpp 恒为 1 —— PNG 规定 depth<8 时逐字节滤波。
   const rowBytes = rowBytesOf(width, depth);
   const flat = unfilter(raw, rowBytes, height, 1);
   if (!flat) return null;

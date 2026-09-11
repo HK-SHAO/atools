@@ -2,14 +2,9 @@ import type { Samples } from "./arrays";
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
-/**
- * 重采样后的长度 —— `resample` 与「能不能装下」的判据（`spectrum.ts` 的 fitEncode）共用这一个
- * 定义，否则判据会比实际编出来的多算一两帧，把本来装得下的请求判成装不下。
- */
 export const resampledLength = (n: number, from: number, to: number): number =>
   Math.max(1, Math.round((n * to) / from));
 
-// 相位表的内存预算：最坏 4 MB，与「按 4096 条、每条宽 64 抽头」时的占用持平。
 const MEMO_BYTES = 4 << 20;
 
 function kernel(d: number, fc: number): number {
@@ -29,11 +24,6 @@ export function resample(x: Samples, from: number, to: number, cutoffHz = 0): Sa
   const half = clamp(Math.round(2 / Math.max(fc, 1e-5)), 3, 64);
   const spread = half + 0.5;
 
-  // 抽头权重只由 frac 决定，所以同一相的权重算一次存下。
-  // 上限不能设小：同一个相会因浮点漂移散成近十种 frac（44.1k→16k 既约分母 160，实测 1442 种）。
-  // 但也不能只按条数封 —— 若相位种类真的超过预算，表就从「省钱」变成「每样点一次未命中 + 一次
-  // 分配」，实测 11025→32000 反而比逐样点现算慢 1.18×。所以顶到上限就整段退回现算，
-  // 并且回退路径不分配数组，最坏只是与逐样点持平。上限同时按条数与内存双重封顶。
   const taps = new Map<number, Float64Array>();
   const cap = Math.max(64, Math.min(1 << 14, Math.floor(MEMO_BYTES / (2 * half * 8))));
   let memo = true;

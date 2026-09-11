@@ -1,34 +1,21 @@
 import type { Samples } from "./arrays";
-import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params";
-import { TUNE, phaseFromMagnitude } from "./phase";
-import { resampledLength } from "./resample";
-import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
-import { Frames, coverFloor, coverage, olaFromPhase, padOf, uncovered } from "./stft";
+import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params.ts";
+import { TUNE, phaseFromMagnitude } from "./phase.ts";
+import { resampledLength } from "./resample.ts";
+import { DEFAULT_BUDGET, rtisiLa } from "./rtisi.ts";
+import { Frames, coverFloor, coverage, olaFromPhase, padOf, uncovered } from "./stft.ts";
 
 export const BANDS = 2;
 
 const MIN_WIN = 256;
 const MAX_WIN = 4096;
 
-/**
- * 像素预算。像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**，且实测 0.84 字节/像素 ——
- * 这个预算同时就是文件体积。16M 是**默认档（win 512）刚好撞上 `MAX_FRAMES` 的地方**，
- * 再往上加，默认档也装不出更长的音频。各档的天花板是两道墙里更小的那道，实测表在
- * docs/algorithms.md。
- */
 export const MAX_PIXELS = 16_000_000;
 
-/**
- * 单边（帧数就是图宽）上限：canvas 的硬墙。实测 65535 宽仍然画得出、`toBlob` 正常，
- * **65536 起静默失败**（画点读回是 0、`toBlob` 给 null），所以取 65535 而不是 2^16。
- * 它让省档（win 256）的列数先于像素预算到顶 —— 省档每秒的列数是最档的两倍。读图侧共用
- * 这个数（`image.ts` 里那条「宽超了就先缩」），否则读回来的是满屏静音。
- */
 export const MAX_FRAMES = 65535;
 
 export const DEFAULT_SR = 44100;
 
-/** 一张图最多多少帧：像素预算与单边上限的较小者。读写两侧共用同一个预算。 */
 export const maxFramesFor = (bins: number, bands = 1): number =>
   Math.min(MAX_FRAMES, Math.floor(MAX_PIXELS / (bins * bands)));
 
@@ -68,7 +55,6 @@ export interface Meta {
 }
 
 export interface Spectrum {
-
   levels: Uint8Array;
 
   phaseCos: Uint8Array | null;
@@ -103,15 +89,8 @@ export function rowsFor(win: number, sr: number, fmax: number): number {
   return Math.max(8, Math.min(full, Math.floor(fmax / perBin) + 1));
 }
 
-/**
- * 这个档位限带时的截止频率，同时是「重采样要不要低通」的那个数。只有紧凑档按 `fmax`
- * 限带，可逆档要整条带到奈奎斯特（0）。`planOf` 与 `useStudio` 的重采样调用共用它：
- * 两处各写一遍 `mode === "compact" ? fmax : 0`，改一处忘另一处就是「图上截了带、
- * 重采样没截」这种只在频宽旋钮上看得出来、却听不出所以然的错。
- */
 export const cutoffOf = (enc: Encode): number => (enc.mode === "compact" ? enc.fmax : 0);
 
-/** 一个档位在某个采样率下的形状。见 `planOf`。 */
 interface Plan {
   win: number;
   hop: number;
@@ -119,14 +98,6 @@ interface Plan {
   bands: number;
 }
 
-/**
- * 一个档位在某个采样率下的形状：窗长、步进、带宽行数、带数。
- *
- * 这三处问的是同一件事 —— `fits`「装不装得下」、`ceilingOf`「最多多少秒」、`shapeFor`
- * 「真建起来多大」—— 而「带宽行数」与「带数」各带两条分支（紧凑档按 `fmax` 截band、
- * 可逆档带宽翻倍）。答案分散着抄就是三份同一个档位的副本，而判据与实际一旦分家，
- * 症状是「刚好装得下」被判成装不下（见 `fitEncode` 里那段）。
- */
 const planOf = (enc: Encode, sr: number): Plan => {
   const win = winOf(enc);
   return {
@@ -141,8 +112,6 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const { win, hop, bins, bands } = planOf(enc, sr);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
 
-  // 只有像素这一个预算，所以只有一条提示 —— 别再写「把窗长调低」：像素 ≈ N·重叠/2，
-  // 与窗长无关（见 params.ts 的 hopOf）。能压图的旋钮只有采样率、频宽和时长。
   if (frames > maxFramesFor(bins, bands)) throw new Error("音频太长，图放不下：调低采样率，或剪短一点");
 
   return { win, hop, frames, bins, samples };
@@ -153,7 +122,6 @@ function fits(enc: Encode, sr: number, samples: number): boolean {
   return Math.floor(Math.max(1, samples) / hop) + 1 <= maxFramesFor(bins, bands);
 }
 
-/** 这个档位在某个采样率下最多能装多少秒 —— 由像素预算决定，三档窗长因此得到同一个上限。 */
 function ceilingOf(enc: Encode, sr: number): number {
   const { hop, bins, bands } = planOf(enc, sr);
   return Math.floor(((maxFramesFor(bins, bands) - 1) * hop) / sr);
@@ -165,14 +133,9 @@ export function fitEncode(
   srcSamples: number,
 ): { enc: Encode; note: string | null } {
   const want = e.sr > 0 ? e.sr : srcSr;
-  // 喂给判据的必须是**真实编出来的**样点数：resample 给 round(N·to/from)，多一个 hop 就多一帧。
-  // 曾经这里是 ceil(...) + hopOf(e)，两处各多算一帧，于是「刚好装得下」的请求被判成装不下
-  // （166 秒的素材在 24k 差 0.05% 就被退回 16k，有一半是这个多算出来的）。
   const at = (sr: number): number => resampledLength(srcSamples, srcSr, sr);
   if (fits(e, want, at(want))) return { enc: e, note: null };
 
-  // 装不下就沿采样率往下走，每一步都把「为什么」说清楚：这段多少秒、你要的那档上限多少秒。
-  // 只说「已自动调低采样率」而不给上限，用户没法知道该剪到多短。
   const secs = Math.round(srcSamples / srcSr);
   const lower = (SR_OPTIONS as readonly number[])
     .filter(s => s > 0 && s < want)
@@ -185,8 +148,6 @@ export function fitEncode(
       };
   }
 
-  // 8k 都装不下：按像素预算剪到最长，其余保持不变。窗长这一维没有可换的 —— 像素 ≈ N·重叠/2
-  // 与窗长无关，三档的容量只差千分之几，为这点差别换档是噪声不是收益。
   const last: Encode = { ...e, sr: 8000, fmax: 0 };
   const keep = Math.max(1, ceilingOf(last, 8000));
   return {
@@ -225,7 +186,6 @@ export async function encode(
   onProgress?: (p: number) => void,
 ): Promise<Spectrum> {
   const { win, hop, frames, bins, samples } = shapeFor(enc, sr, pcm.length);
-  // 一帧变换的工作区借自内核（会话槽），整段活干完才还 —— 池满会当场抛，见 stft.ts。
   const core = new Frames(win);
   try {
     const x = padOf(pcm, win);
@@ -240,8 +200,6 @@ export async function encode(
       const phaseCos = new Uint8Array(frames * bins);
       const phaseSin = new Uint8Array(frames * bins);
 
-      // 视图只现切、不跨 `await` 持有：等待期间别的作业可能 `memory.grow`，把旧视图整片
-      // detach 掉（写进去是静默丢弃）。所以每次让出之后重新取一次，见 stft.ts 的 Frames。
       let { re, im } = core.data();
       for (let f = 0; f < frames; f++) {
         core.analyse(x, f * hop);
@@ -251,9 +209,6 @@ export async function encode(
           const c = im[b]!;
           const h = Math.sqrt(r * r + c * c);
           levels[base + b] = magToLevel(20 * Math.log10(h / scale));
-          // 单位相量直接取 re/h 与 im/h：与 cos(atan2(im, re)) 是同一件事，
-          // 但省掉 atan2 + cos + sin 三个超越函数（内层实测 2.12×）。h = 0 时
-          // 原式给 cos=1、sin=0，这里照样填 255 / 128。
           phaseCos[base + b] = h > 0 ? clampByte(Math.round(((r / h) * 0.5 + 0.5) * 255)) : 255;
           phaseSin[base + b] = h > 0 ? clampByte(Math.round(((c / h) * 0.5 + 0.5) * 255)) : 128;
         }
@@ -273,7 +228,6 @@ export async function encode(
     const steps = stepsOf(bits);
     meta.bits = bits;
 
-    // 峰值扫描不跨 `await`：一次取视图、一口气读完。
     {
       let { re, im } = core.data();
       let peak = 0;
@@ -291,10 +245,6 @@ export async function encode(
     }
     const floorDb = meta.ref - span;
 
-    // 无论位深多少，level 一律是字节：quantize 把量化档按 255 展开。
-    // 曾经这里给 bits>=16 开过 Uint16Array 的分支，而 levelToDb 是按字节解释的
-    // （level·steps/255），两条约定一撞就是整段 NaN（实测 4096/4096 非有限）。
-    // 位深只由 params.ts 的 BITS_OPTIONS（2/4/8）给，那条分支从来到不了。
     const levels = new Uint8Array(frames * bins);
     let { re, im } = core.data();
     for (let f = 0; f < frames; f++) {
@@ -359,9 +309,6 @@ async function synthesiseExact(
         re[b] = m * c;
         im[b] = m * s;
       }
-      // bins 可能小于 win/2+1（图读回来的精确谱，行数被 win/2+1 夹过）。
-      // 反变换做的是全长的共轭翻转，上半谱不清零的话，上一帧反变换出来的时域样本会被
-      // 当成本帧的谱线再变一次 —— 帧 0 之后整条输出都被污染。
       for (let b = bins; b < core.bins; b++) {
         re[b] = 0;
         im[b] = 0;
@@ -390,28 +337,12 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
   return out;
 }
 
-/** 幅度投影的目标区间：按**量化字节**查的 256 项表。见 `rtisi.ts` 的 `Band`。 */
 type Band = import("./rtisi").Band;
 
-/**
- * 幅度投影的目标区间：按**量化字节**查的 256 项表，见 `rtisi.ts` 的 `Band`。
- *
- * 只放宽最低那一档（`q = 0` 的真值含义是「在这个地板以下」，硬投影把它钉在地板上等于凭空
- * 铺一层等高的噪声地板）与最高档（+∞，不设上界），其余档位仍钉在中心 —— 试过每档都放宽
- * ±半档，收益为零甚至略负。地板已经在 −80 dB 之下时（8bit 是 −96 dB）钉不钉都听不出来，
- * 直接返回 null 走硬投影，保证 8bit 输出与改动前**逐位相同**。
- *
- * 表按 256 个字节值建而不是逐元素建：量化档只由那个字节决定，逐元素存是白多出两张
- * `frames×bins`（16M 像素的素材就是 128 MB）。实测与配对胜负见 docs/algorithms.md。
- */
 function bandOf(spec: Spectrum, scale: number): Band | null {
   const { meta, levels } = spec;
   const span = dbSpanOf(meta.bits);
-  // 地板落在峰值下 span dB。span 大到地板已经在感知地板（−80 dB）之下时，
-  // 钉不钉它都听不出来 —— 实测 8bit（−96 dB）上放宽之后各项指标只是在噪声里摆动，
-  // 而 4bit（−48 dB）与 2bit（−24 dB）上这层假噪声又响又脏，放宽是巨赢。
   if (meta.exact || !TUNE.relaxFloor || span >= 80) return null;
-  // 表是按元素下标取的：levels 短了内核就会读到段外（它拿到的是裸段地址，没有边界）。
   if (levels.length < meta.frames * meta.bins) return null;
   const steps = stepsOf(meta.bits);
   const floorDb = meta.ref - span;
@@ -426,7 +357,6 @@ function bandOf(spec: Spectrum, scale: number): Band | null {
   return { levels, lo, hi };
 }
 
-/** 软约束的取法。与内核 `rt_fit` 里那一条是同一条式子 —— 表由这里建、由内核读。 */
 const fitBand = (band: Band, d: number, i: number): number => {
   const lv = band.levels[i]!;
   const lo = band.lo[lv]!;
@@ -497,7 +427,6 @@ async function glRefine(
           const cr = re[b]!;
           const ci = im[b]!;
           const d = Math.sqrt(cr * cr + ci * ci) || 1e-30;
-          // 硬投影：幅度一律改写成档中心。软约束：已在 [lo, hi] 内就原样留着。
           const m = b >= bins ? 0 : band ? fitBand(band, d, base + b) : target[base + b]!;
           let pr = (cr / d) * m;
           let pi = (ci / d) * m;
@@ -616,12 +545,6 @@ export async function synthesise(
   return invert(spec, alive, onProgress, quality === "fine");
 }
 
-/**
- * 无元数据的图反推参数：行数 → 窗长走 `pow2`，**向上**取整（保住全部行数）。
- *
- * 与 `image.ts` 的 `winFromBins`（同一个反推、**向下**取整）在截过带的图上会给出不同的窗长，
- * 谁才是本意**未定案** —— 理由与量法写在那个函数的注释里。
- */
 export function paramsForImage(
   frames: number,
   rows: number,

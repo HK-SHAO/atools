@@ -1,12 +1,11 @@
 import type { Samples } from "../app/lib/arrays";
-import { loadDsp, warmKernel } from "../app/lib/dsp";
-import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../app/lib/metric";
-import { TUNE } from "../app/lib/phase";
+import { loadDsp, warmKernel } from "../app/lib/dsp.ts";
+import { barkDistance, compare, envelopeCorr, magnitudes, spectral } from "../app/lib/metric.ts";
+import { TUNE } from "../app/lib/phase.ts";
 import type { Encode } from "../app/lib/params";
-import { encode, synthesise } from "../app/lib/spectrum";
-import { compileWasm } from "../scripts/moon";
+import { encode, synthesise } from "../app/lib/spectrum.ts";
+import { compileWasm } from "../scripts/moon.ts";
 
-// 内核是这条链的唯一实现（`moon/`），先挂上再谈质量 —— 它在 worker 里也是这个顺序。
 warmKernel(await loadDsp(compileWasm()));
 
 const tuneArg = process.argv.find(a => a.startsWith("--tune="));
@@ -91,9 +90,7 @@ interface Row {
 
   conv: number;
   lsd: number;
-  /** 包络相关：人耳真正听的那个量，`corr` 严重低估它 */
   env: number;
-  /** 感知谱距：临界带 + 响度压缩后的 dB，约为 lsd 的 0.3 倍，别横比 */
   bark: number;
   ms: number;
 }
@@ -138,11 +135,6 @@ const CASES: { enc: Encode; double?: boolean }[] = [
   { enc: { mode: "compact", sr: 8000, bits: 8, fineness: 1, fmax: 0, start: 0, end: 0 }, double: true },
 ];
 
-// [素材, 用例, 相关 ≥, 谱差 ≤, 收敛 ≤, 包络 ≥]，阈值取新基线再加余量。
-//
-// 「包络」这一列是主 guard：它盯的是**重叠倍数**。hop 从 win/2 退回 2 倍重叠时，
-// 8bit 三行的包络会掉到 0.70~0.75（实测），当场判红 —— 那正是「统一 4 倍重叠」要守的东西。
-// 最后一行盯的是 relaxFloor：关掉它，乐声 4bit 的谱差从 16 涨到 27。
 const GATE: [string, string, number, number, number, number][] = [
   ["严苛", "可逆 8k", 0.99, 2.5, -30, 0.95],
   ["人声", "紧凑 8k 8bit", 0.2, 6, -12, 0.9],

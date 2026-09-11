@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { compileWasm } from "../../scripts/moon";
 import { recognizeExact, metaToText, sniff, spectrumToPng } from "./image";
 import type { Pixels } from "./arrays";
@@ -45,7 +45,6 @@ describe("sniff", () => {
 });
 
 describe("recognizeExact（可逆图像素签名）", () => {
-
   function exactPixels(w: number, h: number): Pixels {
     const px = new Uint8ClampedArray(w * h * 4);
     const rows = Math.floor(h / 2);
@@ -124,20 +123,9 @@ describe("recognizeExact（可逆图像素签名）", () => {
   });
 });
 
-/**
- * 出图链（紧凑档）走一遍：`spectrumToPng` → `stubFits` → `stubLuma` → `stubRows` → PNG。
- *
- * 这条链上每一步都要问内核，而它属于**主线程那一份内核**的消费者（读图链是另一个）——
- * 所以这里刻意不手工 `attachKernel`，只让入口起一次：门禁要的正是「入口起过就够了」。
- * 少了那次 `startKernel`（或 `spectrumToPng` 漏了 `kernelReady()`），这条当场红。
- *
- * 可逆档那条分支要 canvas（`toBlob`），只在浏览器里跑得起来，由评测台覆盖。
- */
 describe("紧凑档出图", () => {
-  // **不 await**：这就是真页面里的时序 —— wasm 还在路上，用户已经把文件拖进来了。
-  // `spectrumToPng` 自己会在开头等内核，所以这条用例顺带把那次等待钉住。
   beforeAll(() => {
-    void startKernel(compileWasm(), { fft: false });
+    void startKernel({ fft: false }, compileWasm());
   });
 
   test("图出得来、tEXt 里的 meta 一字不差（票根链没把行数搞错）", async () => {
@@ -164,4 +152,3 @@ describe("紧凑档出图", () => {
     expect(readMeta(bytes)).toBe(metaToText(meta));
   });
 });
-

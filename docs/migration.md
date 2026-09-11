@@ -1,7 +1,10 @@
-# 迁移记录：Bun 构建 → Vite，数值内核 → MoonBit
+# 迁移记录：构建链 Bun → Vite → Bun，数值内核 → MoonBit
 
 每一次「换掉底层」都要留下可对照的数字与判据，否则「没有回归」只是一句话。
 本文件按里程碑追加，只记**实测**与**决策依据**；原理与管线细节归 `build.md` / `algorithms.md`。
+
+构建链走了一个来回（里程碑 1 换成 Vite，里程碑 15 换回 Bun）。**两次都留了数字** ——
+第二次不是第一次的重复：Bun 那一侧的能力变过，判据也变过（见里程碑 15 的起因）。
 
 判据分三层，缺一层就不算验过：
 
@@ -823,3 +826,257 @@ bun test 164 通过、tsc 干净、产物与应用壳 10 项不变。
 比实时快约 140~250 倍。这张表也顺带说明「省档最慢」不是笔误：`hop = win/4` 下省档每秒列数最多，
 RTISI 要推进的帧数也最多；精确档不跑 RTISI（它存相位），还原因此只要 18 ms。
 
+## 里程碑 14：内核改走打包器，构建系统只剩一个自家插件（2026-09-12）
+
+> 本文早前的里程碑记录的是**当时**的事实，未回改。凡涉及「内核固定名 / HTML preload / 按模块上一级
+> 解析 / `scripts/pwa.ts`」的段落（里程碑 2 与 9 那几处），以本节为准。
+
+### 起因
+
+上一条 `new URL("..", import.meta.url)` 的构建告警只是症状。病根是：内核是**构建期产物**，却被当成
+「源码树里的一个固定路径资源」，于是绕开打包器自己造了一整套：
+
+| 自己造的 | 为什么会有 |
+| --- | --- |
+| `emitFile` 一个**固定名** | 产物名要能写进 HTML 的 preload 与 `app/lib/dsp.ts` 的字面路径 |
+| dev 中间件按后缀直出 wasm | 源码里模块的「上一级」不是部署根，`app/wasm/dsp.wasm` 那条得有人接住 |
+| `kernelUrlFrom` + `dsp.test.ts` 两条用例 | 产物名带内容哈希，路径只能运行时算 |
+| `scripts/pwa.ts`（39 行构建期校验） | 上面几处路径对不上时，症状只是「断网后编不了」或「预热白做」 |
+| `index.html` 的 `<link rel="preload" href="./wasm/dsp.wasm">` | 抢跑那 44 KB |
+
+### 换成了什么
+
+`app/lib/dsp.ts` 一行（**全仓库唯一一条「内核怎么被找到」的规则**）：
+
+```ts
+import kernelWasm from "../../moon/_build/wasm/release/build/dsp.wasm?url";
+```
+
+Vite 把它当普通资产，三种环境各自成立，都在产物里核过：
+
+| 环境 | `?url` 是 | 引用写法 |
+| --- | --- | --- |
+| dev | `/moon/_build/…/dsp.wasm`（Vite 直接供：`application/wasm` + `Cache-Control: no-cache`） | 绝对路径，主线程与 worker 共用一条 |
+| 构建 · 主线程 | `assets/dsp-Bi2lud8a.wasm` | `new URL("dsp-Bi2lud8a.wasm", import.meta.url)` |
+| 构建 · worker | 同一份文件 | `new URL("dsp-Bi2lud8a.wasm", self.location.href)` |
+
+**子路径部署这一条由相对引用的性质直接给出**：URL 相对模块自身算，与 `base: "./"` 是同一件事，
+不再需要「入口层级 ≤ 1」那种守前提的断言。
+
+删掉的东西：dev 中间件、`emitFile`、`WASM_FILE`、`kernelUrlFrom`、`wasmUrl`、HTML 的 preload、
+`scripts/pwa.ts`（整个文件）、`dsp.test.ts` 两条路径用例。`startKernel` 的入参也随之简化成
+`startKernel({ fft }, source = kernelWasm)`，`source` 只留给测试传字节。
+
+### preload 那一笔的账
+
+去掉它的代价是量过的：`bench/perf.ts` 六个时间点 **21 / 44 / 62 / 100 / 141 / 163 ms，与带 preload
+时逐项相同**，主线程长任务仍是 0。理由也顺：首屏不需要内核 —— 它在入口 chunk 执行时开始取
+（`frontend.tsx` 顶层就 `startKernel`），与 React 首次渲染并行，而真正用它的动作（拖进文件）远在其后。
+preload 唯一派得上用场的场景是「用户 1 秒内拖文件，且网络慢到 44 KB 比入口 chunk 还迟」；为这个场景
+留住一条「把构建产物内部路径写进 HTML、再拿构建期断言去守它」的约定，不划算。
+
+### 门禁：删掉的那道，与它的继任者
+
+| `scripts/pwa.ts` 在查什么 | 现在由谁管 |
+| --- | --- |
+| `index.html` 在预缓存清单里 | `globPatterns` 是插件的输入，匹配不到根本进不去；`bench/offline.ts` 逐项对照 |
+| 数值内核在预缓存清单里 | `bench/offline.ts` 按后缀在清单里找 `.wasm`，缺了即不合格 |
+| preload 的 href / crossorigin 与真实 fetch 对齐 | 没有 preload 了，前提消失 |
+| 入口层级 ≤ 1（`kernelUrlFrom` 的前提） | 引用由打包器按模块自身位置算，前提消失 |
+
+继任的门禁**故意违例跑过**：`globIgnores` 加上 `**/*.wasm` → 构建照过（插件不报错），
+`bench/offline.ts` 红：`应用壳 9 项里没有 .wasm`。新门禁还比旧的多一层：它**真的在断网之后取一次内核**，
+200 才算数 —— 而它必须按后缀找，因为内核在产物里叫什么名是打包器定的。
+
+**少掉的一条**：解码器分包有没有被 `globIgnores` 挡在壳外，现在没有门禁 —— 它坏掉的症状是首屏多下载
+1.2 MB，不是坏掉。
+
+### 全链验证（都在最终代码上跑）
+
+`vite build` 零告警 · 预缓存 **10 项 / 345.6 KiB**（旧结构实测 346.1 KiB，并没有变大）· `typecheck`
+干净（`tsconfig.node.json` 因此补了 `vite/client`：`bench/entry.ts` 是页面侧代码，传递依赖会走到
+`?url` 那条 import）· `lint` 0 error / 10 warn（与基线同）· `vitest` **142 passed**（删掉两条路径用例）·
+`bench/ui.ts` 三次交互到位、页面零异常 · `bench/offline.ts` 全绿 · `bench/perf.ts` 逐项不变 ·
+`quality --gate` 五条与基线逐项相同 · dev server 上另跑了一次真页面端到端（点「演示」出图，零异常）。
+
+**子路径部署**（`base: "./"` 换来的那条承诺）如今由 `bench/ui.ts` 的 `SUBPATH` 守：把 `dist` 的**副本**搬到
+`<tmp>/toy/slug/`，再**只**服务那棵子树。不能用 `serveDir` 的 `mounts` 代替 —— 它对没命中的前缀仍会回到
+`dist/<path>`，那样同一份文件在根上也取得到，这一趟什么也证明不了（试过，`base: "/"` 下两次都绿）。
+**违例跑过**：`base` 改成 `"/"` 重建，产物引用变成 `/assets/index-*.js`，根路径那一趟照样绿、子路径那一趟
+红在「超时：应用载入」。
+
+---
+
+## 里程碑 15：全面回到 Bun —— vite / vitest / node 一起下线（2026-09-12）
+
+> 里程碑 14 那一笔本身没有亏：把内核交给打包器的资产机制，换来一行 import 与三种环境各自成立。
+> 亏的是**它买的东西已经不值钱了**。Bun 1.4 自己就有 HTML 入口、HMR、React Compiler 与 `bun test`，
+> 而 Vite 那条链要额外压住十三个开发依赖、一份 `vite.config.ts` 与一个 `?url` 契约。
+> 于是把 14 撤销 —— 不是回到里程碑 0 那份 `build.ts`，而是用 Bun 现在的能力重写一遍。
+
+### 删掉了什么
+
+| 文件 / 依赖 | 规模 | 原本做什么 |
+| --- | --- | --- |
+| `vite.config.ts` | 93 行 | 打包、dev server、`?url` 资产、PWA 插件 |
+| `tsconfig.test.json` | 33 行 | 单列的测试工程（测试与脚本同运行时，并入 `tsconfig.bun.json`） |
+| `scripts/moon.ts` 的 `moonKernel()` | 191 → 123 行 | `emitFile` 固定名内核 + dev 中间件按后缀直出 |
+| devDependencies | 19 → 6 | 见下 |
+
+删掉的 13 个：`vite`、`vitest`、`@vitejs/plugin-react`、`@rolldown/plugin-babel`、`@babel/core`、
+`@types/babel__core`、`babel-plugin-react-compiler`、`vite-plugin-pwa`、`workbox-core`、
+`workbox-expiration`、`workbox-precaching`、`workbox-routing`、`workbox-strategies`。
+留下的 6 个各有不可替代的理由：`@types/bun`（运行时类型）、`@types/node`（**不能删**，见⑥）、
+`@types/react` / `@types/react-dom`、`oxlint`、`typescript`。
+
+依赖树的账：`bun.lock` 里 **478 → 65** 个包，`node_modules` **189 MB → 64 MB**。
+
+### 换成了什么
+
+| 新文件 | 行数 | 职责 |
+| --- | --- | --- |
+| `scripts/build.ts` | 139 | 四步：编内核 → 打包 worker → 打包应用 → 推壳取指纹 → 装进 SW |
+| `scripts/serve.ts` | 120 | 一个文件两种模式：dev（HTML 路由 + HMR）/ `--dist`（只服务产物） |
+| `scripts/dev.env` | 7 | `PIPELINE_WORKER=/worker/pipeline.worker.js` |
+| `bunfig.toml` | 13 | 只有两件事：`[test] preload` 与 `[serve.static] env` |
+| `app/assets.d.ts` | 24 | `*.wasm` / `*.ogg` / `*.css` 一律是**路径字符串** |
+| `app/browser.d.ts` | 43 | 浏览器侧只声明真实存在的两条：构建期常量与 `import.meta.hot` |
+
+### 关键发现（全部实测，Bun 1.4.3）
+
+**① Bun 没有 `?url` / `?worker`。** 内核与 worker 都不能靠后缀。`.wasm` 直接 import 拿到的就是
+**路径字符串**：dev 下是 `/_bun/asset/<hash>.wasm`，产物里是 `dsp-<hash>.wasm`（与引用它的 chunk 同目录）。
+`app/lib/dsp.ts` 因此只留一行 import，`?url` 摘掉。
+
+**② `new URL(x, import.meta.url)` 打包期不改写。** `new Worker(new URL(...))` 同样不改写（列为
+entrypoint 也不改写）。里程碑 14 里「URL 相对模块自身算」这条性质在 Bun 下**不成立**，
+只能自己补绝对地址：`app/lib/dsp.ts` 的 `kernelUrl()` 是唯一一处（已是根绝对路径就直接用，
+否则按 `import.meta.url` 折）。
+
+**③ worker 是独立 entrypoint。** 名字带内容哈希，入口那边拿不到它，只能构建期 `define` 注入；
+而注入的地址是**相对入口脚本**解析的，两者因此必须同目录。`scripts/build.ts` 里有一道
+「入口脚本与 worker 同一目录」的校验把它按住 —— 改布局会当场报错，而不是静默取错文件。
+
+**④ `bunfig.toml` 的 `[serve.static] env` 在进程启动时固化。** 脚本里再
+`process.env.PIPELINE_WORKER = …` 已经晚了：实测产物里原样留着 `process.env.PIPELINE_WORKER`。
+有效的只有两条 —— 外面先设好，或 `bun --env-file=` 在启动前送进去。`dev` 因此写成
+`bun --env-file=scripts/dev.env scripts/serve.ts`。
+
+**⑤ 扁平布局是 manifest 的硬约束，不是审美。** 先把带哈希的产物收进 `assets/`（Bun 的 `naming`
+对象支持这么写），`bench/offline.ts` 立刻报 7 项不合格：manifest 是手写件、不经打包器改写，
+`"scope": "./"` 与 `./icons/icon-192.png` 都按它自己的位置解析，一挪就成了 `/assets/`，
+装出来的 PWA 直接打不开。改回扁平（只把动态分包的 `chunk-<hash>` 换成 `decode-mp3-<hash>`
+这类读得懂的名字）后全绿。**这条门禁抓的是真问题，不是误报。**
+
+**⑥ `@types/node` 删不得。** `bun-types/index.d.ts` 第一行就是 `/// <reference types="node" />`。
+**违例跑过**：把 `node_modules/@types/node` 移走，连 `process` 与 `node:fs/promises` 都解析不出来；
+移回即干净。所以那句「全面移除 node」落在**运行时与脚本**这一层，类型包是 Bun 自己的依赖。
+
+**⑦ `Site.files` 里字符串是「磁盘路径」，字节才在内存里现供。** 评测台把入口与内核的**字节**
+塞进去、素材给**路径**；把源码字符串当字节塞会走进 `readFile`，失败的那个 rejection 被 `void` 掉，
+页面只是静静地不出现 `Bench`（症状是 `waitFor` 超时）。同批修的第二处：内存字节没有文件名可推
+MIME，`/` 得特判成 `index.html`，否则按 `application/octet-stream` 供出，浏览器下载而不是渲染 ——
+也是一个「超时」的样子。
+
+**⑧ `never` 的收窄要函数声明。** `const fail = (m: string): never => …` 之后
+`if (!x) fail(…)` **收窄不了** `x`：TS 只在「声明自身带显式类型标注」时才认这条。写成
+`function fail(m: string): never` 即可。这处是 `tsc -b` 抓到的，不是运行期 —— 值得记一笔，
+因为报错信息（`Argument of type 'BuildArtifact | undefined'`）离病根隔着两层。
+
+### 全链验证（都在最终代码上跑）
+
+`tsc -b` 干净（两工程）· `bun test` **142 passed / 0 fail**（164016 次断言，9 文件，1.3 s）·
+`lint` 0 error / 11 warn · `bun build:web`：扁平布局，缓存名 `atools-qixa47`，预缓存
+**10 项 / 339.8 KiB**、`sw.js` **1.2 KB** · 内核 SHA-256 `253e2b69…`（与迁移前一致），
+`dist/dsp-fkyyw82s.wasm` 逐字节相同 · `bun start`：`/` 200 `text/html`（与 `dist/index.html`
+逐字节相同）、深链 200、`sw.js` `text/javascript`、内核 `application/wasm`；`--path-as-is`
+打 `/../package.json` 与 `/../../../../etc/passwd` 都只回落成 1344 B 的 `index.html`（没读出去）·
+`bun dev`：`/`、`/worker/pipeline.worker.js`、同目录内核三者都 200，入口 bundle 里注入的
+worker 地址已内联 · `bun offline` 全绿（断网探针 `kernel:200 / offline:0 / demo:200`）·
+`bun ui` 与 `SUBPATH=/toy/slug bun ui` 都通过（主线程长任务 0 个）· `bun perf` / `bun quality` /
+`errs: (none)`。
+
+**下面这组读数是那一轮的，会随时间动。** 此后 `moon/` 把几处手写助手换成了标准库调用
+（`log2_exact` → `@math.log2` 等），指令流一变，内核名与缓存名就跟着改；白盒门禁也多了一条
+（47 → 48）。判「现在是多少」一律看当次命令的输出与 `docs/build.md`，不要引这里。
+
+与里程碑 14 并排看：预缓存清单**逐项相同**，字节 345.6 → 339.8 KiB（−1.7%，两个压缩器的取舍），
+主入口 chunk 与 CSS 同量级。换掉整条构建链并没有换来更大的产物 —— 换来的是**少 413 个包**、
+少一份构建配置、少一个 `?url` 契约。
+
+### 未覆盖面
+
+- `bun test` 里没有 Web Audio，解码的原生路径只由 `bench/run.ts` 在真浏览器里覆盖（与迁移前同）。
+- 内核在 dev 下走 `/_bun/asset/<hash>.wasm`，这条路径由 dev 服务器保证；产物侧由壳清单里的
+  `.wasm` 兜住 —— `bench/offline.ts` 断网后真取一次，200 才算数。
+- 里程碑 14 撤掉的那条「解码器分包有没有被挡在壳外」的门禁仍未补：坏掉的症状是首屏多下载 1.7 MB，
+  不是坏掉。
+
+## 里程碑 16：根目录归位 + 注释清零（2026-09-12）
+
+两件事，一起做：仓库根只留工程配置，代码里不留散文。
+
+### 根目录：能进 `app/` 的都进 `app/`
+
+| 原位置 | 新位置 | 为什么能挪 |
+| --- | --- | --- |
+| `index.html` | `app/index.html` | Bun 的 HTML loader 入口是一个**路径**，默认命名从文件名推（`index-<hash>.js`），与它在哪一层无关 |
+| `logo.svg` | `app/public/logo.svg` | HTML 引到的资源由打包器按内容哈希**摊平**进 `dist/` 根，源里多深都一样 |
+| `manifest.webmanifest` | `app/public/manifest.webmanifest` | 同上，落点是 `dist/manifest-<hash>.webmanifest` |
+| `icons/*.png` | `app/public/icons/*.png` | 只被 manifest 引，不经打包器；由 `build.ts` 从 `app/public/` 按字面路径抄进 `dist/icons/` |
+
+删掉的三样都是可再生的：`toy.zip`（776 KB 构建产物）、`.DS_Store`、空的 `.wrangler/`。
+
+**这条实测过再动手**：先在 `/tmp` 里用一份最小 HTML 试打包，确认 Bun 把 `./public/logo.svg`
+输出成 `dist/logo-<hash>.svg`（摊平、带哈希），才动仓库。若它照搬源目录层级，`scope: "./"` 会
+跟着 manifest 一起落进子目录，PWA 直接装不起来 —— 那就不该挪。改完后 `dist/` 布局与挪之前
+**逐字节同构**（壳 10 项、`atools-399jrc`），`bench/offline.ts` 全绿。
+
+`app/public/` 这个名字只是位置，**不是 Vite 那种 public 语义**：Bun 不认它，HTML 里写 `/x`
+会被当成文件系统里的绝对路径去找，所以引用一律相对（`./public/…`）。
+
+### 注释：2125 → 0
+
+| | 前 | 后 |
+| --- | --- | --- |
+| 总行数（85 个源文件） | 15 443 | 13 286 |
+| 整行散文注释 | 2 125 | **0** |
+| 行尾注释 | 31 | 0 |
+| MoonBit 的 `///` 块标记 | 210 | 210（`moon fmt` 要求，保留） |
+
+剩下的 3 处是 CSS 的 `*` 通配选择器、11 处是字符串 / 正则 / 模板里的 `//`（URL、`/^\.\//`、
+以及 `bench/offline.ts` 故意写进 `sw.js` 的 `// 更新探针`）—— 都不是注释。
+
+**散文没有丢，去处是文档**：`docs/`（算法与实测、构建与 PWA 管线、格式契约）、`AGENTS.md`
+（架构与模块职责）、各目录的 `README.md`。源码里只留能被类型检查器与测试抓住的东西。
+
+**产物逐字节不变**，这是「注释是惰性的」最直接的证据：`bun build:web` 输出的入口 chunk
+（`index-x6ffv0hj.js`）、CSS、内核、缓存名 `atools-399jrc` 与删注释**之前**完全一致 ——
+Bun 的压缩器本来就把注释丢掉了。所以这一轮唯一的产物变化来自前面那轮的 `@math.log2`。
+
+### 工具：为什么不能用逐行删
+
+手写状态机在两种字面量上会静默出事，两种都真的踩到了：
+
+- **正则的尾巴**：`/^\/audio\//`、`/^\.\//` 末尾的 `\` + `/` + `/`，裸扫描器读成行注释 ——
+  删下去会把半行代码吃掉。只有解析器知道那是正则。
+- **模板里的 `//`**：`\`${swBytes}\n// 更新探针 ${Date.now()}\n\`` 是**内容**，不是注释。
+
+第一版用 TypeScript 解析器（`ts.createSourceFile` + `getLeadingCommentRanges` /
+`getTrailingCommentRanges`）就绕开了正则，但 `getTrailingCommentRanges` 只看原始文本、
+对位置一无所知，于是在模板的 `}` 之后又把模板正文当成注释 —— **`bench/offline.ts` 当场被剪成
+语法错**。用解析器重新诊断一遍才发现：`bench/{cdp,offline,perf,run,ui}.ts` 五个文件都断了
+（首个版本漏掉了这五个，是因为它的扫描器被模板卡住、一个注释都没报）。
+
+修法是两层过滤，缺一不可：
+
+1. **哪些注释**——用解析器，不用裸扫描器。`getChildren` 而不是 `forEachChild`：只有走到标点
+   token 才能找到 `[0, 512, 8, 300], // sr=0` 这种「逗号之后」的行尾注释。
+2. **哪里不能看**——先收集 `StringLiteral` / `TemplateLiteral` / `RegularExpressionLiteral` /
+   `JsxText` 的 span，落进去的候选一律丢弃。
+
+**这道「违例」值钱的地方在于它差点溜过去**：五个文件全是 `bench/` 的浏览器驱动，不在 `bun test`
+里，`tsc -b` 会报错 —— 但报的是「`,` expected」这种离病根两层远的话。真正把它按住的是
+`ts.createSourceFile(...).parseDiagnostics` 那一遍全量诊断（60 文件 / 5 个带语法错）。
+顺带记一条本机坑：驱动 TS 的裸扫描器要自己调 `reScanTemplateToken`，否则 `` ` `` 会被当成
+又一个模板头，把整段模板吞掉 —— 这也是「注释一个都找不到」的根因。

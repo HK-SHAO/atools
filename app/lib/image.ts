@@ -23,14 +23,8 @@ export function metaToText(meta: Meta): string {
   ]);
 }
 
-/** 位深的合法取值：0 表示可逆档（不存量化档）。见 format-spec.md。 */
 const LEVEL_BITS = [0, 2, 4, 8] as const;
 
-/**
- * tEXt 与文件名是同一份 `Meta` 的两个入口，校验必须共用一处 —— 分开写的下场就是一边查得严
- * 一边漏：文件名那条曾经不查 `sr > 0`（时长变 Infinity）、不查 win 的上下界、也不查 `bits`，
- * 于是改个名就能把 16 位深喂进来，与 `levelToDb` 的按字节解释相撞，输出整段 NaN。
- */
 function sanitize(m: {
   sr: number;
   win: number;
@@ -131,15 +125,6 @@ export function sniff(bytes: Uint8Array): Container {
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
 
-/**
- * 行数 → 窗长：2 的幂、**向下**取整、落在 [256, 4096]。
- *
- * **它与 `spectrum.ts` 的 `paramsForImage` 不是同一件事**（那边同一个反推、**向上**取整）。
- * 票根给出的 `bins = win/2+1` 上两者必然一致（129/257/513/1025/2049 都落在同一档），
- * 但**截过带的图**（`bins < win/2+1`）会得到不同的窗长：`bins = 200` 在这里是 256、
- * 只剩 129 行，那边是 512、200 行全留。谁才是本意**未定案** —— 统一它们会改认图分级与
- * 相位可靠性，得先跑 `bench/run.ts` 的矩阵量，不能顺手改。
- */
 function winFromBins(bins: number): number {
   const raw = Math.max(2, (bins - 1) * 2);
   let win = 256;
@@ -214,15 +199,12 @@ function surface(width: number, height: number) {
   return { canvas, ctx };
 }
 
-/** 目标格 `i` 覆盖的源起点（含）。至少一格、不越界 —— 源比目标小的图靠这一条兜住。 */
 const cellLo = (i: number, scale: number, n: number): number =>
   Math.min(n - 1, Math.floor(i * scale));
 
-/** 覆盖终点（不含）。与起点至少差一格，所以源比目标小时是「重复取同一格」而非空区间。 */
 const cellHi = (i: number, scale: number, n: number, lo: number): number =>
   Math.min(n, Math.max(lo + 1, Math.ceil((i + 1) * scale)));
 
-/** 相位三个通道（cos / sin / 权重）共用的字节：舍入后夹到 [0, 255]。 */
 const channel = (v: number): number => Math.max(0, Math.min(255, Math.round(v)));
 
 export function sampleLevels(
@@ -332,10 +314,6 @@ export const READ_TUNE = {
   phaseAnchor: 0.15,
 };
 
-/**
- * 扫描图底的票根带：行数从内核报的 `stubRows()` 往下试，试到某一行数解得出票根为止。
- * `at(x, y)` 给 (列, 行) 的灰度 —— 两条读图路径共用它，区别只在像素从哪来。
- */
 function stubFromRows(
   width: number,
   height: number,
@@ -363,8 +341,6 @@ function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
 }
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
-  // 读图链每一步都要问内核要票根（行数、解码、绘制），先等这一线程的内核热好 ——
-  // 用户的动作可能比 wasm 的加载早到（见 `app/lib/dsp.ts` 的 `kernelReady`）。
   await kernelReady();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
@@ -449,10 +425,6 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   const width = bitmap.width;
   const height = bitmap.height;
   try {
-    // 单边也要卡：**canvas 超过 MAX_FRAMES 宽不会报错，只会变成一块空画布** —— 画点读回是 0、
-    // `toBlob` 给 null，于是读回来的是满屏静音而不是一句错误。面积上限管不到它
-    // （70000×129 才 9M 像素）。实测：70000 宽的自家图，缩了读回来 485KB 的谱，
-    // 不缩读回来 30KB 的空谱。
     if (width * height > MAX_SOURCE_PIXELS || Math.max(width, height) > MAX_FRAMES) {
       const k = Math.min(
         Math.sqrt(MAX_SOURCE_PIXELS / (width * height)),
@@ -705,10 +677,6 @@ async function compactPng(spec: Spectrum): Promise<Blob> {
   return new Blob([bytes], { type: "image/png" });
 }
 
-/**
- * 出图。两条分支都要问内核要票根（`stubFits` / `stubLuma` / `drawStub`），所以先等内核 ——
- * 同 `imageToSpectrum`。可逆档那条之后才是 canvas 的 `toBlob`。
- */
 export async function spectrumToPng(spec: Spectrum): Promise<Blob> {
   await kernelReady();
   return spec.meta.exact ? exactPng(spec) : compactPng(spec);

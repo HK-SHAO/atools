@@ -25,8 +25,6 @@
   border-top: 1px solid var(--line);
 }
 
-/* 一个参数一行：标签在第 1 列、控件在第 2 列。标签因此共享同一条竖线，
-   不再随前一块的宽度漂移。grid 也顺手替掉了旧的换行流 + 余量分配。 */
 .params {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);

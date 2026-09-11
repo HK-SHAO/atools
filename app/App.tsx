@@ -60,7 +60,6 @@ export function App() {
             演示
           </button>
           <span className="credit">
-            纯客户端运行，不上传任何数据<br/>
             {CREDIT_NAME} created by{" "}
             <a href={CREDIT_AUTHOR.url} target="_blank" rel="noreferrer">
               {CREDIT_AUTHOR.name}

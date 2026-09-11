@@ -11,7 +11,6 @@
   box-shadow: var(--shadow-card);
 }
 
-/* 五种控件共用下面这一套几何与玻璃表面，各自只调内边距与光标 */
 .act,
 .chip,
 .icon-btn,
@@ -141,7 +140,6 @@
   background: var(--glass);
 }
 
-/* 状态注记：进度条 + 提示 + 报错，空态与工作台共用一行 */
 .note {
   display: flex;
   align-items: center;
@@ -179,7 +177,6 @@
   letter-spacing: 0.1em;
 }
 
-/* 需要 squircle 圆角的面：卡片、拖放区、频谱图；图标按钮反而要正圆 */
 @supports (corner-shape: squircle) {
   .card,
   .drop,

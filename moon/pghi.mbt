@@ -1,24 +1,7 @@
-// PGHI phase initialization: turn a magnitude spectrum into a phase guess with the right local
-// phase gradients, by propagating outwards from the loudest bins.
-//
-// Bins are visited in descending magnitude order (a counting sort over 256 magnitude buckets).
-// Each visited bin takes its phase from the loudest already-decided neighbour, offset by the
-// half-sum of the two gradient estimates. Anything left unvisited gets a fixed xorshift32 phase,
-// so the spectrum is not coherent by accident.
-//
-// The gradients come from the phase-derivative identities: `fgrad` from the log-magnitude
-// difference across frames, `tgrad` from the difference across bins plus the hop-induced linear
-// term. All the numerics live here; the tuning constants arrive as arguments, so the host stays
-// the single place where they are chosen.
-
 ///|
-/// Magnitude-ordering buckets. 256 is enough resolution for a stable descent order and costs one
-/// byte per bin.
 let pghi_buckets : Int = 256
 
 ///|
-/// One PGHI job: the double buffer holds `mag` (written by the host) then `phase` (written by
-/// `dsp_pghi_run`). No byte segment is needed.
 priv struct Pghi {
   frames : Int
   bins : Int
@@ -36,7 +19,6 @@ priv struct Pghi {
 let pghi_jobs : FixedArray[Pghi?] = FixedArray::make(max_jobs, None)
 
 ///|
-/// Job record for handle `h`, or `None`.
 fn pghi_at(h : Int) -> Pghi? {
   let j = job_seg(h)
   if j < 0 {
@@ -47,8 +29,6 @@ fn pghi_at(h : Int) -> Pghi? {
 }
 
 ///|
-/// Per-run working set. `slog` is the log magnitude, floored so a silent bin cannot produce −∞;
-/// `fgrad`/`tgrad` are the frame and bin phase gradients in Float32, as the reference stores them.
 priv struct Pg {
   frames : Int
   bins : Int
@@ -74,12 +54,6 @@ priv struct Pg {
 }
 
 ///|
-/// Opens a PGHI job.
-///
-/// @param gamma Dimensionless gradient coupling; the kernel scales it by `win²`.
-/// @param tol_hi Fraction of the peak accepted by the first propagation pass.
-/// @param tol_lo Threshold of the second pass; bins still unvisited afterwards get a random phase.
-/// @return Job handle (>= 1); 0 if a parameter is illegal or the job pool is exhausted.
 #export_name("dsp_pghi_open")
 pub fn pghi_open(
   frames : Int,
@@ -115,11 +89,6 @@ pub fn pghi_open(
 }
 
 ///|
-/// Element offset of a region of the job's double buffer.
-///
-/// @param h Job handle.
-/// @param which 0 = magnitude input (`frames × bins`), 1 = phase output (same size).
-/// @return Offset to add to the base of `dsp_job_d(h)`; -1 if `h` or `which` is invalid.
 #export_name("dsp_pghi_off")
 pub fn pghi_off(h : Int, which : Int) -> Int {
   match pghi_at(h) {
@@ -136,9 +105,6 @@ pub fn pghi_off(h : Int, which : Int) -> Int {
 }
 
 ///|
-/// Closes a PGHI job.
-///
-/// @param h Job handle; invalid or already-closed handles are ignored.
 #export_name("dsp_pghi_close")
 pub fn pghi_close(h : Int) -> Unit {
   let j = job_seg(h)
@@ -150,24 +116,16 @@ pub fn pghi_close(h : Int) -> Unit {
 }
 
 ///|
-/// Wraps a phase into (−π, π], the one line the reference wrote as `((a + PI) % TWO_PI) - PI`.
-///
-/// The modulo has to be the exact remainder, not "divide, round, multiply back": that costs a
-/// rounding in the quotient and another in the product, ~1 ulp of `2π·k` per call, and the
-/// propagation chain accumulates it — measured at up to 3e-12 rad over a 60-frame spectrum. The
-/// kernel's `%` is exact (moonbitlang/core ports `fmod` for non-JS targets), so writing the
-/// reference expression verbatim is both shorter and the only version that agrees bit for bit.
 fn pghi_wrap(a : Double) -> Double {
-  let two_pi = 2.0 * pi
-  let mut v = (a + pi) % two_pi
+  let two_pi = 2.0 * @math.PI
+  let mut v = (a + @math.PI) % two_pi
   if v < 0.0 {
     v = v + two_pi
   }
-  v - pi
+  v - @math.PI
 }
 
 ///|
-/// Inserts `value` with priority `key` into the max-heap.
 fn pg_push(pg : Pg, value : Int, key : Double) -> Unit {
   let c0 = pg.h_size
   pg.h_size = c0 + 1
@@ -186,7 +144,6 @@ fn pg_push(pg : Pg, value : Int, key : Double) -> Unit {
 }
 
 ///|
-/// Removes and returns the highest-priority bin. Only valid when the heap is non-empty.
 fn pg_pop(pg : Pg) -> Int {
   let top = pg.h_idx.unsafe_get(0)
   let last = pg.h_size - 1
@@ -218,15 +175,11 @@ fn pg_pop(pg : Pg) -> Int {
 }
 
 ///|
-/// Magnitude of bin `j` of the job's input region. A candidate's magnitude is compared and then
-/// used, so it is read through one function: two inline reads of the same element can drift apart
-/// the moment one of them is edited, and the comparison is what decides the visit order.
 fn pg_mag(pg : Pg, j : Int) -> Double {
   pg.arena.unsafe_get(pg.off_mag + j)
 }
 
 ///|
-/// Queues a neighbour if it is loud enough and not already handled.
 fn pg_offer(pg : Pg, j : Int, limit : Double) -> Unit {
   if pg.done.unsafe_get(j) || pg.queued.unsafe_get(j) {
     return
@@ -240,10 +193,6 @@ fn pg_offer(pg : Pg, j : Int, limit : Double) -> Unit {
 }
 
 ///|
-/// Drains the heap, assigning a phase to every popped bin and offering its four neighbours.
-///
-/// The loudest already-decided neighbour wins; ties keep the earlier candidate, so the order of
-/// the four blocks below is part of the result.
 fn pg_drain(pg : Pg, limit : Double) -> Unit {
   let bins = pg.bins
   let frames = pg.frames
@@ -284,8 +233,6 @@ fn pg_drain(pg : Pg, limit : Double) -> Unit {
         best_mag = m
       }
     }
-    // `best < 0` means no neighbour has been decided yet, so the bin is isolated at this
-    // threshold and keeps a zero phase.
     let value = if best < 0 {
       0.0
     } else if best == i - 1 {
@@ -343,36 +290,33 @@ fn pg_drain(pg : Pg, limit : Double) -> Unit {
 }
 
 ///|
-/// Computes the gradient fields and the descending-magnitude visit order.
 fn pg_setup(pg : Pg) -> Unit {
   let n = pg.n
   let bins = pg.bins
   let frames = pg.frames
-  let two_pi = 2.0 * pi
-  // The floor keeps a silent bin from producing −∞, which would poison every neighbour's
-  // gradient.
+  let two_pi = 2.0 * @math.PI
   let floor = pg.top * 1.0e-12
   let slog = FixedArray::make(n, 0.0)
   for i = 0; i < n; i = i + 1 {
     let v = pg.arena.unsafe_get(pg.off_mag + i)
-    slog.unsafe_set(i, @math.ln(if v < floor { floor } else { v }))
+    slog.unsafe_set(i, @math.ln(v.max(floor)))
   }
   for f = 0; f < frames; f = f + 1 {
     let base = f * bins
-    let up = (if f > 0 { f - 1 } else { 0 }) * bins
-    let dn = (if f < frames - 1 { f + 1 } else { frames - 1 }) * bins
+    let up = (f - 1).max(0) * bins
+    let dn = (f + 1).min(frames - 1) * bins
     let dt = if f > 0 && f < frames - 1 { 2.0 } else { 1.0 }
     for b = 0; b < bins; b = b + 1 {
       let g = -pg.c_f * (slog.unsafe_get(dn + b) - slog.unsafe_get(up + b)) / dt -
-        pi
+        @math.PI
       pg.fgrad.unsafe_set(base + b, Float::from_double(g))
     }
   }
   for f = 0; f < frames; f = f + 1 {
     let base = f * bins
     for b = 0; b < bins; b = b + 1 {
-      let lo = if b > 0 { b - 1 } else { 0 }
-      let hi = if b < bins - 1 { b + 1 } else { bins - 1 }
+      let lo = (b - 1).max(0)
+      let hi = (b + 1).min(bins - 1)
       let db = if b > 0 && b < bins - 1 { 2.0 } else { 1.0 }
       let g = pg.c_t *
         (slog.unsafe_get(base + hi) - slog.unsafe_get(base + lo)) /
@@ -381,15 +325,13 @@ fn pg_setup(pg : Pg) -> Unit {
       pg.tgrad.unsafe_set(base + b, Float::from_double(g))
     }
   }
-  // Counting sort by magnitude bucket, descending. Buckets are ordered from the largest key
-  // downwards, and ties keep their original index order.
   let counts = FixedArray::make(pghi_buckets, 0)
   let keys = FixedArray::make(n, b'\x00')
   for i = 0; i < n; i = i + 1 {
     let raw = (pg.arena.unsafe_get(pg.off_mag + i) /
     pg.top *
     pghi_buckets.to_double()).to_int()
-    let k = if raw > pghi_buckets - 1 { pghi_buckets - 1 } else { raw }
+    let k = raw.min(pghi_buckets - 1)
     keys.unsafe_set(i, k.to_byte())
     counts.unsafe_set(k, counts.unsafe_get(k) + 1)
   }
@@ -412,7 +354,6 @@ fn pg_setup(pg : Pg) -> Unit {
 }
 
 ///|
-/// Runs both propagation passes, from the highest acceptance threshold down.
 fn pg_propagate(pg : Pg) -> Unit {
   for limit in [pg.top * pg.tol_hi, pg.top * pg.tol_lo] {
     for k = 0; k < pg.n; k = k + 1 {
@@ -432,11 +373,6 @@ fn pg_propagate(pg : Pg) -> Unit {
 }
 
 ///|
-/// Runs PGHI and writes the phase into the job's output region.
-///
-/// @param h Job handle.
-/// @return 1 if it ran; 0 if `h` is invalid. A spectrum with no energy, or degenerate dimensions,
-/// leaves the phase at zero and still reports success, so the host has a single failure mode.
 #export_name("dsp_pghi_run")
 pub fn pghi_run(h : Int) -> Int {
   match pghi_at(h) {
@@ -444,15 +380,12 @@ pub fn pghi_run(h : Int) -> Int {
     Some(job) => {
       let n = job.frames * job.bins
       let phase = job.off_phase
-      // Only the output region is cleared; `mag` holds the host's input.
       for i = 0; i < n; i = i + 1 {
         job.arena.unsafe_set(phase + i, 0.0)
       }
       let mut top = 0.0
       for i = 0; i < n; i = i + 1 {
-        if job.arena.unsafe_get(job.off_mag + i) > top {
-          top = job.arena.unsafe_get(job.off_mag + i)
-        }
+        top = top.max(job.arena.unsafe_get(job.off_mag + i))
       }
       if top <= 0.0 || job.frames < 2 || job.bins < 2 {
         return 1
@@ -467,8 +400,6 @@ pub fn pghi_run(h : Int) -> Int {
         top,
         tol_hi: job.tol_hi,
         tol_lo: job.tol_lo,
-        // `win²` is an exact integer, so scaling before the multiply keeps the coupling identical
-        // to computing it in double precision directly.
         c_f: job.gamma *
         (job.win * job.win).to_double() /
         (job.hop * job.win).to_double(),
@@ -482,15 +413,13 @@ pub fn pghi_run(h : Int) -> Int {
         done: FixedArray::make(n, false),
         queued: FixedArray::make(n, false),
         order: FixedArray::make(n, 0),
-        // The heap can never hold more than one entry per bin, so one allocation of `n` covers the
-        // worst case and the push path never grows anything.
         h_idx: FixedArray::make(n, 0),
         h_key: FixedArray::make(n, 0.0),
         h_size: 0,
       }
       pg_setup(pg)
       pg_propagate(pg)
-      let two_pi = 2.0 * pi
+      let two_pi = 2.0 * @math.PI
       let mut seed : UInt = 0x9e3779b9
       for i = 0; i < n; i = i + 1 {
         if pg.done.unsafe_get(i) {
@@ -501,7 +430,7 @@ pub fn pghi_run(h : Int) -> Int {
         seed = seed ^ (seed << 5)
         job.arena.unsafe_set(
           phase + i,
-          seed.to_double() / 4294967295.0 * two_pi - pi,
+          seed.to_double() / 4294967295.0 * two_pi - @math.PI,
         )
       }
       1

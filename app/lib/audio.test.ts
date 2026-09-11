@@ -1,11 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { containerRate, decodeAudioFile, sniffAudio } from "./audio";
 import type { Samples } from "./arrays";
 
-/** 夹具字节。素材在仓库根的 `fixtures/`：`app/` 只放会进产物的东西。 */
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "../..", "fixtures");
+
 const fixtureBytes = async (name: string): Promise<ArrayBuffer> => {
-  const bytes = await readFile(new URL(`../../fixtures/${name}`, import.meta.url));
+  const bytes = await readFile(join(FIXTURES, name));
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 };
 
@@ -186,8 +189,6 @@ describe("containerRate（素材自己的采样率）", () => {
     return containerRate(sniffAudio(b), b);
   };
 
-  // 每个容器的真素材。右边那个数就是各 decodeAudioFile 用例里 decoder 报出来的采样率 ——
-  // 「按容器读出来的」与「真解出来的」对不上，就等于白按它建了一次上下文。
   test("容器里写着采样率的五种，读出来都要等于真解出来的", async () => {
     for (const [file, sr] of [
       ["tone.wav", 44100],
@@ -199,8 +200,6 @@ describe("containerRate（素材自己的采样率）", () => {
       expect([file, await rateOf(file)]).toEqual([file, sr]);
   });
 
-  // M4A 是刻意不读的：它的 mp4a 条目在 HE-AAC 上写的是核速率（22050），照它建上下文会
-  // 把 SBR 的高频带压没。所以这两个样本必须返回 null —— 不是读不出来，是不敢读。
   test("M4A/MP4 不读（HE-AAC 上容器写的是核速率，照它建会丢高频带）", async () => {
     expect(await rateOf("aac-lc.m4a")).toBeNull();
     expect(await rateOf("he-aac.m4a")).toBeNull();
@@ -218,7 +217,6 @@ describe("containerRate（素材自己的采样率）", () => {
       expect([head, await containerRate(head, junk)]).toEqual([head, null]);
   });
 
-  /** 帧头四字节：同步 + 版本 + 层 + 采样率索引（码率索引随便填，本函数不看它）。 */
   const frame = (version: number, layer: number, rateIdx: number): Uint8Array =>
     bytes(0xff, 0xe0 | (version << 3) | (layer << 1) | 1, rateIdx << 2, 0);
 
@@ -236,20 +234,19 @@ describe("containerRate（素材自己的采样率）", () => {
     expect(await bySniff(frame(0, 1, 2))).toBe(8000);
   });
 
-  // 层位 00 的字节同时被 sniffAudio 认成 ADTS 裸流，所以这一条直接点名容器，绕过嗅探。
   test("mp3 帧头的保留值不算数", async () => {
-    expect(await bySniff(frame(1, 1, 0))).toBeNull(); // 版本位 01 保留
-    expect(await containerRate("MP3", frame(3, 0, 0))).toBeNull(); // 层位 00 保留
-    expect(await bySniff(frame(3, 1, 3))).toBeNull(); // 采样率索引 11 保留
+    expect(await bySniff(frame(1, 1, 0))).toBeNull();
+    expect(await containerRate("MP3", frame(3, 0, 0))).toBeNull();
+    expect(await bySniff(frame(3, 1, 3))).toBeNull();
   });
 
   test("ID3 标签整段跨过去，正文里的假同步不算数", async () => {
-    const fake = frame(3, 1, 0); // 44100，藏在 ID3 正文里
-    const real = frame(3, 1, 1); // 48000，真正的第一帧
+    const fake = frame(3, 1, 0);
+    const real = frame(3, 1, 1);
     const tag = new Uint8Array(10 + fake.length);
     tag.set(ascii("ID3"));
-    tag[3] = 3; // v2.3
-    tag[7] = (fake.length >> 14) & 0x7f; // 同步安全整数：每字节 7 位
+    tag[3] = 3;
+    tag[7] = (fake.length >> 14) & 0x7f;
     tag[8] = (fake.length >> 7) & 0x7f;
     tag[9] = fake.length & 0x7f;
     tag.set(fake, 10);

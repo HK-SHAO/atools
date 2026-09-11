@@ -6,7 +6,7 @@
     "suspicious": "warn"
   },
   "rules": {
-    // `babel-plugin-react-compiler` 已在编译期改写组件，这一组是**编译器自己的退让理由**：
+    // `Bun.build` 的 `reactCompiler` 已在编译期改写组件，这一组是**编译器自己的退让理由**：
     // 它认不出的写法会静默地不优化，而静默正是最难察觉的那种退化。把编译器内部那套校验
     // 也在 lint 里开一遍，「没被优化」就当场可见，不必靠人去猜。
     "react/hooks": "error",

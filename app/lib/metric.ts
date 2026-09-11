@@ -1,5 +1,5 @@
 import type { Samples } from "./arrays";
-import { Frames, padOf } from "./stft";
+import { Frames, padOf } from "./stft.ts";
 
 export function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
@@ -35,8 +35,6 @@ export function align(a: Samples, b: Samples, span: number): { corr: number; snr
 }
 
 export function magnitudes(x: Samples, win: number, hop: number): Float64Array {
-  // 变换走内核（与编码链同一份 FFT、同一张汉宁窗），宿主不再自带一套。
-  // 代价是这条指标链也要求内核已挂上 —— 它本来就跑在 Worker 里（见 audit.ts）。
   const core = new Frames(win);
   try {
     const bins = core.bins;
@@ -87,19 +85,11 @@ export function spectral(
   return { conv, lsd: 8.686 * Math.sqrt(acc / Math.max(n, 1)) };
 }
 
-/** 参与层级比较的那部分谱（`Spectrum` 与它的任何子集都满足）。 */
 interface Levelled {
   meta: { bins: number; frames: number };
   levels: ArrayLike<number>;
 }
 
-/**
- * 两张谱的**层级最大偏差**：逐格 `|a − b|` 取最大值，只比共有的那段长度。
- *
- * 形状（`bins` / `frames`）对不上就是不可比，返回 `-1` —— 它必须与「逐格相同」的 `0`
- * 是两个不同的读数（`Workbench` 的「自检：存出再读回，完全一致」判的就是 `0`）。
- * 质检面板（`audit.ts`）与评测台（`bench/entry.ts`）共用这一条，免得两处口径各说各话。
- */
 export function levelGap(a: Levelled, b: Levelled): number {
   if (a.meta.bins !== b.meta.bins || a.meta.frames !== b.meta.frames) return -1;
   const n = Math.min(a.levels.length, b.levels.length);
@@ -112,16 +102,11 @@ export function levelGap(a: Levelled, b: Levelled): number {
   return worst;
 }
 
-/**
- * 24 段临界带的上边界（Hz）。包络相关与感知谱距共用一张表，
- * 免得「人耳怎么分频」在两个指标里各写一遍。
- */
 const BARK_EDGES = [
   100, 200, 300, 400, 510, 630, 770, 920, 1080, 1270, 1480, 1720, 2000, 2320, 2700, 3150, 3700,
   4400, 5300, 6400, 7700, 9500, 12000, 15500,
 ] as const;
 
-/** 把 win/2+1 个线性 bin 分到临界带里，返回每条带的 [起, 止)。 */
 function barkBands(sr: number, bins: number): [number, number][] {
   const perBin = sr / 2 / (bins - 1);
   const out: [number, number][] = [];
@@ -136,7 +121,6 @@ function barkBands(sr: number, bins: number): [number, number][] {
   return out;
 }
 
-/** 每条带在每个时间帧上的能量（`frames × bands`）。 */
 function bandEnergy(x: Samples, win: number, hop: number, bands: [number, number][]): Float64Array {
   const bins = win / 2 + 1;
   const mag = magnitudes(x, win, hop);
@@ -154,11 +138,6 @@ function bandEnergy(x: Samples, win: number, hop: number, bands: [number, number
   return out;
 }
 
-/**
- * 包络相关（STOI 的骨架）：每条临界带的短时能量包络分别求 Pearson 相关再平均。
- * 人耳对相位几乎不敏感，对**包络**极敏感 —— 紧凑 8k 8bit 的波形相关只有 0.19，
- * 包络相关却有 0.93~0.99。看「像不像原声」要以这个为准，`corr` 严重低估听感。
- */
 export function envelopeCorr(
   ref: Samples,
   got: Samples,
@@ -199,16 +178,6 @@ export function envelopeCorr(
   return sum / bands.length;
 }
 
-/**
- * 感知谱距：临界带内能量先做响度压缩（幂 0.15，即幅度的 0.3 次方），再取 dB 求均方根。
- * 压缩让强弱带不再差几个数量级，更贴近听感。注意它因此**不是真实 dB**，
- * 读数约为同素材 LSD 的 0.3 倍 —— 别拿它和 `spectral().lsd` 横比。
- *
- * **必须加地板**，且两侧共用同一个：取 −80 dB（峰值幅度的 10^-4，压缩后 10^-1.2）。
- * 不带地板时还原侧全静的那条带是 −∞，一两条空带就能把整条距离撑成 Infinity/NaN，
- * 指标当场失效（曾实测严苛素材算出 38~54）。地板若按各自峰值取，则「还原侧全静」
- * 时那一侧的峰值是 0、地板也是 0，照样爆 —— 所以取两侧峰值的较大者，两边共用。
- */
 export function barkDistance(ref: Samples, got: Samples, sr: number, win = 1024, hop = 256): number {
   const bands = barkBands(sr, win / 2 + 1);
   const a = bandEnergy(ref, win, hop, bands);
@@ -237,7 +206,6 @@ export function barkDistance(ref: Samples, got: Samples, sr: number, win = 1024,
   return Math.sqrt(acc / size);
 }
 
-/** 一段还原音与它的参照相比掉了多少。三个口径各自的范围与含义见各自的函数。 */
 export interface Metrics {
   snr: number;
   corr: number;

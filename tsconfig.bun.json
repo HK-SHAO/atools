@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.bun.tsbuildinfo",
+    "target": "es2023",
+    // DOM 是给 `bench/entry.ts` 的：那是**页面侧**的评测台入口（由 Bun 打包、在 CDP 打开的
+    // 标签页里跑），driver 侧再从它取 `Row` 类型，于是 app/ 的浏览器代码被传递地拖进来。
+    // 这几件东西本来就要在一个工程里。
+    "lib": ["ES2023", "DOM"],
+    // 构建脚本、评测台、单元测试全跑在 Bun 上，所以只给 Bun 一套。它自带 `node:` 模块声明，
+    // 但**仍然需要 `@types/node`**：`bun-types/index.d.ts` 第一行就是 `/// <reference types="node" />`，
+    // 少了它连 `process` 与 `node:fs/promises` 都解析不出来（实测）。那是 Bun 自己的类型依赖，
+    // 与「用哪个运行时跑脚本」无关。
+    "types": ["bun"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    // Bun 不做扩展名补全，所以**直接加载的模块**一律写显式扩展名 —— 包括 app/lib 里被它们
+    // 引到的那几个（`bench/kernel.ts` 就是这么把数值链拿去量的）。
+    "allowImportingTsExtensions": true,
+    // `app/credit.ts` 从 package.json 取署名与版本号
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "erasableSyntaxOnly": true
+  },
+  // 三摊子收在一份里：构建脚本、评测台、单元测试。它们跑在同一个运行时上、要同一套类型，
+  // 拆成两份只会是两份必须同步的配置。
+  //
+  // `app/browser.d.ts` 排掉：那几条是**浏览器**侧的全局（构建期常量、热更新），
+  // 而 Bun 自己有 `process` 与 `import.meta.hot`，两边一起进来就是重复声明。
+  "include": ["scripts", "bench", "app"],
+  "exclude": ["app/browser.d.ts"]
+}

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { compileWasm } from "../../scripts/moon";
 import type { Samples } from "./arrays";
 import { attachKernel, loadDsp } from "./dsp";
@@ -12,8 +12,6 @@ import { Frames } from "./stft";
 import { TUNE } from "./phase";
 import { resample, resampledLength, silenceBounds, slice, trimRange } from "./resample";
 
-// 内核是这个套件的前置条件：`encode` / `synthesise` / 票根都只有内核里那一份实现，
-// 没有参照实现可退（见 `app/lib/dsp.ts` 的 `mustKernel`）。
 beforeAll(async () => {
   attachKernel(await loadDsp(compileWasm()));
 });
@@ -80,7 +78,6 @@ describe("params", () => {
     });
     expect(winOf(VOICE)).toBe(512);
     expect(hopOf(VOICE)).toBe(128);
-    // 三档的 hop 一律是 win/4，没有例外 —— 这是那条「统一 4 倍重叠」的决定。
     for (const fineness of [0, 1, 2] as const)
       expect(hopOf({ ...VOICE, fineness }) * OVERLAP).toBe(winOf({ ...VOICE, fineness }));
     expect(stepsOf(8)).toBe(255);
@@ -96,7 +93,6 @@ describe("params", () => {
   });
 });
 
-// 「相位表之前」的逐样点现算版，作为比位对照。测试专用，不进生产代码。
 const naiveInline = (x: Samples, from: number, to: number, cutoffHz = 0): Float32Array => {
   const ratio = from / to;
   const out = new Float32Array(Math.max(1, Math.round(x.length / ratio)));
@@ -159,7 +155,6 @@ describe("resample", () => {
     expect(y.length).toBe(sr);
   });
 
-  // 相位权重查表是纯缓存：值与逐样点现算逐位相同，音质门禁因此不会漂
   test("phase table is bit-identical to computing each tap inline", () => {
     const src = signal(44100, 44100 * 2);
     for (const [from, to, cutoff] of [
@@ -178,15 +173,12 @@ describe("resample", () => {
     }
   });
 
-  // 表顶到上限时会整段退回现算（回退路径不分配数组）。那条分支必须与查表路径同值，
-  // 否则「逐位不变」只在表装得下时成立。这里用实际相位数远超上限的组合把它压出来。
   test("phase table falling back to inline taps is bit-identical too", () => {
     const from = 44101;
     const to = 96000;
     const n = from * 2;
     const x = signal(n, from);
 
-    // 该组合实际会出现多少种 frac —— 必须超过上限 1<<14，这条测试才真的覆盖到回退分支
     const seen = new Set<number>();
     const ratio = from / to;
     for (let j = 0; j < Math.round(n / ratio); j++) {
@@ -203,7 +195,6 @@ describe("resample", () => {
     expect(differ).toBe(0);
   });
 
-  // 边缘输入：空、单点、极短、全零、冲激，以及比率离谱到几乎没有重复相的组合
   test("edge lengths and degenerate rates agree with inline taps", () => {
     const cases: [number, number, number, Samples][] = [
       [44100, 8000, 0, Float32Array.from([0]) as Samples],
@@ -381,8 +372,6 @@ function jpegish(spec: Spectrum, q: number, k = 0.04): void {
   }
 }
 
-// 参照式子：精确档相位原本的写法（atan2 + cos + sin）。只用来钉住那次替换
-// （换成直接取 re/h、im/h），不是第二份实现 —— 变换本身仍走内核，见 stft.ts。
 const exactPhaseInline = (
   pcm: Samples,
   win: number,
@@ -486,9 +475,6 @@ describe("exact (2-band) mode", () => {
     expect(clicks(back)).toBe(0);
   });
 
-  // 精确档把相位存成单位相量：取 re/h、im/h，与 cos(atan2(im, re))、sin(atan2(im, re))
-  // 是同一件事，但省掉每 bin 三个超越函数（内层实测 2.12×）。钉住这条替换 ——
-  // 只有当两者量化到同一个字节时才是等价的，改量化或改写式子都必须让它继续成立。
   test("exact phase bytes equal the atan2 definition they replace", async () => {
     const sr = 32000;
     const pcm = signal(sr, sr);
@@ -505,10 +491,6 @@ describe("exact (2-band) mode", () => {
     }
   });
 
-  // synthesiseExact 的 core.add 做的是全长的 Hermite 反变换，所以「写满 bins」等于
-  // 「写满整个上半谱」这件事只成立于 bins === win/2+1。encode 恒满足（rowsFor 在全频段
-  // 就返回 win/2+1）；image 侧的 winFromBins 有 256 的下限，幅度带短于 129 行时会打破它 ——
-  // 那种输入由 synthesiseExact 里的清零点兜住。
   test("exact encodes always fill the whole upper half", async () => {
     const sr = 44100;
     const pcm = signal(sr, sr);
@@ -532,16 +514,10 @@ describe("shape", () => {
   });
 
   test("refuses oversized requests", () => {
-    // 8k 的天花板约 996 秒（16M 像素 ÷ 2.008 ÷ 8000），1200 秒必须判红。
     expect(() => shapeFor(VOICE, 8000, 8000 * 1200)).toThrow();
     expect(() => shapeFor({ ...VOICE, fineness: 2 }, 44100, 44100 * 600)).toThrow();
   });
 
-  // 时长上限是两道墙里更小的那道：**像素预算**（管文件体积，0.84 字节/像素）与
-  // **单边 65535 列**（canvas 的硬墙，实测 65535 宽还行、65536 就静默失败）。断言不写死
-  // 是哪道墙说了算 —— 只要求：① 上限那一格正好贴上墙（再多一帧就判红）；② 至少有一道
-  // 墙是紧的，说明上限不是随手定的数。曾经这里还有第二条独立的 20000 帧上限，它先于两条
-  // 墙卡住省/中两档，同样 8k 下省只有 160 秒、细却有 500 秒 —— 那才是无理由的不一致。
   test("the duration ceiling sits exactly on the tighter of the two walls", () => {
     for (const sr of [8000, 16000, 24000, 32000])
       for (const fineness of [0, 1, 2] as const) {
@@ -556,9 +532,6 @@ describe("shape", () => {
       }
   });
 
-  // 两道墙同时存在，就意味着「窗长不影响容量」只在预算比列墙紧时成立。省档每秒 125 列
-  // （hop 64，8k），是最档的两倍，所以它先撞列墙。这不是缺陷，是格式的几何：列数有上限，
-  // 而每秒列数由窗长定。
   test("the small window hits the column wall, the long ones the pixel budget", () => {
     const framesOf = (fineness: 0 | 1 | 2): number =>
       maxFramesFor(rowsFor(winOf({ ...VOICE, fineness }), 8000, 0), 1);
@@ -566,8 +539,6 @@ describe("shape", () => {
     expect(framesOf(2)).toBeLessThan(MAX_FRAMES);
   });
 
-  // 用户报的实例：166 秒的 boniu.m4a 点 32k 会被退回 16k。真因有两个：预算只有 8M，
-  // 且 `fits` 把样点数多算了一两帧（ceil + 一个 hop）。现在 32k 直接装得下。
   test("a 166 s file fits 32k now that both the budget and the frame count are honest", () => {
     const srcSr = 48000;
     const srcSamples = 7_972_864;
@@ -576,7 +547,6 @@ describe("shape", () => {
       expect(fit.enc.sr).toBe(sr);
       expect(fit.note).toBeNull();
     }
-    // 真的把它编出来一次：判据说的「装得下」要和 encode 的结果一致，不能只是算对了。
     const want: Encode = { ...VOICE, sr: 32000 };
     const n = resampledLength(srcSamples, srcSr, 32000);
     const shape = shapeFor(want, 32000, n);
@@ -584,8 +554,6 @@ describe("shape", () => {
     expect(shape.frames).toBeLessThanOrEqual(MAX_FRAMES);
   });
 
-  // 「算得准」这件事本身要有断言：判据喂进去的样点数必须与 resample 真给出的长度一致，
-  // 否则刚好装在边界上的请求会被判成装不下（这里是 N 取到天花板的整数倍）。
   test("a request that exactly fits is never degraded", () => {
     for (const fineness of [0, 1, 2] as const) {
       const e: Encode = { ...VOICE, fineness };
@@ -607,7 +575,6 @@ describe("shape", () => {
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
-    // 沿采样率往下找**第一个装得下的**：落点必须装得下，而它上面那一档必须确实装不下。
     expect(fit.enc.sr).toBe(24000);
     expect(() => shapeFor(want, 32000, resampledLength(samples, 44100, 32000))).toThrow();
     const tuned = shapeFor(fit.enc, fit.enc.sr, resampledLength(samples, 44100, fit.enc.sr));
@@ -618,7 +585,6 @@ describe("shape", () => {
     expect(short.enc).toEqual(want);
     expect(short.note).toBeNull();
 
-    // 8k 都装不下才剪短：剪出来的时长自己必须在预算内。
     const huge = fitEncode(VOICE, 44100, 44100 * 3600);
     expect(huge.enc.sr).toBe(8000);
     const kept = huge.enc.end - huge.enc.start;
@@ -628,12 +594,9 @@ describe("shape", () => {
 
   test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
     const e: Encode = { ...VOICE, mode: "exact", sr: 8000, fineness: 2 };
-    // 可逆档存三张平面，判据给它算两道带宽，所以它的天花板只有中档的一半。
     const samples = 8000 * 500;
     const fit = fitEncode(e, 8000, samples);
     expect(fit.note).not.toBeNull();
-    // fitEncode 可能选择「剪短」而不是「降采样」，所以要按它真正覆盖的时长来验，
-    // 否则验的是一个它从没承诺过的整段几何。
     const sr = fit.enc.sr > 0 ? fit.enc.sr : 8000;
     const secs = fit.enc.end > fit.enc.start ? fit.enc.end - fit.enc.start : samples / 8000;
     const tuned = shapeFor(fit.enc, sr, Math.ceil(secs * sr));
@@ -649,22 +612,16 @@ describe("shape", () => {
     }
   });
 
-  // 频宽菜单不该有自己的上限 —— 上限是奈奎斯特。用户报过：32k 采样（可用到 16k）最多也只
-  // 能选 8k，花了大图的像素却拿不到更宽的带，且没有任何说明。
   test("bandwidth ladder is capped by Nyquist, not by the menu", () => {
     const bands: readonly number[] = FMAX_OPTIONS;
     for (const hz of [4000, 8000, 12000, 16000]) expect(bands).toContain(hz);
     expect(FMAX_OPTIONS.some(hz => hz > 8000 && hz < 32000 / 2)).toBe(true);
   });
 
-  // 采样梯子不留「差不到 9%」的近邻档：11.025 / 22.05 kHz 与相邻档在带宽、图长、听感上
-  // 都分辨不出（22.05 与 24 只差 8.8%），一起摆出来只是让人多犹豫一次。断言写的是**规则**
-  // （该在的档都在、相邻至少差 25%），不是当时那张清单 —— 将来合理地加一档不该因此判红。
   test("sample-rate ladder has no near-duplicate rungs", () => {
     const rates: number[] = [...SR_OPTIONS].filter(s => s > 0).sort((a, b) => a - b);
     expect(rates[0]).toBe(8000);
     expect(rates.at(-1)).toBe(32000);
-    // 8/16/24/32：电话 / 宽带语音 / 通用音频 / 广播。24k 是标准档，不该缺席。
     for (const sr of [8000, 16000, 24000, 32000]) expect(rates).toContain(sr);
     for (let i = 1; i < rates.length; i++)
       expect(rates[i]! / rates[i - 1]!).toBeGreaterThanOrEqual(1.25);
@@ -831,8 +788,6 @@ describe("metadata", () => {
     expect(textToMeta(JSON.stringify(bad))).toBeNull();
   });
 
-  // 两个入口共用一处 sanitize：文件名那条曾经不查 sr>0（时长变 Infinity）、不查 win 的
-  // 上下界、也不查 bits，改个名就能把 16 位深喂进 encode。
   test("both entries reject the same out-of-range fields", () => {
     const name = (sr: number, win: number, bits: number, frames: number): string =>
       `x_SR${sr}_N${win}_H128_F${frames}_L38400_B${bits}.png`;
@@ -840,14 +795,14 @@ describe("metadata", () => {
       JSON.stringify([4, sr, win, 128, frames, 129, 38400, bits, 0, 0]);
 
     for (const [sr, win, bits, frames] of [
-      [0, 512, 8, 300], // sr=0 → 时长 Infinity
-      [8000, 8, 8, 300], // win 越下界
-      [8000, 8192, 8, 300], // win 越上界
-      [8000, 512, 16, 300], // 位深不在 0/2/4/8
-      [8000, 512, 3, 300], // 同上
-      [8000, 512, 8, 0], // 帧数为 0
-      [8000, 512, 8, 999_999], // 帧数越 MAX_FRAMES
-      [8000, 512, -2, 300], // 负位深
+      [0, 512, 8, 300],
+      [8000, 8, 8, 300],
+      [8000, 8192, 8, 300],
+      [8000, 512, 16, 300],
+      [8000, 512, 3, 300],
+      [8000, 512, 8, 0],
+      [8000, 512, 8, 999_999],
+      [8000, 512, -2, 300],
     ]) {
       expect(metaFromName(name(sr!, win!, bits!, frames!))).toBeNull();
       expect(textToMeta(text(sr!, win!, bits!, frames!))).toBeNull();
@@ -985,10 +940,6 @@ describe("image params", () => {
 });
 
 describe("level bytes", () => {
-  // 曾经 encode 给 bits>=16 开过一条 Uint16Array 的分支，而 levelToDb 是按字节解释的
-  // （level·steps/255），两条约定一撞就整段 NaN（实测 4096/4096 非有限）。
-  // 那条分支 UI 到不了，但它的存在本身就是「levels 到底几个字节」的歧义源，已删。
-  // 这条把「levels 恒为字节」和「任意位深下合成都有限」钉住。
   test("levels are bytes at every bit depth and synthesis stays finite", async () => {
     const sr = 8000;
     const pcm = signal(sr * 2, sr);
@@ -1003,10 +954,6 @@ describe("level bytes", () => {
 });
 
 describe("floor relaxation", () => {
-  // 最低那一档（level 0）的真值含义是「在这个地板以下」。硬投影把它钉在地板上，
-  // 于是一张**全零**的频谱重建出来不是静音，而是铺满整张图的一层等高噪声 ——
-  // 位深越浅地板越高（2bit 只在峰值下 24 dB），这层假噪声越响。
-  // 放宽之后 level 0 可以往 0 走，全零频谱就该还原成静音。
   const rms = (x: Samples): number => {
     let acc = 0;
     for (const v of x) acc += v * v;
@@ -1048,8 +995,6 @@ describe("floor relaxation", () => {
     expect(on).toBeLessThan(off / 1000);
   });
 
-  // 地板在 −80 dB 以下时（8bit 是 −96 dB）钉不钉都听不出来，放宽只会在噪声里摆动。
-  // 这条把「span ≥ 80 就完全不放宽」钉住 —— 8bit 的输出必须与放宽前一模一样。
   test("leaves high bit depths alone", async () => {
     const off = await quiet(8, false);
     const on = await quiet(8, true);
@@ -1060,8 +1005,6 @@ describe("floor relaxation", () => {
 describe("image footprint", () => {
   const SAMPLES = 8000 * 10;
 
-  // 像素 ≈ N·重叠/2 —— 只由重叠倍数决定，与窗长无关。这条把「重叠才是尺寸旋钮」
-  // 钉住：谁把重叠改大，这里立刻判红；也解释了三档的图为什么一样大。
   test("image area is set by the overlap factor, not the window", () => {
     const px = ([0, 1, 2] as const).map(f => {
       const s = shapeFor({ ...VOICE, fineness: f }, 8000, SAMPLES);
@@ -1071,7 +1014,6 @@ describe("image footprint", () => {
     expect(Math.max(...px) / Math.min(...px)).toBeLessThan(1.05);
   });
 
-  // 可逆档比紧凑档多存一条相位带，同样的几何下正好两倍像素。
   test("the reversible layout costs one extra band", () => {
     const c = shapeFor(VOICE, 8000, SAMPLES);
     const r = shapeFor({ ...VOICE, mode: "exact" }, 8000, SAMPLES);

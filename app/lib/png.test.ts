@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import { RAMP } from "./palette";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 
@@ -67,8 +67,6 @@ describe("png metadata chunk", () => {
 });
 
 describe("indexed ramp", () => {
-  // depth<8 时一行是 ceil(width·depth/8) 字节。曾经按 width 取，长度校验直接失败、
-  // 自家 2/4 bit 图读回来恒为 null（退化到通用读图）。这四条把 1/2/4/8 全钉住。
   for (const depth of [1, 2, 4, 8]) {
     test(`round trips at bit depth ${depth}`, async () => {
       const steps = (1 << depth) - 1;

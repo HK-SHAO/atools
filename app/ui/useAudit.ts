@@ -8,8 +8,6 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) 
   const [loss, setLoss] = useState<LossRow[] | null>(null);
   const [checking, setChecking] = useState(false);
   const genRef = useRef(0);
-  // 质检一次要还原三遍（原图 / 有损 / 半尺寸），是整页最重的一串计算，同样交给 Worker。
-  // 自己的 scope：取消自己这一份，不牵连 `useStudio` 正在跑的编码。
   const io = scope("audit");
 
   useEffect(() => {
@@ -24,8 +22,6 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) 
     const alive = () => genRef.current === my;
     setChecking(true);
     try {
-      // 还原与指标都交给 Worker：`compare` 里的 `align` 会在四千多倍素材长度上扫一遍，
-      // 留在主线程就是一次实打实的卡顿（见 `pipeline.ts`）。
       const rows = await audit(
         pcm,
         spec,

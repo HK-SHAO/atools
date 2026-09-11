@@ -21,16 +21,16 @@
 | 命令 | 覆盖 |
 |---|---|
 | `bun run test:kernel` | `moon/*_wbtest.mbt`：**全部数值逻辑** —— 往返、Parseval、CRC 拦得住坏位流、判据与实现一致、量化与相位重建的不变量。核心库只有这一份实现，数值断言也只有这一处。 |
-| `bun run test` | vitest（Node 上跑）：**内核装载与跨边界取址**、**启动路径**（`startKernel` 只加载一次、`kernelReady` 真的等到挂上为止）、浏览器官能（DOM / canvas / 音频解码 / Service Worker）、端到端契约（紧凑档出图整条票根链）。**不重复数值断言** —— 内核那侧已经钉死了。 |
+| `bun run test` | `bun test`（Bun 上跑）：**内核装载与跨边界取址**、**启动路径**（`startKernel` 只加载一次、`kernelReady` 真的等到挂上为止）、浏览器官能（DOM / canvas / 音频解码 / Service Worker）、端到端契约（紧凑档出图整条票根链）。**不重复数值断言** —— 内核那侧已经钉死了。 |
 | `bun run bench:kernel` | `moon/*_bench_wbtest.mbt`：内核自带基准。**读数只归 `moonrun`**（与 V8 差 1.1~1.4×，见 `docs/algorithms.md`），所以它只当同运行时的前后回归锚点。 |
 
 **实现只有一份，住在 `moon/`**。宿主侧拿不到内核就当场抛（`app/lib/dsp.ts` 的 `mustKernel`），
 不存在「静默退回参照实现」这条路径 —— 曾经需要一条「这一趟真走了内核」的计数断言来防它，
 现在这个状态不可表达，断言随之删除。搬一个模块进内核的步骤见 `moon/README.md` 的
-「Adding a module」；vitest 那侧只保留跨边界与浏览器行为（样板：`moon/stub.mbt` +
+「Adding a module」；`bun test` 那侧只保留跨边界与浏览器行为（样板：`moon/stub.mbt` +
 `moon/stub_wbtest.mbt`，`app/lib/stub.test.ts` 只剩取址与端到端）。
 
-`quality.ts` / `kernel.ts` 不经浏览器，但印的是给人看的表而不是红/绿断言，所以不并进 vitest；
+`quality.ts` / `kernel.ts` 不经浏览器，但印的是给人看的表而不是红/绿断言，所以不并进单测；
 `kernel.ts` 有门禁退出码，`quality.ts --gate` 同样有。
 
 **2026-09 删减**：`scale.ts`（尺度门禁）、`smoke.ts`（界面行为门禁）、`ml/`（相位修正网络训练脚本）
@@ -141,6 +141,10 @@
 - 它顺带守着一笔不属于内核的账：**解码上下文不许退回 `AudioContext`** —— 那个构造是页面里第一次
   建设备上下文，实测三位数毫秒（数字与消融见 `docs/algorithms.md` 的「解码链路与覆盖面」）。
   换回设备上下文之前，这条链与 `perf.ts` 的落 WAV 那半都会稳定出现一个 117~159 ms 的长任务。
+- `SUBPATH=/toy/slug` **把 `dist` 的副本真的搬到 `<tmp>/toy/slug/`，然后只服务那棵子树**。不能用
+  `serveDir` 的 `mounts` 代替：它对没命中的前缀仍会回到 `dist/<path>`，同一份文件在根上也取得到，
+  那一趟就什么也证明不了（试过，`base: "/"` 下两次都绿）。**违例跑过**：把 `base` 改成 `"/"` 重建后，
+  产物引用变成 `/assets/index-*.js`，根路径那趟照样绿、子路径那趟红在「超时：应用载入」。
 
 ## 量数值改动的影响（消融纪律）
 
