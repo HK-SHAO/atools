@@ -1,9 +1,28 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
-const CHROME =
-  "/Users/sf/.chromium-browser-snapshots/chromium/mac_arm-1684550/chrome-mac/Chromium.app/Contents/MacOS/Chromium";
+function chromium(): string {
+  const candidates = process.env.CHROME
+    ? [process.env.CHROME]
+    : [
+        "chromium", "chromium-browser", "google-chrome", "chrome", "msedge",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ...[process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA]
+          .filter((dir): dir is string => Boolean(dir))
+          .map(dir => join(dir, "Google/Chrome/Application/chrome.exe")),
+      ];
+  for (const candidate of candidates) {
+    const executable = Bun.which(candidate);
+    if (executable) return executable;
+    if (isAbsolute(candidate) && existsSync(candidate)) return candidate;
+  }
+  throw new Error("找不到 Chromium / Chrome：安装浏览器，或设置 CHROME 为浏览器可执行文件路径。");
+}
 
 export const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
 
@@ -36,7 +55,7 @@ interface Options {
 export async function open({ port, size, url, args = [] }: Options): Promise<Session> {
   const [w, h] = size;
   const proc = spawn(
-    CHROME,
+    chromium(),
     [
       "--headless=new",
       `--remote-debugging-port=${port}`,
@@ -46,7 +65,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       "--mute-audio",
       ...args,
       `--window-size=${w},${h}`,
-      `--user-data-dir=/tmp/cdp-${port}-${Date.now()}`,
+      `--user-data-dir=${join(tmpdir(), `cdp-${port}-${Date.now()}`)}`,
       url,
     ],
     { stdio: "ignore" },

@@ -1,5 +1,7 @@
 # 评测基建（bench/）
 
+浏览器评测需要 Chrome 或 Chromium。优先使用 `CHROME` 指定的可执行文件，否则查找 PATH、macOS 应用目录和 Windows Chrome 安装目录。例如：`CHROME=/path/to/chromium bun run ui`。无浏览器时仍可运行单元测试、质量门禁和内核基准。
+
 常驻的质量评测与量化工具，**不是一次性脚本** —— 调参、回归、发布前体检都靠这里。
 指标口径统一在 `app/lib/metric.ts`（lib 与评测台共用，不会两套数字对不上）。
 
