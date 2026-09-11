@@ -20,8 +20,7 @@
     "quality": "bun bench/quality.ts",
     "offline": "bun bench/offline.ts",
     "perf": "bun bench/perf.ts",
-    "bench": "bun bench/run.ts",
-    "smoke": "bun bench/smoke.ts"
+    "bench": "bun bench/run.ts"
   },
   "dependencies": {
     "@audio/decode-aac": "^1.5.0",

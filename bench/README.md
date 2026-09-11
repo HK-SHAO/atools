@@ -10,19 +10,23 @@
 | `bun run quality` | 否 | **质量回归**：确定性合成素材 → 真实 encode/synthesise 链路 → SNR/相关/谱收敛/谱差。日常改动后先跑这个。 |
 | `bun run quality -- --gate` | 否 | 同上 + 质量门禁：低于阈值退出码 1（可挂 CI / 提交前钩子）。 |
 | `bun run bench` | 是 | **端到端评测台**：Chromium 无头跑完整链路（音频 → 图 → PNG/JPEG/缩放降级 → 读图 → 还原），覆盖图片容器层的损失。 |
-| `bun run smoke` | 是 | **界面行为门禁**：跑在 `dist/` 上（先 `bun run build:web` + `bun start`，页面在 `http://127.0.0.1:3000`）。点演示 → 点频谱图试播 → 切 2bit / 8bit **各播一次** → 质检。硬断言两条：**参数必须进到声音里**（截住 `AudioBuffer.copyToChannel` 拿到的两次 PCM 必须有差异 —— 播的若是编码前的原声，2bit 与 8bit 会逐样点相同，这是用户报过的现象）、控制台无错误；有问题退出码 1。截图落到 `/tmp/smoke-*.png`。 |
-| `bun bench/scale.ts` | 是 | **尺度门禁**：先 `bun run build:web`，再校验字号随容器等比、五种控件同高、令牌锚在当前容器上、参数标签同列，并单独证一次「跟容器而非跟视口」。 |
-| `bun bench/offline.ts` | 是 | **PWA 门禁**：先 `bun run build:web`，再校验 manifest 可装（MIME、`scope`/`start_url` 落在应用根、图标可达）、iOS 头标签齐备、预缓存**逐项**对照（8 项一项不落，且 `sw.js` 不在其中）、断网可用。**只加载一次页面**（「第二遍才离线」不算数）；另验 SPA 回落出来的 HTML 不进运行期缓存、新版 SW 停在 `waiting` 不夺取正在用的页面。 |
+| `bun bench/offline.ts` | 是 | **PWA 门禁**：先 `bun run build:web`，再校验 manifest 可装（MIME、`scope`/`start_url` 落在应用根、图标可达）、iOS 头标签齐备、预缓存**逐项**对照（10 项一项不落，且 `sw.js` 不在其中）、断网可用。**只加载一次页面**（「第二遍才离线」不算数）；另验 SPA 回落出来的 HTML 不进运行期缓存、新版 SW 停在 `waiting` 不夺取正在用的页面。 |
 | `bun run perf` | 是 | **性能体检**：重采样相位表的倍数对照 + 相位数最多那几个组合「不得慢于逐样点」的门禁（机器无关，可当门禁）+ 真实页面里加载长音频的主线程长任务清单。`SECS=60` 改素材时长，`PAGE=0` 只跑前半。 |
 
 另有单元测试 `bun test`，覆盖 FFT/相位/PNG/参数等纯逻辑。
+
+**2026-09 删减**：`scale.ts`（尺度门禁）、`smoke.ts`（界面行为门禁）、`ml/`（相位修正网络训练脚本）
+已从仓库移除 —— 它们绑死的都是当时的界面形态与列宽，每改一次布局就要跟着改。**代价要认**：
+「播放走的是 `synthesise(spec)` 而不是原声」与「`@property --u` 注册后令牌才锚在容器上」这两条
+静默失效的链，从此**没有自动门禁**，只在 `AGENTS.md` 里留了人工核对步骤。
+删掉的门禁内容仍在 git 历史里（`git show <commit>:bench/smoke.ts`）。
 
 ## 结构
 
 - `cdp.ts` —— Chromium 路径、CDP 会话（`send` / `ev` / `on` / `goto` / `shot`）、静态文件服务都在这里，
   三个浏览器侧入口共用，别在各自文件里再抄一份。页面里的求值一律走 `ev`。
 - `entry.ts` —— 打进页面的评测内核（`window.Bench`），被 `run.ts` 重打成 `bundle-<PORT>.js`。
-- 页面取样一律用语义类名（`.act` / `.params .chip` / `.spec` 等），清单见 `docs/build.md`。这些类名是契约，改名要同步改这里。
+- 页面取样一律用语义类名（现存取样点：`.app` / `.drop` / `.params` / `.spec` / `.note`）。这些类名是契约，改名要同步改这里。
 
 ## 质量回归（quality.ts）
 
@@ -52,8 +56,9 @@
   - `SYNTH` / `RECON` / `PHASE` / `GRAD` —— 反演器横评、量化/相位分离、PGHI 梯度体检（详见 entry.ts 各 probe 注释）。
 - `OUT=/tmp/x.json` 自定义结果落盘路径（默认 `/tmp/bench.json`）；并行跑多实例时给每个实例不同的 `BENCH_PORT`（CDP 端口与 bundle 文件名都从它派生，互不冲突）。
 - **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
-- `DATA='["jpeg","s75"]'` —— **训练对转储**：走真实管线（encode → 降损 → 读回），把损伤相位/幅度/置信度与真值相位成对落盘 `bench/.data/`，供 `bench/ml/train.py` 训练相位修正网络。二进制布局见 `entry.ts` 的 `dumpPair`：40 字节小端头（frames/bins/win/hop/sr/bits/exact/ref/hasW）→ uint16 层级 → 损伤 cos/sin/置信度三路 uint8 → 对齐后的真值 cos/sin。层级统一升到 **uint16**，免得 compact 的 uint8 与 exact 的 uint16 在训练侧分成两套读法（compact 升位无损）。
-- `NEURAL=bench/ml/w_p7.json` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
+- `DATA='["jpeg","s75"]'` —— **训练对转储**：走真实管线（encode → 降损 → 读回），把损伤相位/幅度/置信度与真值相位成对落盘 `bench/.data/`，供相位修正网络的训练（脚本自备，见 `docs/algorithms.md` 的 ML 负结果）。二进制布局见 `entry.ts` 的 `dumpPair`：40 字节小端头（frames/bins/win/hop/sr/bits/exact/ref/hasW）→ uint16 层级 → 损伤 cos/sin/置信度三路 uint8 → 对齐后的真值 cos/sin。层级统一升到 **uint16**，免得 compact 的 uint8 与 exact 的 uint16 在训练侧分成两套读法（compact 升位无损）。
+- `NEURAL=<weights.json>` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
+  这个口子留着，但权重文件与训练脚本**不随仓库**（本地训练产物，`bench/ml/*.json` 一直在 `.gitignore` 里）。
 - 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
 ## PWA 门禁（offline.ts）
@@ -96,8 +101,8 @@
   曾经上限停在 4096 时，11.025k→32k 实测 0.87×，即优化反而变成拖累。这条断言就是那次抓出来的。
 - **主线程长任务**：真实页面里落一个 60 秒 44.1kHz WAV，用 `PerformanceObserver` 的
   `longtask` 记录阻塞，并按 `.note` 的文案变化还原阶段时间线。这部分随机器快慢浮动，
-  **只报数不设阈值** —— 它是用来定位「哪一段在卡」的，不是回归门。头一个长任务里含着
-  测量脚本自己合成 WAV 的开销，读的时候要减掉。
+  **只报数不设阈值** —— 它是用来定位「哪一段在卡」的，不是回归门。素材在开表**之前**就造好，
+  所以读数里不含测量脚本自己合成 WAV 的开销（55~64 ms，曾经混在里面，让这项指标没法用）。
 
 结论与复跑数字见 `docs/algorithms.md` 的「重采样与主线程预算」。
 
@@ -125,6 +130,6 @@
 
 - `docs/` 在 `.gitignore` 中（评测素材本地留档），评测台从 `docs/` 读音频。
 - Chromium 路径写死在 `cdp.ts` 顶部（本机快照），换机器只改这一处。
-- 改动读端/写端行为后：先 `bun run quality -- --gate`，再 `bun run bench`（含缩放/JPEG 矩阵），最后 `bun run smoke`。
-- 改样式后另跑 `bun run build:web && bun bench/scale.ts`。
+- 改动读端/写端行为后：先 `bun run quality -- --gate`，再 `bun run bench`（含缩放/JPEG 矩阵）。
+- 动播放链或 `tokens.css` 之后，那两条没有门禁的链按 `AGENTS.md` 里写的人工步骤核一遍。
 - 改构建产物、manifest、图标或 Service Worker 后另跑 `bun run build:web && bun bench/offline.ts`。

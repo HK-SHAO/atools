@@ -70,7 +70,7 @@
 - `bun test`：124 通过 / 0 失败（与基线同数）。
 - `bench/offline.ts`：**全部合格** —— 壳逐项 8 项、断网后 html/script/style/manifest 全 200、
   运行期缓存收下演示音频、新版停在 `waiting`、SPA 回落的 HTML 没进缓存、`sw.js` 不在预缓存里。
-- `bench/scale.ts`：五档容器宽度全合格，`@property --u` 与 `-webkit-backdrop-filter` 都还在产物里。
+- `bench/scale.ts`：五档容器宽度全合格，`@property --u` 与 `-webkit-backdrop-filter` 都还在产物里。（该台已于里程碑 6 删除）
 - `bench/perf.ts`：通过，重采样倍数 6.6× / 7.2× / 5.5×、相位最多组合 4.37× 起，与基线一致。
 - `bench/run.ts`（单素材）：可逆 PNG 相关 1.000 / LSD 0.3、JPEG 相位可靠 0.63、缩放档 degraded，
   与基线逐项一致。
@@ -89,7 +89,7 @@
    **抓法**：`bench/offline.ts` 29 项不合格。现在注入的是**双引号字符串字面量**：
    JSON 的转义是 JS 字符串转义的子集，直接可用，也不必理会压缩器原来用的是哪种引号
    （实测 oxc 会把 `"__SHELL__"` 改写成 `` `__SHELL__` ``，按某一种引号去匹配会漏）。
-3. **门禁绑死了产物布局**。`bench/scale.ts` 用 `new Bun.Glob("*.css")` 数 CSS 产物，
+3. **门禁绑死了产物布局**。`bench/scale.ts`（已于里程碑 6 删除）用 `new Bun.Glob("*.css")` 数 CSS 产物，
    Vite 把 CSS 放进 `assets/` 之后它报「一个都没有」，看着像产物坏了，其实是断言写死了扁平布局。
    改成 `**/*.css`：契约是「整个 dist 只有一份 CSS」，产物放在哪一层不是。
 
@@ -350,8 +350,9 @@ while (iters > 1 && unit * (K + 1) * iters > budget) iters--;
 
 ### 三条契约，各有门禁
 
-1. **播放与「存音频」走 `synthesise(spec)`**，不是编码前的原声 —— 既有契约，`bench/smoke.ts`
-   截 `copyToChannel` 守它。搬进 Worker 后返回值是转移过来的 buffer，这条仍然成立。
+1. **播放与「存音频」走 `synthesise(spec)`**，不是编码前的原声 —— 既有契约。搬进 Worker 后
+   返回值是转移过来的 buffer，这条仍然成立。**但守它的界面冒烟台在紧接其后的 bench 删减里
+   被移除了**（见里程碑 6），从此只剩人工核对。
 2. **参数一变必须作废在飞的活**。取消是**消息式**的：主线程换代次（`generation()`）时
    `scope.cancel()`，Worker 那边每 12 ms 让出一次事件循环，正好来得及读到。取消只作废
    同一个 `scope` 的活 —— 质检与工作台各拿一个，不会互相掐。
@@ -405,4 +406,27 @@ while (iters > 1 && unit * (K + 1) * iters > budget) iters--;
 这条留作下一个里程碑：要么按素材原生速率建解码上下文，要么让 WASM 解码器进 Worker
 （主线程彻底归零）。两条都得配等价消融 —— 「更快」本身不是换的理由。
 
+## 里程碑 6：bench 大幅删减
 
+评测台的价值在**守契约**，不在数量。这一轮按「这条断言抓的是契约还是当时的界面形态」重估了一遍：
+
+| 删掉 | 行数 | 为什么 |
+| --- | --- | --- |
+| `bench/scale.ts` | 270 | 尺度门禁。断言绑死在字号等比、五种控件同高、参数列宽这些**当时的布局形态**上，每改一次布局都要跟着改。 |
+| `bench/smoke.ts` | 232 | 界面行为门禁。同上，选择器与交互路径一改就红，红的原因却常常不是缺陷。 |
+| `bench/ml/train.py` + 权重 | 160 | 相位修正网络的训练脚本。ML 那条线已经以**负结果**结案（`docs/algorithms.md`），训练对转储的口子（`DATA=`）留着够用。 |
+| `bench/bundle-4330.js` | 12640 | `run.ts` 重打的产物，被 `.gitignore` 挡着（没进仓库），但一直躺在工作区里且已过期。 |
+
+留下的四个各有明确的契约：`cdp.ts` 会话壳（共用）、`quality.ts` 算法消融（不进浏览器）、
+`run.ts` 端到端、`offline.ts` PWA、`perf.ts` 性能。手写代码 2800 → 1990 行。
+
+**删减的代价要写清楚，不然就是拿掉门禁还装作没事**：
+
+- 「播放走 `synthesise(spec)` 而不是原声」与「`@property --u` 注册后令牌才锚在容器上」这两条
+  都是**静默失效**型 —— 漏了不会报错，只会在用户那里表现成「参数改了没反应」「卡片内尺寸错位」。
+  原先各有一条自动门禁，现在只在 `AGENTS.md` 里留了人工核对步骤，并且**明确标注「这条没有自动门禁」**。
+- 门禁删掉不等于证据删掉：`docs/` 里那些实测数字与消融结论不受影响，被删的断言本身也还在 git 历史里
+  （`git show 871ccf3:bench/smoke.ts`）。
+
+删完之后，全部门禁复跑一遍确认没被删坏：`bun test` 158 通过、`tsc --noEmit` 干净、
+`bun run quality` 不变、`bun bench/offline.ts` 全绿、`bun run perf` 通过。

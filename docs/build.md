@@ -19,7 +19,7 @@
 
 样式就是 CSS，按职责分层放在 `src/styles/`，由 `index.css` 一个 `@import` 入口按序串起来，
 `src/frontend.tsx` 是唯一导入点。Bun 会把整条 `@import` 链内联进同一个 css chunk，
-所以 `dist/` 里始终**只有一个** css 产物（`bench/scale.ts` 断言这一点）。dev 与生产走同一条链，
+所以 `dist/` 里始终**只有一个** css 产物。dev 与生产走同一条链，
 Bun 在 dev 下自动注入，不需要另配插件或路由。
 
 | 文件 | 职责 |
@@ -36,7 +36,7 @@ Bun 在 dev 下自动注入，不需要另配插件或路由。
 五种控件各自只调 `padding-inline`，新增控件并入这一组，不得自带高度或字号。
 
 需要手写 `-webkit-` 前缀的地方（`backdrop-filter`）就手写：Bun 的 CSS 压缩器不会替你补，
-漏掉它只会在 Safari 上静默失效，而本机 Chromium 评测台看不见。`bench/scale.ts` 有一条产物断言盯着它。
+漏掉它只会在 Safari 上静默失效，而本机 Chromium 评测台看不见 —— 改这里之后要人工 `grep` 一遍产物 css。
 
 ## 尺度系统：`.app` 容器 + `.shell` 令牌根 + `@property` 冻结
 

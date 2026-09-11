@@ -11,8 +11,8 @@ bun start                # 静态服务构建产物 dist/，本地验 PWA 与离
 bun test                 # 全量测试（bun:test，勿用 jest/vitest）
 bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
+bun run quality          # 算法消融：15 用例 × 6 指标，改数值层前后逐项比
 bun bench/run.ts         # 浏览器端到端评测（CASES='[...]' FILES='voice/greeting.mp3' 可选过滤）
-bun bench/scale.ts       # 尺度门禁：字号随容器等比、五种控件同高、令牌锚在当前容器上
 bun bench/offline.ts     # PWA 门禁：manifest 可装、iOS 头标签齐备、应用壳逐项入缓存、断网可用；只加载一次页面，另验 SPA 回落不投毒、新版 SW 停在 waiting（先 build:web）
 bun run perf             # 性能体检：重采样相位表倍数 + 相位数最多组合「不得慢于逐样点」的门禁 + 页面主线程长任务
 ```
@@ -27,13 +27,13 @@ src/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset
 src/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 src/ui/      组件与 hooks，只是结构与行为；样式一律在 src/styles/ 里，组件上只有语义类名
 src/sw.ts    Service Worker（应用壳预缓存 + 运行期缓存）；manifest 与 icons 同样立在 src/ 根
-bench/       无头 Chromium + CDP 驱动真实页面的评测台（cdp.ts 会话壳，run.ts 端到端，scale.ts 守尺度，offline.ts 守 PWA，perf.ts 看性能，smoke.ts 守界面行为）
+bench/       评测台（cdp.ts 会话壳；quality.ts 是纯数值消融，不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）
 ```
 
 数据流：`pcm → encode() → Spectrum{levels, phaseCos/Sin, Meta} → PNG/容器 → 读图 → Spectrum → synthesise() → pcm`。`Meta` 是唯一权威参数（sr/win/hop/frames/bins/samples/bits/ref/exact），随 tEXt、文件名、条码票根三路冗余传递。
 
-**播放与「存音频」走的是 `synthesise(spec)` 的结果，不是编码前的原声。** 位深 / 窗长这类参数只改图，放原声等于让它们静默失效（2bit 与 8bit 听起来会一模一样）；这份还原结果按需算、随参数作废（`useStudio` 的 `listen`），时间轴长度一律取自 `meta.samples / meta.sr`，与是否已还原无关。界面上的「听到什么」只有 `synthesise` 这一条路 —— `bench/smoke.ts` 截 2bit/8bit 两次播出的 PCM 来守它。
+**播放与「存音频」走的是 `synthesise(spec)` 的结果，不是编码前的原声。** 位深 / 窗长这类参数只改图，放原声等于让它们静默失效（2bit 与 8bit 听起来会一模一样）；这份还原结果按需算、随参数作废（`useStudio` 的 `listen`），时间轴长度一律取自 `meta.samples / meta.sr`，与是否已还原无关。界面上的「听到什么」只有 `synthesise` 这一条路。**这条没有自动门禁**（原先守它的界面冒烟台已删）：动播放链要人工核对 2bit 与 8bit 两次播出的 PCM 必须不同。
 
 关键模块职责：
 - `spectrum.ts` STFT 编解码与重建调度（fast/fine 两档）
@@ -52,7 +52,7 @@ docs/        format-spec.md（图片格式契约）· algorithms.md（算法原�
 
 ## 尺度系统
 
-`.app` 是 `container-type: size` 的容器，`.shell` 是它上面的令牌根 —— 容器查询单位只认**祖先**容器，令牌根必须在容器下一层。`--u` 由 `cqi/cqb` 折线算出，并以 `@property --u { syntax: "<length>" }` 注册：注册后它才在 `.shell` 上解析成绝对 px 再随继承下发；不注册则 `cqi` 留在令牌里、到使用点才解析，会被使用点最近的 `container-type` 容器抢走，卡片内所有尺寸静默错位。`bun bench/scale.ts` 守这条链。仓库里没有容器查询，`.app` 是唯一的查询容器。
+`.app` 是 `container-type: size` 的容器，`.shell` 是它上面的令牌根 —— 容器查询单位只认**祖先**容器，令牌根必须在容器下一层。`--u` 由 `cqi/cqb` 折线算出，并以 `@property --u { syntax: "<length>" }` 注册：注册后它才在 `.shell` 上解析成绝对 px 再随继承下发；不注册则 `cqi` 留在令牌里、到使用点才解析，会被使用点最近的 `container-type` 容器抢走，卡片内所有尺寸静默错位。**这条没有自动门禁**（原先守它的尺度台已删）：改 `tokens.css` 后要人工把 `.app` 缩到窄容器看一眼。仓库里没有容器查询，`.app` 是唯一的查询容器。
 
 ## Rules
 
