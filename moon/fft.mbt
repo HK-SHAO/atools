@@ -1,5 +1,10 @@
 // 原地 radix-2 FFT。与 TS 参照实现（`app/lib/fft.ts` 的 `FFT.transform`）逐位等价，
 // 由 `app/lib/fft.test.ts` 的逐位门禁守住 —— 顺序、除法、符号都不能动。
+//
+// **热循环里一律用 `unsafe_get` / `unsafe_set`，不写 `arr[i]`。** 后者编译出来的是一次
+// `moonbit.check_range` + 一次 `moonbit.array_length` 调用，两个都不内联：同一个 512 点变换
+// 因此从「比 V8 的 TS 慢 7 倍」变成「快 1.5 倍」（实测见 docs/algorithms.md 的微基准表）。
+// 数组一律按 `max_win` 静态定型、下标恒 < `plan_win`，越界不可能发生，省掉的是纯开销。
 
 ///|
 /// FFT 工作区。长度上限同 `max_win`；输入输出同址，宿主经 `dsp_re_ptr` / `dsp_im_ptr` 读写。
@@ -37,15 +42,20 @@ fn transform(inverse : Bool) -> Unit {
   if n == 0 {
     return
   }
+  let fr = re
+  let fi = im
+  let ix = rev
+  let tc = tw_cos
+  let ts = tw_sin
   for i = 0; i < n; i = i + 1 {
-    let j = rev[i]
+    let j = ix.unsafe_get(i)
     if j > i {
-      let a = re[i]
-      re[i] = re[j]
-      re[j] = a
-      let b = im[i]
-      im[i] = im[j]
-      im[j] = b
+      let a = fr.unsafe_get(i)
+      fr.unsafe_set(i, fr.unsafe_get(j))
+      fr.unsafe_set(j, a)
+      let b = fi.unsafe_get(i)
+      fi.unsafe_set(i, fi.unsafe_get(j))
+      fi.unsafe_set(j, b)
     }
   }
   let mut width = 2
@@ -58,18 +68,18 @@ fn transform(inverse : Bool) -> Unit {
       let mut k = 0
       while j < base + half {
         let p = j + half
-        let c = tw_cos[k]
-        let s = if inverse { -tw_sin[k] } else { tw_sin[k] }
-        let rp = re[p]
-        let ip = im[p]
+        let c = tc.unsafe_get(k)
+        let s = if inverse { -ts.unsafe_get(k) } else { ts.unsafe_get(k) }
+        let rp = fr.unsafe_get(p)
+        let ip = fi.unsafe_get(p)
         let tre = rp * c + ip * s
         let tim = -rp * s + ip * c
-        let rj = re[j]
-        let ij = im[j]
-        re[p] = rj - tre
-        im[p] = ij - tim
-        re[j] = rj + tre
-        im[j] = ij + tim
+        let rj = fr.unsafe_get(j)
+        let ij = fi.unsafe_get(j)
+        fr.unsafe_set(p, rj - tre)
+        fi.unsafe_set(p, ij - tim)
+        fr.unsafe_set(j, rj + tre)
+        fi.unsafe_set(j, ij + tim)
         j = j + 1
         k = k + step
       }
@@ -84,8 +94,8 @@ fn transform(inverse : Bool) -> Unit {
     // 除以 n，不是乘 1/n：TS 参照实现写的是 `re[i] / n`，两者在浮点上不等价（1/n 不精确）
     let nf = n.to_double()
     for i = 0; i < n; i = i + 1 {
-      re[i] = re[i] / nf
-      im[i] = im[i] / nf
+      fr.unsafe_set(i, fr.unsafe_get(i) / nf)
+      fi.unsafe_set(i, fi.unsafe_get(i) / nf)
     }
   }
 }

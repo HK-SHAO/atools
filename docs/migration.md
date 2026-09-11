@@ -606,3 +606,26 @@ bun test 164 通过、tsc 干净、产物与应用壳 10 项不变。
 消融：同一批素材、同样两个用例，只换打包器，两次的 SNR / 相关 / 收敛 / LSD / 幅度 / 层级偏差 / 认图 /
 相位可靠**逐项相同**，PNG 体检的五个字节数也一字不差（仅耗时读数有别，那是机器噪声）。
 `errs: (none)`。
+
+## 里程碑 11：内核热循环改用 `unsafe_*`，内核自己有了 test 与 bench（2026-09-11）
+
+`moon test --target wasm` 与 `moon bench --target wasm` 立起来了（`bun run test:kernel` /
+`bun run bench:kernel`，moon 的定位与错误文案复用 `scripts/moon.ts`，不在 package.json 里再写一遍裸 `moon`）。
+白盒门禁落在 `moon/fft_wbtest.mbt`：往返一致、直流能量落第 0 根、Parseval 三条不变量 ——
+它们**不需要 TS 参照实现**就能判「算法写错了」。可证伪性当场验过：把 `rj - tre` 改成 `rj + tre`，三条全红。
+
+真正的收获是把内核从「比 TS 慢」翻成「比 TS 快」。里程碑 3 量到裸 FFT 的内核版**慢 2%~5%**，
+当时归因于「只搬能吃到 SIMD 的密集内核」。这次把 WAT 翻出来看，原因完全是另一回事：
+
+```wat
+(call $moonbit.check_range (idx) (i32.const 0) (i32.sub (call $moonbit.array_length arr) (i32.const 1)))
+```
+
+`arr[i]` 编译成**两次不内联的调用**。一次蝶形 8 处读写 = 16 次调用，于是同一份算法慢 7 倍。
+`arr.unsafe_get(i)` / `arr.unsafe_set(i, v)` 之后反超 1.5 倍（表见 `docs/algorithms.md`）。
+
+这条与 SIMD 无关，也不是「换语言就更快」的反面 —— 它说明**换语言之后还得看这个后端把下标编成了什么**。
+上一次消融得出「只搬密集内核」，这一次得出「搬过去之后热循环不许写下标」，两条都是可证的，不冲突。
+
+副产物：`moon bench` 的数字（512 点 5.69 µs / 4096 点 56.70 µs）与 V8 里独立量的 wasm 数字
+（5.85 / 56.84）吻合，所以工具链那条链上的时间读数是可信的，之后可以直接拿它当回归锚点。

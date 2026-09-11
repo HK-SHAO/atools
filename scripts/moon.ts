@@ -124,6 +124,19 @@ export function moonKernel(): Plugin {
 // 用 import.meta.main 而不是比 argv：本模块同时被 vite.config.ts 与测试导入，
 // 只有直接跑它才该编译。
 if (import.meta.main) {
-  const bytes = ensureWasm({ force: process.argv.includes("--force") });
+  const flags = process.argv.slice(2);
+  // 白盒门禁与内核基准也走这里：moon 的定位（`MOON` 环境变量、错误文案）只有这一处，
+  // 与编译共用，免得在 package.json 里再写一遍裸 `moon`。
+  const task = flags.includes("--bench") ? "bench" : flags.includes("--test") ? "test" : null;
+  if (task) {
+    const done = spawnSync(process.env.MOON ?? "moon", [task, "--release", "--target", "wasm"], {
+      cwd: moonDir,
+      stdio: "inherit",
+    });
+    if (done.error)
+      throw new Error(`找不到 moon 工具链：装好 MoonBit 并把 moon 放进 PATH（本机在 ~/.moon/bin）。`);
+    process.exit(done.status ?? 1);
+  }
+  const bytes = ensureWasm({ force: flags.includes("--force") });
   console.log(`[moon] ${WASM_FILE} ${(bytes.length / 1024).toFixed(1)} KB`);
 }

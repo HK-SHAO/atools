@@ -9,6 +9,8 @@ bun install
 bun dev                  # 开发服务器 http://localhost:3000（源码直出 + HMR）
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
 bun run test             # 全量单元测试（vitest，Node 上跑；`npx vitest` 可进监听模式）
+bun run test:kernel      # 内核白盒门禁：`moon test --release --target wasm`
+bun run bench:kernel     # 内核自带基准：`moon bench --release --target wasm`
 bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
 bun run build:wasm       # 单独重编 MoonBit 数值内核（--force 全量重编，否则按 mtime 判 stale）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）

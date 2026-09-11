@@ -17,6 +17,8 @@
     "deploy": "vite build && bunx wrangler deploy --config cloudflare/wrangler.jsonc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:kernel": "bun scripts/moon.ts --test",
+    "bench:kernel": "bun scripts/moon.ts --bench",
     "quality": "bun bench/quality.ts",
     "offline": "bun bench/offline.ts",
     "perf": "bun bench/perf.ts",
