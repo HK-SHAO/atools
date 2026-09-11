@@ -201,7 +201,7 @@ try {
             `  ${String(Math.round(row.bytes / 1024)).padStart(4)}KB` +
             `  SNR ${String(m.snr).padStart(6)}  相关 ${m.corr.toFixed(3)}` +
             `  收敛 ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
-            `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelErr).padStart(3)}` +
+            `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelGap).padStart(3)}` +
             `  认图 ${row.readMode || "-"}` +
             `  相位可靠 ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
             `  ${row.ms}ms`,

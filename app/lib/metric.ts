@@ -1,5 +1,5 @@
 import type { Samples } from "./arrays";
-import { Frames } from "./stft";
+import { Frames, padOf } from "./stft";
 
 export function align(a: Samples, b: Samples, span: number): { corr: number; snr: number } {
   const n = Math.min(a.length, b.length);
@@ -41,8 +41,7 @@ export function magnitudes(x: Samples, win: number, hop: number): Float64Array {
   try {
     const bins = core.bins;
     const frames = Math.floor(x.length / hop) + 1;
-    const pad = new Float64Array(x.length + win);
-    for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
+    const pad = padOf(x, win);
     const out = new Float64Array(frames * bins);
     const { re, im } = core.data();
     for (let f = 0; f < frames; f++) {
@@ -86,6 +85,31 @@ export function spectral(
     acc += d * d;
   }
   return { conv, lsd: 8.686 * Math.sqrt(acc / Math.max(n, 1)) };
+}
+
+/** 参与层级比较的那部分谱（`Spectrum` 与它的任何子集都满足）。 */
+interface Levelled {
+  meta: { bins: number; frames: number };
+  levels: ArrayLike<number>;
+}
+
+/**
+ * 两张谱的**层级最大偏差**：逐格 `|a − b|` 取最大值，只比共有的那段长度。
+ *
+ * 形状（`bins` / `frames`）对不上就是不可比，返回 `-1` —— 它必须与「逐格相同」的 `0`
+ * 是两个不同的读数（`Workbench` 的「自检：存出再读回，完全一致」判的就是 `0`）。
+ * 质检面板（`audit.ts`）与评测台（`bench/entry.ts`）共用这一条，免得两处口径各说各话。
+ */
+export function levelGap(a: Levelled, b: Levelled): number {
+  if (a.meta.bins !== b.meta.bins || a.meta.frames !== b.meta.frames) return -1;
+  const n = Math.min(a.levels.length, b.levels.length);
+  if (n === 0) return -1;
+  let worst = 0;
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(a.levels[i]! - b.levels[i]!);
+    if (d > worst) worst = d;
+  }
+  return worst;
 }
 
 /**

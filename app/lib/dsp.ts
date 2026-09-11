@@ -47,7 +47,6 @@ interface Kernel {
   dsp_slot_mem(slot: number): number;
   dsp_slot_words(slot: number): number;
   dsp_fft(slot: number): void;
-  dsp_ifft(slot: number): void;
   /** 实序列反变换：内核先按 `bins` 把单边谱翻成共轭对称整谱，再复反变换。1 = 做了。 */
   dsp_real_ifft(slot: number, bins: number): number;
 
@@ -55,8 +54,6 @@ interface Kernel {
   dsp_pair_off(slot: number, which: number): number;
   dsp_pair_half(slot: number): number;
   dsp_pair_size(slot: number): number;
-  dsp_pair_forward(slot: number): void;
-  dsp_pair_inverse(slot: number): void;
 
   // 作业区：**一作业一段自己的数组**（主缓冲 Double + 字节段 Byte）。
   dsp_job_open(words: number, bytes: number): number;
@@ -87,6 +84,22 @@ interface Kernel {
   dsp_rtisi_finish(handle: number): void;
   dsp_rtisi_close(handle: number): void;
 
+  // PGHI：幅度是宿主的输入、相位是宿主的输出，一段作业区里前后两个区，不占字节段。
+  dsp_pghi_open(
+    frames: number,
+    bins: number,
+    win: number,
+    hop: number,
+    gamma: number,
+    tolHi: number,
+    tolLo: number,
+  ): number;
+  /** 0 = 幅度输入（`frames × bins`），1 = 相位输出（同尺寸）。 */
+  dsp_pghi_off(handle: number, which: number): number;
+  dsp_pghi_close(handle: number): void;
+  /** 1 = 跑了；0 = 句柄无效。 */
+  dsp_pghi_run(handle: number): number;
+
   // 票根：纯整数逻辑，整段在内核里。`*_bytes` / `*_words` 是尺寸表的一部分，
   // 三张梯子（行数、采样率、窗长）也是 —— 存两份就等着漂移。
   dsp_stub_rows(): number;
@@ -102,7 +115,7 @@ interface Kernel {
 }
 
 /** 加载器与内核约定的 ABI 版本。错配时症状是「算出来的数不对」，所以这里直接拒绝。 */
-export const ABI = 6;
+export const ABI = 7;
 
 /** 内核在产物里的落点。与 `scripts/moon.ts` 的 `WASM_FILE` 同名，由 `dsp.test.ts` 盯住。 */
 const FILE = "wasm/dsp.wasm";
@@ -155,7 +168,7 @@ let started: Promise<Dsp> | null = null;
 
 /**
  * 这一线程的内核，**入口在启动时调一次**。同一线程上重复调用共享同一次加载 ——
- * 一次实例化要一份私有内存（实测 1.25 MB）与一次编译（39 KB 的模块，0.8 ms），
+ * 一次实例化要一份私有内存（实测 1.25 MB）与一次编译（44 KB 的模块，0.8 ms），
  * 没有理由付两遍。
  *
  * `use.fft` 是「这一侧会不会跑 FFT」，也就是**要不要在启动时把三档窗长的表组建好**

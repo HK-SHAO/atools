@@ -2,19 +2,15 @@ import type { Samples } from "./arrays";
 import { fftBuffers, mustKernel, openSlot, planOf, realIfft, type Dsp, type Plan, type Slot } from "./dsp";
 
 /**
- * 短时变换的宿主侧骨架。
- *
- * 这里**没有一条数值式子**：变换、反变换、单边谱翻转都在内核里（`moon/fft.mbt`），
- * 窗函数直接取内核表组里的那一张（`planOf(dsp, win).hann()`）。宿主原先自己建了汉宁窗表
- * 与一张旋转因子表（`app/lib/fft.ts` 的 `FFT` 类），那两份与内核里的是同一条式子 ——
- * 于是「内核做变换时用的窗」与「宿主加权时用的窗」有一天会悄悄分家，症状是数值对不上
- * 却谁都没改过错。现在它们物理上是同一张表。
+ * 短时变换的宿主侧骨架。**这里没有一条数值式子**：变换、反变换、单边谱翻转都在内核里，
+ * 窗函数也直接取内核表组里的那一张（`planOf(dsp, win).hann()`）—— 于是「内核做变换用的窗」
+ * 与「宿主加权用的窗」物理上是同一张，不会再悄悄分家。
  *
  * **一个 `Frames` 占内核的一个会话槽，用完必须 `close()`**（`moon/session.mbt` 里只有 6 个
- * 槽，忘了还会在别处开槽时当场抛 —— 这是好事，漏还不会变成「越跑越慢」）。
+ * 槽，忘了会在别处开槽时当场抛 —— 这是好事，漏还不会变成「越跑越慢」）。
  * `data()` / `window()` 每次**现切视图**，所以 **`await` 之后必须重新取一次**：等待期间
- * 另一个作业可能 `memory.grow`，把先前切出的视图整片 detach 掉（数据没搬家、地址还在，
- * 但旧视图的 `byteLength` 变成 0）。往 detach 掉的视图里写是**静默丢弃**，不会报错。
+ * 另一个作业可能 `memory.grow`，把先前切出的视图整片 detach（数据没搬家、地址还在，但旧视图
+ * 的 `byteLength` 变成 0），往 detach 掉的视图里写是**静默丢弃**。
  */
 export class Frames {
   /** 单边谱行数（含 DC 与奈奎斯特）。 */
@@ -74,7 +70,18 @@ export class Frames {
 /** 某个窗长的汉宁窗，取内核表组里的那一张（只读，别改）。 */
 export const hannOf = (dsp: Dsp, win: number): Float64Array => planOf(dsp, win).hann();
 
-/** 一次 STFT 的幅度与相位。补零约定与 `encode` 同一条（前面垫 `win/2`）。 */
+/**
+ * 零填充缓冲：前后各垫 `win/2`。编码、反变换、指标三条链共用它，「帧 0 从哪一格起算」
+ * 于是只有这一处 —— 抄错一处就是整条输出平移半窗，而波形相关对它几乎不敏感。
+ */
+export function padOf(x: ArrayLike<number>, win: number): Float64Array {
+  const half = win / 2;
+  const out = new Float64Array(x.length + win);
+  for (let i = 0; i < x.length; i++) out[half + i] = x[i]!;
+  return out;
+}
+
+/** 一次 STFT 的幅度与相位。补零约定与 `encode` 同一条（见 `padOf`）。 */
 export function stftOf(
   x: Samples,
   win: number,
@@ -84,9 +91,7 @@ export function stftOf(
   const core = new Frames(win);
   try {
     const bins = core.bins;
-    const padded = x.length + win;
-    const pad = new Float64Array(padded);
-    for (let i = 0; i < x.length; i++) pad[win / 2 + i] = x[i]!;
+    const pad = padOf(x, win);
     const mag = new Float64Array(frames * bins);
     const ph = new Float64Array(frames * bins);
     const { re, im } = core.data();
@@ -98,7 +103,7 @@ export function stftOf(
         ph[base + b] = Math.atan2(im[b]!, re[b]!);
       }
     }
-    return { mag, ph, bins, padded };
+    return { mag, ph, bins, padded: pad.length };
   } finally {
     core.close();
   }
@@ -140,31 +145,20 @@ export function olaFromPhase(
       core.add(acc, f * hop);
     }
 
-    const cover = coverage(win, hop, frames, padded);
-    let top = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-    const floor = top * 0.05;
-    const y = new Float32Array(samples);
-    for (let i = 0; i < samples; i++) {
-      const c = cover[win / 2 + i]!;
-      y[i] = c > floor ? acc[win / 2 + i]! / c : 0;
-    }
-    return y;
+    return uncovered(acc, coverage(win, hop, frames, padded), win / 2, samples);
   } finally {
     core.close();
   }
 }
 
 /**
- * 叠接（WOLA）归一化用的覆盖包络：`cover[i] = Σ_f win[i-f·hop]²`。
+ * 叠接（WOLA）归一化用的覆盖包络：`cover[i] = Σ_f win[i-f·hop]²`，形状与内核那套一致
+ * （同一张汉宁表、`hop` 步进），所以两边的归一化是同一件事。
  *
- * **它为什么还住在宿主**：`Σ` 的结果是一段 `padded`（= 样点数 + 窗长）长的数组，要交给
- * 宿主当普通数组用。内核要把它交出来只能新分配一段 `FixedArray` 再返回首址，而那段数组
- * **没有任何内核侧的引用**：下一次内核分配就可能把它回收掉，宿主手里的视图随即指向别处。
- * 作业区没有这个问题（段被 `job_mem` 拿着，见 arena.mbt），所以真要把它搬进内核，
- * 得走作业区那一套。目前它只在 `synthesise` 的一支里各算一次，收益不值这个界面。
- *
- * 形状与内核那套一致（同一张汉宁表、`hop` 步进），所以两边的归一化是同一件事。
+ * **它为什么还住在宿主**：它是一段 `padded` 长的数组，要交给宿主当普通数组用；内核交出来
+ * 只能新分配一段 `FixedArray` 并返回首址，而那段数组**没有任何内核侧的引用**，下一次内核
+ * 分配就可能把它回收掉，宿主手里的视图随即指向别处。作业区没有这个问题（段被 `job_mem`
+ * 拿着），它目前只在 `synthesise` 的两支里各算一次，不值这个界面。
  */
 export const coverage = (win: number, hop: number, frames: number, padded: number): Float64Array => {
   const w = hannOf(mustKernel(), win);
@@ -180,3 +174,32 @@ export const coverage = (win: number, hop: number, frames: number, padded: numbe
   }
   return cover;
 };
+
+/**
+ * 覆盖包络定出的归一化下限：峰值的 5%。更低处是补零段，包络接近零，除以它会把数值噪声
+ * 放大成爆音。
+ */
+export function coverFloor(cover: Float64Array): number {
+  let top = 0;
+  for (let i = 0; i < cover.length; i++) if (cover[i]! > top) top = cover[i]!;
+  return top * 0.05;
+}
+
+/**
+ * 按覆盖包络归一化：`out[i] = acc[off+i] / cover[off+i]`，覆盖低于下限的格给 0。GL 精修
+ * 在 `x` 上原地做同一件事（它逐轮迭代，不打算每轮再分配一段）。
+ */
+export function uncovered(
+  acc: Float64Array,
+  cover: Float64Array,
+  off: number,
+  len: number,
+): Samples {
+  const floor = coverFloor(cover);
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const c = cover[off + i]!;
+    out[i] = c > floor ? acc[off + i]! / c : 0;
+  }
+  return out;
+}

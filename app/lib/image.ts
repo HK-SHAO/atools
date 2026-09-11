@@ -27,10 +27,9 @@ export function metaToText(meta: Meta): string {
 const LEVEL_BITS = [0, 2, 4, 8] as const;
 
 /**
- * tEXt 与文件名是同一份 Meta 的两个入口，校验必须共用一处 —— 分开写的下场就是
- * 一边查得严一边漏：文件名那条曾经不查 sr>0（时长变 Infinity）、不查 win 的上下界、
- * 也不查 bits，于是改个名就能把 16 位深喂进来（那时 encode 还有条 Uint16Array 分支，
- * 与 levelToDb 的按字节解释相撞，输出整段 NaN）。
+ * tEXt 与文件名是同一份 `Meta` 的两个入口，校验必须共用一处 —— 分开写的下场就是一边查得严
+ * 一边漏：文件名那条曾经不查 `sr > 0`（时长变 Infinity）、不查 win 的上下界、也不查 `bits`，
+ * 于是改个名就能把 16 位深喂进来，与 `levelToDb` 的按字节解释相撞，输出整段 NaN。
  */
 function sanitize(m: {
   sr: number;
@@ -132,6 +131,15 @@ export function sniff(bytes: Uint8Array): Container {
 const MAX_SOURCE_PIXELS = 24_000_000;
 const FOREIGN_FRAMES = 6000;
 
+/**
+ * 行数 → 窗长：2 的幂、**向下**取整、落在 [256, 4096]。
+ *
+ * **它与 `spectrum.ts` 的 `paramsForImage` 不是同一件事**（那边同一个反推、**向上**取整）。
+ * 票根给出的 `bins = win/2+1` 上两者必然一致（129/257/513/1025/2049 都落在同一档），
+ * 但**截过带的图**（`bins < win/2+1`）会得到不同的窗长：`bins = 200` 在这里是 256、
+ * 只剩 129 行，那边是 512、200 行全留。谁才是本意**未定案** —— 统一它们会改认图分级与
+ * 相位可靠性，得先跑 `bench/run.ts` 的矩阵量，不能顺手改。
+ */
 function winFromBins(bins: number): number {
   const raw = Math.max(2, (bins - 1) * 2);
   let win = 256;
@@ -206,6 +214,17 @@ function surface(width: number, height: number) {
   return { canvas, ctx };
 }
 
+/** 目标格 `i` 覆盖的源起点（含）。至少一格、不越界 —— 源比目标小的图靠这一条兜住。 */
+const cellLo = (i: number, scale: number, n: number): number =>
+  Math.min(n - 1, Math.floor(i * scale));
+
+/** 覆盖终点（不含）。与起点至少差一格，所以源比目标小时是「重复取同一格」而非空区间。 */
+const cellHi = (i: number, scale: number, n: number, lo: number): number =>
+  Math.min(n, Math.max(lo + 1, Math.ceil((i + 1) * scale)));
+
+/** 相位三个通道（cos / sin / 权重）共用的字节：舍入后夹到 [0, 255]。 */
+const channel = (v: number): number => Math.max(0, Math.min(255, Math.round(v)));
+
 export function sampleLevels(
   data: Pixels,
   width: number,
@@ -218,11 +237,11 @@ export function sampleLevels(
   const sx = width / frames;
   const sy = rowCount / bins;
   for (let f = 0; f < frames; f++) {
-    const x0 = Math.min(width - 1, Math.floor(f * sx));
-    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+    const x0 = cellLo(f, sx, width);
+    const x1 = cellHi(f, sx, width, x0);
     for (let b = 0; b < bins; b++) {
-      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
-      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      const y0 = cellLo(b, sy, rowCount);
+      const y1 = cellHi(b, sy, rowCount, y0);
       let sum = 0;
       let n = 0;
       for (let y = y0; y < y1; y++) {
@@ -255,11 +274,11 @@ export function samplePhase(
   let sumLen = 0;
   let cells = 0;
   for (let f = 0; f < frames; f++) {
-    const x0 = Math.min(width - 1, Math.floor(f * sx));
-    const x1 = Math.min(width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+    const x0 = cellLo(f, sx, width);
+    const x1 = cellHi(f, sx, width, x0);
     for (let b = 0; b < bins; b++) {
-      const y0 = Math.min(rowCount - 1, Math.floor(b * sy));
-      const y1 = Math.min(rowCount, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+      const y0 = cellLo(b, sy, rowCount);
+      const y1 = cellHi(b, sy, rowCount, y0);
       let sc = 0;
       let ss = 0;
       let n = 0;
@@ -279,8 +298,8 @@ export function samplePhase(
       cells++;
       w[f * bins + b] = Math.min(255, Math.round((h / 127.5) * 255));
       const k = h > 1e-6 ? 127.5 / h : 0;
-      cos[f * bins + b] = Math.max(0, Math.min(255, Math.round(cr * k + 127.5)));
-      sin[f * bins + b] = Math.max(0, Math.min(255, Math.round(cs * k + 127.5)));
+      cos[f * bins + b] = channel(cr * k + 127.5);
+      sin[f * bins + b] = channel(cs * k + 127.5);
     }
   }
   return { cos, sin, w, reliability: cells > 0 ? sumLen / cells / 127.5 : 0 };
@@ -313,23 +332,34 @@ export const READ_TUNE = {
   phaseAnchor: 0.15,
 };
 
-function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
-  // 行数是格式的一部分，问内核要（`moon/stub.mbt` 的 `stub_rows`），不在宿主侧再写一份。
+/**
+ * 扫描图底的票根带：行数从内核报的 `stubRows()` 往下试，试到某一行数解得出票根为止。
+ * `at(x, y)` 给 (列, 行) 的灰度 —— 两条读图路径共用它，区别只在像素从哪来。
+ */
+function stubFromRows(
+  width: number,
+  height: number,
+  at: (x: number, y: number) => number,
+): StubInfo | null {
   for (let rows = stubRows(); rows >= 2; rows--) {
-    if (h <= rows) break;
+    if (height <= rows) break;
     const prof: number[] = [];
-    for (let x = 0; x < w; x++) {
+    for (let x = 0; x < width; x++) {
       let s = 0;
-      for (let y = h - rows; y < h; y++) {
-        const p = (y * w + x) * 4;
-        s += 0.299 * pixels[p]! + 0.587 * pixels[p + 1]! + 0.114 * pixels[p + 2]!;
-      }
+      for (let y = height - rows; y < height; y++) s += at(x, y);
       prof.push(s / rows);
     }
     const info = decodeStub(prof);
     if (info) return info;
   }
   return null;
+}
+
+function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
+  return stubFromRows(w, h, (x, y) => {
+    const p = (y * w + x) * 4;
+    return 0.299 * pixels[p]! + 0.587 * pixels[p + 1]! + 0.114 * pixels[p + 2]!;
+  });
 }
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
@@ -343,18 +373,7 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
   if (meta === null) {
     const idx = await readIndexedRamp(bytes);
     if (idx && idx.width * idx.height <= MAX_SOURCE_PIXELS) {
-      let stub: StubInfo | null = null;
-      for (let rows = stubRows(); rows >= 2 && !stub; rows--) {
-        if (idx.height <= rows) break;
-        const prof: number[] = [];
-        for (let x = 0; x < idx.width; x++) {
-          let s = 0;
-          for (let y = idx.height - rows; y < idx.height; y++)
-            s += idx.levels[y * idx.width + x]!;
-          prof.push(s / rows);
-        }
-        stub = decodeStub(prof);
-      }
+      const stub = stubFromRows(idx.width, idx.height, (x, y) => idx.levels[y * idx.width + x]!);
       if (stub) {
         const hEff = idx.height - stubRows();
         const bins0 = stub.win / 2 + 1;
@@ -373,11 +392,11 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
         const sx = idx.width / gmeta.frames;
         const sy = hEff / gmeta.bins;
         for (let f = 0; f < gmeta.frames; f++) {
-          const x0 = Math.min(idx.width - 1, Math.floor(f * sx));
-          const x1 = Math.min(idx.width, Math.max(x0 + 1, Math.ceil((f + 1) * sx)));
+          const x0 = cellLo(f, sx, idx.width);
+          const x1 = cellHi(f, sx, idx.width, x0);
           for (let b = 0; b < gmeta.bins; b++) {
-            const y0 = Math.min(hEff - 1, Math.floor(b * sy));
-            const y1 = Math.min(hEff, Math.max(y0 + 1, Math.ceil((b + 1) * sy)));
+            const y0 = cellLo(b, sy, hEff);
+            const y1 = cellHi(b, sy, hEff, y0);
             let sum = 0;
             let n = 0;
             for (let x = x0; x < x1; x++)
@@ -408,9 +427,9 @@ export async function imageToSpectrum(file: Blob, fileName: string): Promise<Dec
       const sx = idx.width / gmeta.frames;
       const sy = idx.height / gmeta.bins;
       for (let f = 0; f < gmeta.frames; f++) {
-        const col = Math.min(idx.width - 1, Math.floor((f + 0.5) * sx));
+        const col = cellLo(f + 0.5, sx, idx.width);
         for (let b = 0; b < gmeta.bins; b++) {
-          const row = Math.min(idx.height - 1, Math.floor((b + 0.5) * sy));
+          const row = cellLo(b + 0.5, sy, idx.height);
           levels[f * gmeta.bins + b] = idx.levels[row * idx.width + col]!;
         }
       }

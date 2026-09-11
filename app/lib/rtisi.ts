@@ -2,12 +2,8 @@ import { jobBytes, jobSlice, mustKernel } from "./dsp";
 
 /**
  * 幅度软约束：真值落在 `[lo[lv], hi[lv]]` 里就不动它，出界才夹回来，`lv` 是**那个字节值**。
- *
- * 表是 256 项的、而不是逐元素的 `frames×bins`：
- * 量化档 `q` 只由存下来的字节决定（`q = round(lv·steps/255)`），所以「那两档边界」
- * 最多 256 组，逐元素存是白白多出两张 `frames×bins` 的表（16M 像素的素材就是 128 MB）。
- * 表由 `spectrum.ts` 的 `bandOf` 按参照语义算好、整段写进内核，内核的 `rt_fit` 只做
- * 一次字节读 + 两次表读 —— 于是同一份约束只有一条实现。
+ * 表由 `spectrum.ts` 的 `bandOf` 按参照语义算好、整段写进内核，内核的 `rt_fit` 只做一次
+ * 字节读 + 两次表读 —— 于是同一份约束只有一条实现。
  */
 export interface Band {
   /** 逐元素的量化字节，与 `spectrum.ts` 的 `levels` 是同一份。 */

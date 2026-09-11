@@ -1,10 +1,11 @@
-// 白盒不变量：不需要第二份实现也能判断「算法写错了」的那几条。
-// 曾经有一条「内核 ≡ TS `FFT` 类」的 ulp 门禁对着一份宿主侧实现，那份实现随
-// `app/lib/fft.ts` 一起删了 —— 于是这里要更硬：自洽性（正变换 → 实反变换回到原序列）、
-// 谱的共轭对称性、以及 `bins` 退化时的行为，全部只靠内核自己的两侧互证。
+// White-box invariants: the checks that catch "the algorithm is wrong" without a second
+// implementation. A "kernel ≡ TS `FFT` class" ulp gate once pointed at a host-side implementation
+// that was deleted with `app/lib/fft.ts`; these are therefore stricter — self-consistency (forward
+// → real inverse back to the original), spectral conjugate symmetry, and the degenerate-`bins`
+// behaviour, all cross-checked within the kernel alone.
 
 ///|
-/// 出题用的窗长，内核表组的全部覆盖范围。
+/// Probe window lengths, the full coverage of the kernel's table group.
 let probe_wins : FixedArray[Int] = [256, 512, 1024, 2048, 4096]
 
 ///|
@@ -20,8 +21,14 @@ fn abs_f(x : Double) -> Double {
 }
 
 ///|
-/// 以参照序列的峰值为尺度的最大 ulp 距离。FFT 的后向误差只有相对峰值度量才有意义。
-fn peak_ulps(arena : FixedArray[Double], off : Int, golden : FixedArray[Double], n : Int) -> Double {
+/// Max ulp distance scaled by the reference peak. FFT backward error is only meaningful relative
+/// to the peak.
+fn peak_ulps(
+  arena : FixedArray[Double],
+  off : Int,
+  golden : FixedArray[Double],
+  n : Int,
+) -> Double {
   let mut peak = 0.0
   for i = 0; i < n; i = i + 1 {
     let a = abs_f(golden.unsafe_get(i))
@@ -34,7 +41,9 @@ fn peak_ulps(arena : FixedArray[Double], off : Int, golden : FixedArray[Double],
   }
   let mut worst = 0.0
   for i = 0; i < n; i = i + 1 {
-    let u = abs_f(arena.unsafe_get(off + i) - golden.unsafe_get(i)) / peak / ulp_epsilon
+    let u = abs_f(arena.unsafe_get(off + i) - golden.unsafe_get(i)) /
+      peak /
+      ulp_epsilon
     if u > worst {
       worst = u
     }
@@ -43,7 +52,7 @@ fn peak_ulps(arena : FixedArray[Double], off : Int, golden : FixedArray[Double],
 }
 
 ///|
-/// 确定性伪随机序列。
+/// Deterministic pseudo-random sequence.
 fn noise_array(n : Int, start : Int) -> FixedArray[Double] {
   let out = FixedArray::make(n, 0.0)
   let mut v = start
@@ -55,7 +64,8 @@ fn noise_array(n : Int, start : Int) -> FixedArray[Double] {
 }
 
 ///|
-/// 把 `src` 灌进槽的实部、虚部清零（单条复变换布局）。
+/// Load `src` into the slot's real part with the imaginary part zeroed (single complex transform
+/// layout).
 fn fill_fft(s : Int, win : Int, src : FixedArray[Double]) -> Unit {
   let arena = slot_mem.unsafe_get(s)
   for i = 0; i < win; i = i + 1 {
@@ -65,7 +75,7 @@ fn fill_fft(s : Int, win : Int, src : FixedArray[Double]) -> Unit {
 }
 
 ///|
-/// 开一个槽并灌好输入。调用方负责 `slot_close`。
+/// Open a slot and load the input. Caller is responsible for `slot_close`.
 fn open_fft(win : Int, src : FixedArray[Double]) -> Int {
   let s = slot_open(win)
   fill_fft(s, win, src)
@@ -73,12 +83,13 @@ fn open_fft(win : Int, src : FixedArray[Double]) -> Int {
 }
 
 ///|
-/// 把池子里所有槽都还回去（`slot_close` 幂等）。
+/// Return every slot in the pool (`slot_close` is idempotent).
 ///
-/// **这是为了让每条用例互不牵连**：白盒用例里断言一旦挂掉，后面那句 `slot_close` 就跑不到，
-/// 漏出来的槽会把之后所有开槽的用例一起带红 —— 曾经一次改动报了五条红，其中四条是这么来的，
-/// 真正的根因只有一条，却要顺着四条假线索去查。所以每条用例开头先复位，
-/// 「借还配平」这条不变量另有专门的用例去钉（槽池那一节）。
+/// **To keep cases independent**: if an assertion in a white-box case fails, the following
+/// `slot_close` never runs and the leaked slot reddens every later case that opens one — one
+/// change once reported five failures, four of them from this, forcing a hunt down four false
+/// leads for a single root cause. Hence the reset at the top of each case; borrow/return balance
+/// has its own dedicated case (the slot-pool section).
 fn release_all_slots() -> Unit {
   for i = 0; i < max_slots; i = i + 1 {
     slot_close(i)
@@ -86,9 +97,9 @@ fn release_all_slots() -> Unit {
 }
 
 ///|
-test "白盒：正变换后反变换回到原序列，虚部归零（≤ 8 ulp）" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+test "white box: forward then inverse returns the original, imaginary part zero (≤ 8 ulp)" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   for win in probe_wins {
     let src = noise_array(win, 0x9e3779b9 + win)
@@ -103,11 +114,12 @@ test "白盒：正变换后反变换回到原序列，虚部归零（≤ 8 ulp�
 }
 
 ///|
-/// 表组必须覆盖 `min_win … max_win` 这一段**全部**的 2 的幂 —— 不是当时那几档的清单。
-/// 独立写出来的门槛：少一档，某个合法窗长就会读到表组外面去。
-test "白盒：窗口梯子的每一档都有表组" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+/// The table group must cover **every** power of two in `min_win … max_win`, not the list that
+/// happened to exist at the time. An independently written threshold: miss one step and some
+/// legal window length reads past the table group.
+test "white box: every step of the window ladder has a table group" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   let mut win = 256
   while win <= max_win {
@@ -120,9 +132,9 @@ test "白盒：窗口梯子的每一档都有表组" {
 }
 
 ///|
-test "白盒：直流序列的能量全部落在第 0 根谱线" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+test "white box: all the energy of a DC sequence lands on bin 0" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   let n = 512
   let s = open_fft(n, FixedArray::make(n, 1.5))
@@ -146,9 +158,9 @@ test "白盒：直流序列的能量全部落在第 0 根谱线" {
 }
 
 ///|
-test "白盒：Parseval —— 时域平方和 × n 等于频域模方和" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+test "white box: Parseval — time-domain sum of squares × n equals frequency-domain magnitude sum" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   let n = 1024
   let src = noise_array(n, 0x85ebca6b + n)
@@ -165,14 +177,16 @@ test "白盒：Parseval —— 时域平方和 × n 等于频域模方和" {
     let m = arena.unsafe_get(n + i)
     freq = freq + r * r + m * m
   }
-  assert_true(abs_f(freq - time * n.to_double()) <= 1.0e-9 * time * n.to_double())
+  assert_true(
+    abs_f(freq - time * n.to_double()) <= 1.0e-9 * time * n.to_double(),
+  )
   slot_close(s)
 }
 
 ///|
-test "白盒：槽池占满后拒绝，释放后能再拿到" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+test "white box: a full slot pool refuses, and release makes it available again" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   let slots = FixedArray::make(max_slots, -1)
   for i = 0; i < max_slots; i = i + 1 {
@@ -188,9 +202,9 @@ test "白盒：槽池占满后拒绝，释放后能再拿到" {
 }
 
 ///|
-test "白盒：非法窗长被拒（不是崩溃）" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+test "white box: illegal window lengths are rejected, not crashed on" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   assert_eq(slot_open(100), -1)
   assert_eq(slot_open(8192), -1)
@@ -199,17 +213,21 @@ test "白盒：非法窗长被拒（不是崩溃）" {
 }
 
 ///|
-/// 翻转的**逐项**约定：`X[N-k] = conj(X[k])`，DC 与奈奎斯特点的虚部必须置零。
+/// The **term-by-term** flip convention: `X[N-k] = conj(X[k])`, with DC and Nyquist imaginary
+/// parts forced to zero.
 ///
-/// 判据不能拿「翻转后的中间态」来比 —— `real_ifft` 顺手把反变换也做了，谱已经变成时域。
-/// 于是拿它与「手工翻转 + `inverse`」**逐位**对照：内核那一条链必须与这条手工式子一字不差。
-/// 这条式子错了，整条还原链的输出都是噪声，而往后再也没有第二份实现能把它比出来。
-test "白盒：单边谱翻转与逐项手工式子逐位相同" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+/// The gate cannot compare the post-flip intermediate state — `real_ifft` does the inverse in the
+/// same pass, so the spectrum is already time-domain. Instead compare it **bit for bit** against
+/// "manual flip + `inverse`": the kernel's chain must match this manual formula exactly. If the
+/// formula is wrong the whole reconstruction chain outputs noise, and no second implementation
+/// remains to catch it.
+test "white box: single-sided spectrum flip matches the term-by-term manual formula bit for bit" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
-  // 窗长下限是 256（`plan.mbt` 的 `min_win`），单边谱只填前 3 行 —— 手算的是下标关系，
-  // 与窗长无关：第 `b` 行翻到第 `n-b` 行。
+  // Minimum window is 256 (`min_win` in `plan.mbt`) and only the first 3 rows of the single-sided
+  // spectrum are filled — the manual computation is about index relations, independent of window
+  // length: row `b` flips to row `n-b`.
   let n = 256
   let singles_re : FixedArray[Double] = [2.0, 1.0, 5.0]
   let singles_im : FixedArray[Double] = [7.0, 2.0, -3.0]
@@ -225,8 +243,8 @@ test "白盒：单边谱翻转与逐项手工式子逐位相同" {
     mb.unsafe_set(i, singles_re.unsafe_get(i))
     mb.unsafe_set(n + i, singles_im.unsafe_get(i))
   }
-  // 手工翻转：DC（第 0 行）与奈奎斯特点（第 2 行，即 n/2）是实数谱线，虚部置零；
-  // 第 1 行按共轭对称翻到第 n-1 行：实部照抄、虚部取反。
+  // Manual flip: DC (row 0) and Nyquist (row 2, i.e. n/2) are real lines, imaginary part zeroed;
+  // row 1 conjugates to row n-1: real copied, imaginary negated.
   mb.unsafe_set(n + 0, 0.0)
   mb.unsafe_set(n + 2, 0.0)
   mb.unsafe_set(n - 1, 1.0)
@@ -246,18 +264,19 @@ test "白盒：单边谱翻转与逐项手工式子逐位相同" {
 }
 
 ///|
-/// 自洽性（不需要任何参照）：实序列 → 正变换 → 取单边谱 → `real_ifft` → 回到原序列。
-/// 这一条同时挡住「忘了翻转」与「翻转写错」：少翻一半，上半谱带着上一帧的残值，
-/// 反变换出来的时域样本立刻对不上。
-test "白盒：正变换 → 实反变换回到原序列（≤ 8 ulp）" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+/// Self-consistency (no reference needed): real signal → forward → single-sided spectrum →
+/// `real_ifft` → back to the original. This also catches both "forgot to flip" and "flipped
+/// wrong": flip only half and the upper spectrum carries stale values, so the inverse samples
+/// immediately mismatch.
+test "white box: forward → real inverse returns the original (≤ 8 ulp)" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   for win in probe_wins {
     let src = noise_array(win, 0x1b873593 + win)
     let a = open_fft(win, src)
     forward(a)
-    // 把单边谱抄到第二个槽里，走实反变换。
+    // Copy the single-sided spectrum into a second slot and take the real inverse.
     let bins = win / 2 + 1
     let b = slot_open(win)
     let ma = slot_mem.unsafe_get(a)
@@ -274,11 +293,12 @@ test "白盒：正变换 → 实反变换回到原序列（≤ 8 ulp）" {
 }
 
 ///|
-/// `bins` 退化时：1 行、2 行是合法的（只有 DC，或 DC + 奈奎斯特），
-/// 0 行、超过 `n/2+1` 一律**拒绝**并且不动手 —— 动手的话会把半张谱变成噪声。
-test "白盒：bins 的合法边界" {
-  // 每条用例各自把池子腾干净：断言挂掉会让它后面的 `slot_close` 跑不到，
-  // 于是漏出来的槽会把**后面无关的用例**一起带红（曾经五条红里四条是这么来的）。
+/// Degenerate `bins`: 1 and 2 rows are legal (DC only, or DC + Nyquist); 0 rows and anything above
+/// `n/2+1` are **rejected** without touching anything — acting would turn half the spectrum into
+/// noise.
+test "white box: legal bins boundaries" {
+  // Each case clears the pool first: a failed assertion skips the following `slot_close`, and the
+  // leaked slot reddens **unrelated later cases** (four of five once-red cases came from this).
   release_all_slots()
   let n = 256
   let s = open_fft(n, noise_array(n, 0xcc9e2d51))

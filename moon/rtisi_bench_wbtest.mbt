@@ -1,44 +1,55 @@
-// 内核自带的基准：`moon bench --target wasm` 直接跑 wasm 产物本身。
+// Kernel-side benchmark: `moon bench --target wasm` runs the wasm artifact itself.
 //
-// RTISI-LA 是整条链**唯一的热路径**（逆变换里 78% 在它，其中约八成是 FFT 本身，
-// 见 docs/algorithms.md 的画像）。这里量的是逐帧推进这一段 —— 数据搬运、
-// 作业区开户、`finish` 的重叠归一化都在它外面，那些要么一帧一次、要么只一次。
+// RTISI-LA is the only hot path in the chain (78% of the inverse stage, about 80% of that being
+// the FFT itself; see docs/algorithms.md). This measures per-frame advancement — data movement,
+// opening the job area and the finish-step normalization are all outside it, and each of those
+// happens either once per frame or once in total.
 //
-// 形状取画像里那条活：8s@8kHz、win 512、501 帧、iters 8。
+// The shape is the one from the profile: 8 s at 8 kHz, win 512, 501 frames, iters 8.
 //
-// ⚠️ **绝对值别当真实耗时用。** `moon bench --target wasm` 的产物由 `moonrun` 执行
-// （link 时带 `-wasi`、导出 test-driver 入口），而宿主跑的是 V8 —— 两个运行时对同一份
-// wasm 的读数本来就不同，且**差多少取决于这段代码走不走 `v128`**。
-// 实测表与归因（含「同一份产物换引擎跑」这个对照）见 `docs/algorithms.md` 的
-// 「moon bench 的读数归 moonrun」。所以 bench 的用途是**同运行时的前后回归锚点**，
-// 「内核比 TS 快多少」那种话必须拿 `bench/kernel.ts` 的宿主侧 A/B 去说
-// （同机同轮、两条路交替、各自取最快，实测 1.31×）。
+// Absolute numbers are NOT real-world timings. The artifact built by `moon bench --target wasm`
+// runs under `moonrun` (linked with `-wasi`, exporting the test-driver entry), while the host
+// runs V8 — two runtimes measure the same wasm differently, and by how much depends on whether
+// the code uses `v128`. See the attribution table in docs/algorithms.md.
+//
+// So this benchmark is a regression anchor within one runtime. Statements like "the kernel is N×
+// faster than TS" must come from the host-side A/B in bench/kernel.ts.
 
 ///|
-/// 每轮开始前把 `out` 清一遍：不清的话 `out` 会一轮一轮累加下去（值本身不改变
-/// 指令数与时序，但读数就不再对应同一个工作集了）。实测这一段的开销与「不清」
-/// 只差 2%，而分块推进（宿主按 frames/64 分块，这里 7 帧一块）与一次调到底
-/// 逐位同值、耗时也只差 0.2% —— 两条都量过，不是估计。
-test "bench RTISI-LA 逐帧推进（501 帧 / win 512 / iters 8）" (it : @bench.T) {
+/// `out` is cleared before each round: otherwise it accumulates across rounds (the values do not
+/// change the instruction count, but the reading no longer describes the same working set).
+/// Clearing costs 2% here, and advancing 7 frames per chunk is bit-identical to one pass at 0.2%
+/// difference — both measured.
+test "bench RTISI-LA per-frame advancement (501 frames / win 512 / iters 8)" (
+  it : @bench.T,
+) {
   let fx = make_fx(501, 512, 128, 440.0)
-  let h = rtisi_open(fx.frames, fx.bins, fx.win, fx.hop, fx.samples, 8, 1, 0, 0.0)
+  let h = rtisi_open(
+    fx.frames,
+    fx.bins,
+    fx.win,
+    fx.hop,
+    fx.samples,
+    8,
+    1,
+    0,
+    0.0,
+  )
   assert_true(h >= 1)
-  let hdr = rtisi_hdr.unsafe_get(h - 1)
+  let job = job_of(h)
   let fb = fx.frames * fx.bins
-  // 视图在 open 之后取 —— 作业的缓冲是 open 时才建的，句柄到手之前没有数组可切。
+  // Views are taken after `open`: the job's buffers only exist once the handle does.
   let mem = job_d(h)
   for i = 0; i < fb; i = i + 1 {
-    mem.unsafe_set(hdr.unsafe_get(12) + i, fx.mag.unsafe_get(i))
-    mem.unsafe_set(hdr.unsafe_get(13) + i, fx.warm.unsafe_get(i))
+    mem.unsafe_set(job.off_mag + i, fx.mag.unsafe_get(i))
+    mem.unsafe_set(job.off_warm + i, fx.warm.unsafe_get(i))
   }
-  let off_out = hdr.unsafe_get(16)
-  let padded = hdr.unsafe_get(9)
   it.bench(name="run", fn() {
-    for i = 0; i < padded; i = i + 1 {
-      mem.unsafe_set(off_out + i, 0.0)
+    for i = 0; i < job.padded; i = i + 1 {
+      mem.unsafe_set(job.off_out + i, 0.0)
     }
     ignore(rtisi_run(h, 0, fx.frames))
-    it.keep(mem.unsafe_get(off_out))
+    it.keep(mem.unsafe_get(job.off_out))
   })
   rtisi_close(h)
 }

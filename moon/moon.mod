@@ -4,7 +4,7 @@ version = "0.1.0"
 
 preferred_target = "wasm"
 
-description = "atools 的数值内核：FFT、STFT 编解码、相位重建，编成 WASM 供浏览器直调"
+description = "Numeric kernel of atools: FFT, STFT codec and phase reconstruction, compiled to WASM for direct browser use"
 
 license = "Apache-2.0"
 

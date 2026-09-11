@@ -143,7 +143,8 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
   `assets/decode-*.js` 与 `assets/meta-*.js`：它们是懒加载的动态分包（合计约 1.2 MB），进清单等于
   首次访问强制下载全部音频格式，改由运行期缓存按需兜住 —— 用过一次的格式此后离线可用。
   数值流水线的 Worker 同样是普通产物，被 glob 收进来，不必再有人去认它的名字。
-  当前清单 **10 项 / 316.9 KiB**，与手写版逐项相同（其中入口脚本 266 KB）。
+  当前清单 **10 项 / 339.9 KiB**（入口脚本 264 KB、内核 44.1 KB、worker 20 KB 占了绝大部分），
+  与手写版逐项相同。体积按 `dist/sw.js` 里的清单逐项求和得来。
 - **运行期缓存**：同源 GET 命中即用（`CacheFirst`），`ExpirationPlugin` 限 64 项 / 30 天。
   过期是手写版没有的：哈希分包随每次部署换代，不收就无限堆积。带 `Range` 的请求不碰，
   免得把半截响应写进缓存。
@@ -226,7 +227,7 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
 | --- | --- | --- |
 | 构建期 + SW 源码 | 114 + 96 行 | 39 + 56 行（另 `vite.config.ts` 十余行配置） |
 | `dist/sw.js` | 0.86 KB（gzip 0.47） | 23.20 KB（gzip 7.68） |
-| 预缓存清单 | 10 项 / 316 KB | 10 项 / 316.9 KiB（逐项相同） |
+| 预缓存清单 | 10 项 | 10 项（与手写版同一组） |
 | 开发依赖 | — | `bun add` 装 319 个包，`node_modules` 94 MB → 162 MB |
 
 `sw.js` 大出来的 22 KB 是 workbox 的预缓存与路由运行时：它在后台下载、不挡首屏，换来的是上面那三件。
@@ -250,3 +251,63 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
   `sw.js` 不会卡在旧版本。哈希资源同理不配 `immutable` —— 受控页面根本不走 HTTP，走的是 SW 缓存。
   少一个文件，也少一条要与部署端对齐的规则。
 - **深链回退交给 workbox 的 `NavigationRoute`**（它当年也是这么做的）。手写版的 `HOME` 匹配已经是过去式。
+
+## 平台基线：哪些浏览器跑得起来（2026-09 定案）
+
+门槛由两条决定，其余都更宽。三条来源都在产物里可核对：指令集读 `wasm/dsp.wat`，CSS 读
+`assets/index-*.css`，API 看宿主代码里用到的构造。
+
+**WebAssembly**（`wasm/dsp.wasm`，44.1 KB，**零 `import`，不需要 WASI**）：
+
+| 用到的特性 | 产物里的证据 | Chrome | Firefox | Safari |
+| --- | --- | --- | --- | --- |
+| v128 SIMD | `f64x2.splat` + `v128.store`（一个 `memory.fill` 的向量化循环） | 91 | 89 | **16.4** |
+| bulk memory | `memory.copy` / `memory.fill` | 75 | 78 | 15 |
+| 非陷阱浮点转整 | `i32.trunc_sat_f64_s` ×21 | 75 | 78 | 15 |
+| reference types | `ref.func` / `funcref` | 96 | 79 | 15 |
+
+没有用到符号扩展、多值返回、`memory64`、尾调用、异常处理；`memory.grow` 是通用能力。
+
+**CSS**（`assets/index-*.css`，6.8 KB）：
+
+| 用到的特性 | 用处 | Chrome | Firefox | Safari |
+| --- | --- | --- | --- | --- |
+| `@property` ×2 | 冻结 `--u` 与 `--c-vh` 两个长度令牌（见上文尺度系统） | 85 | **128** | **16.4** |
+| `container-type` + `cqi` / `cqb` | 容器相对单位 | 105 | 110 | 16 |
+| `:has()` | 一处状态选择 | 105 | 121 | 15.4 |
+| `dvh` | 首屏高度 | 108 | 101 | 15.4 |
+| `backdrop-filter` | 毛玻璃卡片 | 76 | 103 | 9 |
+| `@supports (corner-shape:squircle)` | 渐进增强的守护，不构成门槛 | — | — | — |
+
+**JS**：
+
+| 用到的 API | 用处 | Chrome | Firefox | Safari |
+| --- | --- | --- | --- | --- |
+| `CompressionStream` / `DecompressionStream` | PNG 的 zlib | 80 | 113 | **16.4** |
+| `OfflineAudioContext` | 按容器速率建解码上下文（带 `webkit` 前缀兜底） | 14 | 25 | 6 |
+| `Worker`（classic） | 数值流水线；`assets/pipeline.worker-*.js` 是 `(function(){` 开头的 IIFE，零顶层 `import` | 4 | 3.5 | 5 |
+
+合起来是 **Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**。Safari 被 `@property` 与 `v128`
+同时钉在 16.4；Firefox 被 `@property` 钉在 128，是整条线里最新的一条。
+
+实测（2026-09-11，真实 `dist/` 产物，本机）：
+
+| 引擎 | 页面可载入 | 演示就绪（含 wasm + Worker） | 控制台 |
+| --- | --- | --- | --- |
+| Chromium 152（Chrome / Edge 内核） | 75 ms | 216 ms | 零错误 |
+| WebKit 26.6（Safari 内核） | 242 ms | 189 ms | 零错误 |
+
+两台引擎都报 `WebAssembly.validate` 的 SIMD 与 `trunc_sat` 为 `true`；`OfflineAudioContext` /
+`Worker` / `CompressionStream` / `container-type` / `@property` / `backdrop-filter` 全为 `true`；
+出图是 `DIV.spec`，facts 为「采样率 48k；PNG 800~802 KB；紧凑：不保存相位信息」。
+
+**Firefox 未实测**：本机那个 Nightly 二进制起不来，报 `Could not find profile folder`，根因是它必须
+往 `~/Library/Application Support/Firefox` 写 profile 而这个环境对该目录 `EPERM`（`mkdir` 就被拒）。
+所以上面 Firefox 那一列是**从特性支持表推的，不是跑出来的**。换一台能写那个目录的机器，同一个探针
+（起本地服务 + headless 截图 + 页面 beacon 回传读写数）就能补齐。
+
+**读图侧没有第二条路**：`app/lib/png.ts` 的 `zlib()` 在 `CompressionStream` 缺席时退到未压缩 zlib，
+`inflate()` 却是裸的 `new DecompressionStream("deflate")`。两个 API 同版本上线，所以不存在「能存不能读」
+的真实浏览器；而「两个都没有」的老环境本来就被 `@property` 与 `v128` 两道门槛挡在门外。自写 inflate
+约 200 行，与「不要冗余代码」冲突，所以维持现状 —— 代价只是那种环境下报错是原生 `TypeError`，
+不是一句人话。

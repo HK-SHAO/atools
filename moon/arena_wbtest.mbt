@@ -1,20 +1,23 @@
-// 作业区的白盒不变量。
+// White-box invariants of the job area.
 //
-// 作业区从「单一后备缓冲 + 分段 bump 分配」改成「一个作业一段自己的数组」之后，
-// 原先要盯的三件事（扩容搬数据、扩容世代、段首连续）**整类不存在了**：
-// 没有后备缓冲就没有搬运，没有换缓冲就没有世代，段首也不再是别人算出来的偏移。
-// 换来的新不变量只有四条，且都能一次证伪：
-//   ① 池满拒绝、归还后能再拿到（与旧版同一条）；
-//   ② 长度**恰好**是要的那么多（宿主按它定视图长度，多一个少一个都是静默越界）；
-//   ③ 交出去的是零初值（调用方不该读到上一件活的残值）；
-//   ④ 两件活互不干扰（这是并发那条性质的唯一直接证据）。
+// After the job area moved from "one backing buffer + segmented bump allocation" to "each job owns
+// its own array", the three old concerns (growth relocation, growth generation, segment-head
+// contiguity) **ceased to exist as a class**: no backing buffer means no relocation, no buffer swap
+// means no generation, and the segment head is no longer an offset computed by someone else. The
+// new invariants are four, each falsifiable in one shot:
+//   1. a full pool refuses, release makes it available again (same as the old version);
+//   2. the length is **exactly** what was asked (the host sizes its view by it; one either way is a
+//      silent out-of-bounds);
+//   3. what is handed out is zero-initialized (a caller must not read the previous job's residue);
+//   4. two live jobs do not interfere (the only direct evidence for the concurrency property).
 //
-// 「宿主视图与内核读写的是同一格」不在这里 —— 它跨语言，证不了的就别假装证了：
-// 那条由 `app/lib/dsp.test.ts` 的两向握手守着（内核写、宿主两把视图读回；宿主写、内核读回）。
+// "Host view and kernel read/write the same cell" is not here — it is cross-language, and what
+// cannot be proven should not be pretended: that is guarded by the two-way handshake in
+// `app/lib/dsp.test.ts` (kernel writes, both host views read back; host writes, kernel reads back).
 
 ///|
-/// 把还活着的句柄都还回去。测试之间共用同一个模块级作业区，不还干净会串味 ——
-/// 而且「池满」那条断言会因此变得看运气。
+/// Return every still-live handle. Cases share one module-level job area and leftover state bleeds
+/// across — worse, the "pool full" assertion would then pass by luck.
 fn release_jobs(handles : FixedArray[Int]) -> Unit {
   for h in handles {
     if h >= 1 {
@@ -24,7 +27,7 @@ fn release_jobs(handles : FixedArray[Int]) -> Unit {
 }
 
 ///|
-test "白盒：作业区池满后拒绝，归还后能再拿到" {
+test "white box: a full job pool refuses, and release makes it available again" {
   let hs = FixedArray::make(max_jobs, 0)
   for i = 0; i < max_jobs; i = i + 1 {
     hs.unsafe_set(i, job_open(64, 0))
@@ -42,16 +45,18 @@ test "白盒：作业区池满后拒绝，归还后能再拿到" {
 }
 
 ///|
-/// 长度是导出面的一部分：宿主拿 `dsp_job_words` / `dsp_job_bytes` 定视图长度，
-/// 内核按尺寸表读写。两边差一个就是静默越界 —— 所以这里逐字段对。
-test "白盒：两段的长度恰好是要的那个数" {
+/// Lengths are part of the exported surface: the host sizes its views from `dsp_job_words` /
+/// `dsp_job_bytes` while the kernel reads/writes by the size table. One off either way is a silent
+/// out-of-bounds — hence the field-by-field check.
+test "white box: both segments have exactly the requested lengths" {
   let h = job_open(37, 91)
   assert_true(h >= 1)
   assert_eq(job_words_of(h), 37)
   assert_eq(job_bytes_of(h), 91)
   assert_eq(job_d(h).length(), 37)
   assert_eq(job_b(h).length(), 91)
-  // 只给主缓冲也行（票根 decode 就是这种），字节段长度 0 而不是「没这回事」。
+  // Main buffer only is also allowed (the ticket decode path); the byte segment length is 0, not
+  // "absent".
   let h2 = job_open(5, 0)
   assert_true(h2 >= 1)
   assert_eq(job_words_of(h2), 5)
@@ -60,9 +65,10 @@ test "白盒：两段的长度恰好是要的那个数" {
 }
 
 ///|
-/// 段是复用的（句柄号会被重新发出去），但**存储不是**：新开的那段一定是零。
-/// 调用方不该从上一件活的残值里读出东西来 —— 与会话槽 `slot_open` 同一条理由。
-test "白盒：新开的段是零初值（含字节段）" {
+/// Segments are reused (handle numbers get handed out again) but **storage is not**: a freshly
+/// opened segment is always zero. A caller must not read the previous job's residue — same
+/// rationale as the session slot `slot_open`.
+test "white box: a freshly opened segment is zero-initialized (including the byte segment)" {
   let h1 = job_open(32, 32)
   assert_true(h1 >= 1)
   let d1 = job_d(h1)
@@ -84,9 +90,11 @@ test "白盒：新开的段是零初值（含字节段）" {
 }
 
 ///|
-/// 并发那条性质的唯一直接证据：一件活写自己的段，另一件活的段一个字节都不许动。
-/// 旧版这里靠「段基址偏移算对」，新版靠「各是各的数组」—— 后者对，前者错过一次。
-test "白盒：两件活各写各的，互不干扰" {
+/// The only direct evidence for the concurrency property: one job writes its own segment and not a
+/// single byte of the other's may change. The old version relied on "the segment base offset is
+/// computed right", the new one on "each has its own array" — the latter was right, the former was
+/// wrong once.
+test "white box: two live jobs write their own segments without interfering" {
   let ha = job_open(16, 16)
   let hb = job_open(16, 16)
   assert_true(ha >= 1 && hb >= 1)
@@ -102,7 +110,8 @@ test "白盒：两件活各写各的，互不干扰" {
     assert_eq(db.unsafe_get(i), 0.0)
     assert_eq(bb.unsafe_get(i).to_int(), 0)
   }
-  // 主语段与字节段互不重叠：改字节段不该让主语段动。
+  // The word segment and the byte segment do not overlap: touching the byte segment must not move
+  // the word segment.
   for i = 0; i < 16; i = i + 1 {
     ba.unsafe_set(i, b'\xff')
   }
@@ -113,13 +122,15 @@ test "白盒：两件活各写各的，互不干扰" {
 }
 
 ///|
-/// 归还之后句柄即刻失效：长度归零、访问器给空表。归还了还接着读是最容易漏的一条，
-/// 而它在新结构下是「拿到一段长度 0 的数组」，不会越界读到别人的数据。
-test "白盒：归还之后句柄失效" {
+/// A handle is dead the instant it is returned: lengths go to zero and accessors give empty arrays.
+/// Reading after release is the easiest thing to miss, and under the new structure it is "get a
+/// length-0 array", which cannot read someone else's data.
+test "white box: the handle is dead after release" {
   let h = job_open(16, 16)
   assert_true(h >= 1)
-  // 另开一件活，并**确认句柄号与 h 不同**：句柄号是会复用的，若这里又拿到同一个号，
-  // 下面那句 `job_close(h)` 关掉的其实是它，「双归还不伤人」就假绿了。
+  // Open another job and **confirm its handle differs from `h`**: handle numbers are reused, so if
+  // this got the same number the following `job_close(h)` would actually close it and "double
+  // release is harmless" would pass falsely.
   let keep = job_open(16, 0)
   assert_true(keep >= 1 && keep != h)
   job_close(h)
@@ -128,7 +139,7 @@ test "白盒：归还之后句柄失效" {
   assert_eq(job_d(h).length(), 0)
   assert_eq(job_b(h).length(), 0)
   assert_eq(job_live_count(), 1)
-  // 双归还、以及非法句柄，都不许动到别人的段。
+  // Double release and illegal handles must not touch anyone else's segment.
   job_close(h)
   job_close(0)
   job_close(-1)
@@ -139,10 +150,11 @@ test "白盒：归还之后句柄失效" {
 }
 
 ///|
-/// 非法尺寸一律拒绝（返回 0），不是崩溃 —— 与会话槽同一套降级约定。
-/// **但 0×0 是合法的**：它表示「这一件活两段都不要」，不是参数非法（`probe_*` 就靠它
-/// 自证「句柄合法、段太小」这条分支）。把它一起当非法会让那条分支永远走不到。
-test "白盒：非法尺寸与非法句柄都被拒（不是崩溃）" {
+/// Illegal sizes are rejected (return 0), not crashed on — same degradation convention as the
+/// session slots. **But 0×0 is legal**: it means "this job wants neither segment", not an illegal
+/// argument (`probe_*` relies on it to exercise the "valid handle, segment too small" branch).
+/// Treating it as illegal would make that branch unreachable.
+test "white box: illegal sizes and illegal handles are rejected, not crashed on" {
   let empty = job_open(0, 0)
   assert_true(empty >= 1)
   assert_eq(job_words_of(empty), 0)

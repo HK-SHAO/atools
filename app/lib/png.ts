@@ -61,6 +61,12 @@ function assemble(pieces: Uint8Array[]): Bytes {
 
 export const isPng = (b: Uint8Array): boolean => SIGNATURE.every((v, i) => b[i] === v);
 
+/**
+ * 一行的字节数。`depth < 8` 时它**不是** `width` 字节，而是 `ceil(width·depth/8)`：按 width
+ * 取会让长度校验直接失败（自家 2/4 bit 图读回来恒为 null）。读写两侧共用这一条。
+ */
+const rowBytesOf = (width: number, depth: number): number => Math.ceil((width * depth) / 8);
+
 function chunk(type: string, data: Uint8Array): Uint8Array {
   const out = new Uint8Array(12 + data.length);
   new DataView(out.buffer).setUint32(0, data.length);
@@ -128,16 +134,7 @@ function stored(data: Uint8Array): Uint8Array {
   parts.push(
     Uint8Array.from([(sum >>> 24) & 0xff, (sum >>> 16) & 0xff, (sum >>> 8) & 0xff, sum & 0xff]),
   );
-
-  let size = 0;
-  for (const p of parts) size += p.length;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  return assemble(parts);
 }
 
 async function zlib(data: Uint8Array): Promise<Uint8Array> {
@@ -155,7 +152,7 @@ export async function indexedPng(
   palette: Uint8Array,
   meta: string,
 ): Promise<Bytes> {
-  const rowBytes = Math.ceil((width * depth) / 8);
+  const rowBytes = rowBytesOf(width, depth);
   const mask = (1 << depth) - 1;
   const raw = new Uint8Array((rowBytes + 1) * height);
 
@@ -299,10 +296,8 @@ export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | 
   if (!raw) return null;
   const { width, height } = info;
   const depth = info.bitDepth;
-  // 一行是 ceil(width·depth/8) 字节，不是 width 字节：depth<8 时两者差 8 倍，
-  // 按 width 取会让长度校验直接失败（自家 2/4 bit 图读回来恒为 null）。
   // 滤波的 bpp 恒为 1 —— PNG 规定 depth<8 时逐字节滤波。
-  const rowBytes = Math.ceil((width * depth) / 8);
+  const rowBytes = rowBytesOf(width, depth);
   const flat = unfilter(raw, rowBytes, height, 1);
   if (!flat) return null;
 

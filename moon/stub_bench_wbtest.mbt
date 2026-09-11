@@ -1,23 +1,26 @@
-// 票根的基准。它量的一件很简单的事：**把一段纯整数逻辑从 JS 循环搬进内核值不值**。
+// Benchmarks for the stub codec. They measure one simple thing: **is moving pure integer logic
+// out of a JS loop and into the kernel worth it**.
 //
-// 两边的数字对照见 docs/migration.md，这里只留可回归的锚点：画一条（内核按列推进、
-// 一次 32 位写下四个像素，宿主那边一个像素循环都不用写）与认一条（内核拿主缓冲里的
-// f64 剖面直接滑窗）。
+// For the side-by-side numbers see docs/migration.md; what stays here are regression anchors:
+// paint (the kernel walks columns and writes four pixels per 32-bit store, with no per-pixel loop
+// host-side) and decode (the kernel slides a window directly over the f64 profile in the main
+// buffer).
 //
-// 宽度取三档：400（8 位前缀、单窗口）、2048（12 位前缀、双窗口）、65535（16 位前缀、
-// 上限）。三档的分支不一样，只量一档会把分支差异藏起来。
+// Three widths: 400 (8-bit prefix, one window), 2048 (12-bit prefix, two windows), 65535
+// (16-bit prefix, the ceiling). Their branches differ, and measuring only one hides that.
 
 ///|
-test "bench 票根：画一条、认一条" (it : @bench.T) {
+test "bench stub: paint one, decode one" (it : @bench.T) {
   for w in [400, 2048, 65535] {
     let jh = job_open(0, stub_paint_bytes(w))
     assert_true(jh >= 1)
     ignore(stub_paint(jh, w, 48000, 1024, 0))
-    // 认的那一段要一个 f64 剖面：从刚画的块里抽一遍（这一段不计时）。
+    // The decode half needs an f64 profile: extract one from the block just painted (not timed).
     let prof = profile(job_b(jh), w, stub_rows)
     let dh = job_open(stub_decode_words(w), 0)
     assert_true(dh >= 1)
-    // 认的那一段读的是**主缓冲**的第 0 个元素起 —— 数组在 open 之后现取，没有基址要算。
+    // The decode half reads the **main buffer** from element 0 — the array is fetched after open,
+    // so no base address has to be computed.
     let mem = job_d(dh)
     for i = 0; i < w; i = i + 1 {
       mem.unsafe_set(i, prof.unsafe_get(i))

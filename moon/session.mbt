@@ -1,35 +1,41 @@
-// 会话槽位。内核里没有「一份全局工作区」—— 宿主可以同时有几件活在算（`encode` 与
-// `synthesise` 分属不同 scope，会在同一个 worker 里重叠），各要各的工作区。
+// Session slots: the fixed-size workspace a long computation borrows.
 //
-// 工作区**静态定型**：每槽 `4·max_win + 4·(max_win/2+1)` 个 Double（配对双实变换那套布局的
-// 最大并集）。地址在进程内**永不变**（静态数组不搬家），所以宿主切出的视图只会在
-// `memory.grow` 把整个 ArrayBuffer 顶掉时失效 —— 那一条由宿主比 `memory.buffer` 身份处理，
-// 与作业区共用一套（见 arena.mbt 顶部）。代价是上限 6 槽 ≈ 1.6 MB 常驻。
+// The kernel has no single global workspace — `encode` and `synthesise` can overlap inside one
+// worker, and each needs its own. A slot is statically sized (`4·max_win + 4·(max_win/2+1)`
+// doubles: the largest union of the pair-transform layout) and never moves, so the host slices
+// a view of it once per use. `memory.grow` still detaches those views — that is the host's
+// problem to re-slice, the same rule as job arenas.
 //
-// 占不到槽时 `dsp_slot_open` 给出负值（见下），宿主据此降级 —— 降级，不是崩溃。
-// 缓冲布局由打开它的子系统定义，槽本身只管占位、释放、给出缓冲。
+// A bound plan index doubles as the busy flag: -1 means the slot is free. See moon/README.md.
 
 ///|
+/// Slot pool size. Six is the ceiling on concurrent computations; asking for a seventh fails.
 let max_slots : Int = 6
 
 ///|
+/// Doubles per slot.
 let slot_words : Int = 4 * max_win + 4 * (max_win / 2 + 1)
 
 ///|
-let slot_busy : FixedArray[Bool] = FixedArray::make(max_slots, false)
-
-///|
-/// 各槽绑定的 FFT 表组下标（见 plan.mbt）。
+/// Plan-group index bound to each slot; -1 marks a free slot.
 let slot_plan : FixedArray[Int] = FixedArray::make(max_slots, -1)
 
 ///|
-let slot_mem : FixedArray[FixedArray[Double]] = FixedArray::makei(
-  max_slots,
-  _ => FixedArray::make(slot_words, 0.0),
-)
+let slot_mem : FixedArray[FixedArray[Double]] = FixedArray::makei(max_slots, _ => {
+  FixedArray::make(slot_words, 0.0)
+})
 
 ///|
-/// 占一个槽并绑定窗长的表组。返回槽号；-1 = 窗长不合法，-2 = 池满。
+/// Whether slot `s` is open.
+fn slot_live(s : Int) -> Bool {
+  s >= 0 && s < max_slots && slot_plan.unsafe_get(s) >= 0
+}
+
+///|
+/// Claims a slot bound to the plan group for `win`, and clears its workspace.
+///
+/// @param win Window length, forwarded to `dsp_plan`.
+/// @return Slot index (>= 0); -1 if `win` is unsupported; -2 if every slot is busy.
 #export_name("dsp_slot_open")
 pub fn slot_open(win : Int) -> Int {
   let pi = plan(win)
@@ -37,44 +43,53 @@ pub fn slot_open(win : Int) -> Int {
     return -1
   }
   let mut s = 0
-  while s < max_slots && slot_busy.unsafe_get(s) {
+  while s < max_slots && slot_live(s) {
     s = s + 1
   }
   if s == max_slots {
     return -2
   }
   slot_plan.unsafe_set(s, pi)
-  slot_busy.unsafe_set(s, true)
-  // 槽是复用的，交出去之前清零。参照实现每次 `new Float64Array` 也是零，两条路的初值必须一致：
-  // 配对反变换会读调用方**没有**写过的表（`r2`/`i2` 只写一半时），留上一次的残值就是另一套结果。
+  // Slots are reused, so the caller must never see the previous tenant's values: the pair
+  // inverse reads halves the caller did not write.
   slot_mem.unsafe_get(s).fill(0.0)
   s
 }
 
 ///|
+/// Releases a session slot.
+///
+/// @param s Slot index; out-of-range indices are ignored.
 #export_name("dsp_slot_close")
 pub fn slot_close(s : Int) -> Unit {
   if s >= 0 && s < max_slots {
-    slot_busy.unsafe_set(s, false)
+    slot_plan.unsafe_set(s, -1)
   }
 }
 
 ///|
-/// 槽工作区。宿主拿它取地址建视图 —— 地址在整个进程期内不变。
+/// The slot's double workspace, as a live view into kernel memory.
+///
+/// @return The workspace, or an empty array if `s` is invalid. The host derives its address, so
+/// the view must be re-sliced after every `await` (`memory.grow` detaches it).
 #export_name("dsp_slot_mem")
 pub fn slot_mem_of(s : Int) -> FixedArray[Double] {
-  if s < 0 || s >= max_slots {
-    return FixedArray::make(0, 0.0)
+  if !slot_live(s) {
+    FixedArray::make(0, 0.0)
+  } else {
+    slot_mem.unsafe_get(s)
   }
-  slot_mem.unsafe_get(s)
 }
 
 ///|
-/// 槽工作区的容量（元素）。宿主不该自己算「4S+4H」。
+/// Capacity of a slot workspace, in elements. The host must not derive `4S+4H` itself.
+///
+/// @return The element capacity; 0 if `s` is invalid.
 #export_name("dsp_slot_words")
 pub fn slot_words_of(s : Int) -> Int {
-  if s < 0 || s >= max_slots {
-    return 0
+  if !slot_live(s) {
+    0
+  } else {
+    slot_words
   }
-  slot_words
 }

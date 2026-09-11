@@ -3,7 +3,7 @@ import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } fro
 import { TUNE, phaseFromMagnitude } from "./phase";
 import { resampledLength } from "./resample";
 import { DEFAULT_BUDGET, rtisiLa } from "./rtisi";
-import { Frames, coverage, olaFromPhase } from "./stft";
+import { Frames, coverFloor, coverage, olaFromPhase, padOf, uncovered } from "./stft";
 
 export const BANDS = 2;
 
@@ -11,25 +11,18 @@ const MIN_WIN = 256;
 const MAX_WIN = 4096;
 
 /**
- * 像素预算 —— 「能装多久」只有这一个真预算。
- *
- * 像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**（见 params.ts 的 hopOf）。实测
- * 0.84 字节/像素，所以预算同时就是文件体积：16M 像素 ≈ 13MB 的 PNG，编码 + 打包 ~1.2s。
- *
- * 为什么是 16M 而不是更大：**65535 列是浏览器的硬墙**（实测 70000 宽的 canvas 会静默
- * 变成空画布，`toBlob` 给 null），而默认档（win 512）在 16M 像素处正好撞上它 ——
- * 再往上加，默认档也装不出更长的音频，等于白加。要更长只能换更长的窗（时间分辨率变粗）
- * 或者把音频切段，那是另一套格式，不是把数字调大。各档的时长天花板都是
- * `min(像素预算, 65535 列)` 里更小的那道，见 docs/algorithms.md 的实测表。
+ * 像素预算。像素 = 帧数 × 带宽 ≈ N·重叠/2，**与窗长无关**，且实测 0.84 字节/像素 ——
+ * 这个预算同时就是文件体积。16M 是**默认档（win 512）刚好撞上 `MAX_FRAMES` 的地方**，
+ * 再往上加，默认档也装不出更长的音频。各档的天花板是两道墙里更小的那道，实测表在
+ * docs/algorithms.md。
  */
 export const MAX_PIXELS = 16_000_000;
 
 /**
  * 单边（帧数就是图宽）上限：canvas 的硬墙。实测 65535 宽仍然画得出、`toBlob` 正常，
- * **65536 就开始静默失败**（画点读回是 0、`toBlob` 给 null），所以取 65535 而不是 2^16。
- * 它管两件事：① 挡住「窄带 + 超长」把图拉成几万比一的长条；② 让省档（win 256）
- * 的列数先于像素预算到顶 —— 省档每秒的列数是最档的两倍，所以它的容量天生只有一半。
- * 读图侧共用这个数（`image.ts` 的 MAX_SIDE）：宽超了的图必须先缩，否则读回来的是静音。
+ * **65536 起静默失败**（画点读回是 0、`toBlob` 给 null），所以取 65535 而不是 2^16。
+ * 它让省档（win 256）的列数先于像素预算到顶 —— 省档每秒的列数是最档的两倍。读图侧共用
+ * 这个数（`image.ts` 里那条「宽超了就先缩」），否则读回来的是满屏静音。
  */
 export const MAX_FRAMES = 65535;
 
@@ -110,12 +103,43 @@ export function rowsFor(win: number, sr: number, fmax: number): number {
   return Math.max(8, Math.min(full, Math.floor(fmax / perBin) + 1));
 }
 
-export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
+/**
+ * 这个档位限带时的截止频率，同时是「重采样要不要低通」的那个数。只有紧凑档按 `fmax`
+ * 限带，可逆档要整条带到奈奎斯特（0）。`planOf` 与 `useStudio` 的重采样调用共用它：
+ * 两处各写一遍 `mode === "compact" ? fmax : 0`，改一处忘另一处就是「图上截了带、
+ * 重采样没截」这种只在频宽旋钮上看得出来、却听不出所以然的错。
+ */
+export const cutoffOf = (enc: Encode): number => (enc.mode === "compact" ? enc.fmax : 0);
+
+/** 一个档位在某个采样率下的形状。见 `planOf`。 */
+interface Plan {
+  win: number;
+  hop: number;
+  bins: number;
+  bands: number;
+}
+
+/**
+ * 一个档位在某个采样率下的形状：窗长、步进、带宽行数、带数。
+ *
+ * 这三处问的是同一件事 —— `fits`「装不装得下」、`ceilingOf`「最多多少秒」、`shapeFor`
+ * 「真建起来多大」—— 而「带宽行数」与「带数」各带两条分支（紧凑档按 `fmax` 截band、
+ * 可逆档带宽翻倍）。答案分散着抄就是三份同一个档位的副本，而判据与实际一旦分家，
+ * 症状是「刚好装得下」被判成装不下（见 `fitEncode` 里那段）。
+ */
+const planOf = (enc: Encode, sr: number): Plan => {
   const win = winOf(enc);
-  const hop = hopOf(enc);
-  const bins = rowsFor(win, sr, enc.mode === "compact" ? enc.fmax : 0);
+  return {
+    win,
+    hop: hopOf(enc),
+    bins: rowsFor(win, sr, cutoffOf(enc)),
+    bands: enc.mode === "exact" ? BANDS : 1,
+  };
+};
+
+export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
+  const { win, hop, bins, bands } = planOf(enc, sr);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
-  const bands = enc.mode === "exact" ? BANDS : 1;
 
   // 只有像素这一个预算，所以只有一条提示 —— 别再写「把窗长调低」：像素 ≈ N·重叠/2，
   // 与窗长无关（见 params.ts 的 hopOf）。能压图的旋钮只有采样率、频宽和时长。
@@ -125,16 +149,14 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
 }
 
 function fits(enc: Encode, sr: number, samples: number): boolean {
-  const bins = rowsFor(winOf(enc), sr, enc.mode === "compact" ? enc.fmax : 0);
-  const frames = Math.floor(Math.max(1, samples) / hopOf(enc)) + 1;
-  return frames <= maxFramesFor(bins, enc.mode === "exact" ? BANDS : 1);
+  const { hop, bins, bands } = planOf(enc, sr);
+  return Math.floor(Math.max(1, samples) / hop) + 1 <= maxFramesFor(bins, bands);
 }
 
 /** 这个档位在某个采样率下最多能装多少秒 —— 由像素预算决定，三档窗长因此得到同一个上限。 */
 function ceilingOf(enc: Encode, sr: number): number {
-  const bins = rowsFor(winOf(enc), sr, enc.mode === "compact" ? enc.fmax : 0);
-  const bands = enc.mode === "exact" ? BANDS : 1;
-  return Math.floor(((maxFramesFor(bins, bands) - 1) * hopOf(enc)) / sr);
+  const { hop, bins, bands } = planOf(enc, sr);
+  return Math.floor(((maxFramesFor(bins, bands) - 1) * hop) / sr);
 }
 
 export function fitEncode(
@@ -206,9 +228,7 @@ export async function encode(
   // 一帧变换的工作区借自内核（会话槽），整段活干完才还 —— 池满会当场抛，见 stft.ts。
   const core = new Frames(win);
   try {
-    const padded = samples + win;
-    const x = new Float64Array(padded);
-    for (let i = 0; i < samples; i++) x[win / 2 + i] = pcm[i]!;
+    const x = padOf(pcm, win);
 
     const meta: Meta = { sr, win, hop, frames, bins, samples, bits: 0, ref: 0, exact: false };
     const scale = win / 4;
@@ -356,18 +376,7 @@ async function synthesiseExact(
       }
     }
 
-    const cover = coverage(win, hop, frames, padded);
-    let peak = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > peak) peak = cover[i]!;
-    const floor = peak * 0.05;
-
-    const out = new Float32Array(samples);
-    const pad = win / 2;
-    for (let i = 0; i < samples; i++) {
-      const c = cover[pad + i]!;
-      out[i] = c > floor ? acc[pad + i]! / c : 0;
-    }
-    return out;
+    return uncovered(acc, coverage(win, hop, frames, padded), win / 2, samples);
   } finally {
     core.close();
   }
@@ -385,25 +394,15 @@ function targetOf(spec: Spectrum, scale: number): Float64Array {
 type Band = import("./rtisi").Band;
 
 /**
- * 幅度是**量化**存下来的，level 说的是「落在第 q 档」，不是「等于档中心」。
- * 绝大多数假约束出现在**最低那一档**：`q = 0` 的真值含义是「在这个地板以下」，
- * 可硬投影把它钉在地板上 —— 于是整张频谱里所有安静的地方都被填成同一个非零值，
- * 等于凭空铺一层等高的噪声地板。位深越浅，地板越高（2bit 只到峰值下 24 dB），
- * 这层假噪声就越响。
+ * 幅度投影的目标区间：按**量化字节**查的 256 项表，见 `rtisi.ts` 的 `Band`。
  *
- * 这里只放宽这一档：让它可以往 0 走（上界仍是档中心，不让它盖过邻近档）。
- * 最高那一档同理给到 +∞。其余档位仍钉在中心 —— **试过把每一档都放宽 ±半档，
- * 收益为零甚至略负**：2bit 相关只到 0.179（本版 0.198）、包络 13/18（本版 18/18），
- * 而 8bit 的谱差反而显著变差。地板这一档是唯一真正被钉错的地方。
+ * 只放宽最低那一档（`q = 0` 的真值含义是「在这个地板以下」，硬投影把它钉在地板上等于凭空
+ * 铺一层等高的噪声地板）与最高档（+∞，不设上界），其余档位仍钉在中心 —— 试过每档都放宽
+ * ±半档，收益为零甚至略负。地板已经在 −80 dB 之下时（8bit 是 −96 dB）钉不钉都听不出来，
+ * 直接返回 null 走硬投影，保证 8bit 输出与改动前**逐位相同**。
  *
- * 交给迭代的语义是「幅度落在 [lo, hi] 内就不动它，出界才夹回来」，
- * 即 ADMM 类相位重建里的幅度软约束；训练无关、零依赖、零额外耗时。
- * 可逆档（exact）没有量化这一步，返回 null。
- *
- * 表按 256 个**字节值**建，而不是逐元素建两张 `frames×bins` 的表：量化档只由那个字节
- * 决定（`q = round(lv·steps/255)`），所以逐元素存是白白多出 16M 像素素材的 128 MB。
- * 这张表由宿主按量化约定算好、整段交给内核的 `rt_fit`，所以「同一个字节值定出哪一段边界」
- * 只有这一处。
+ * 表按 256 个字节值建而不是逐元素建：量化档只由那个字节决定，逐元素存是白多出两张
+ * `frames×bins`（16M 像素的素材就是 128 MB）。实测与配对胜负见 docs/algorithms.md。
  */
 function bandOf(spec: Spectrum, scale: number): Band | null {
   const { meta, levels } = spec;
@@ -482,9 +481,7 @@ async function glRefine(
     const prevIm = new Float32Array(frames * full);
 
     const cover = coverage(win, hop, frames, padded);
-    let top = 0;
-    for (let i = 0; i < padded; i++) if (cover[i]! > top) top = cover[i]!;
-    const floor = top * 0.05;
+    const floor = coverFloor(cover);
 
     const deadline = Date.now() + budgetMs;
     let next = 0;
@@ -556,7 +553,6 @@ async function invert(
   const scale = win / 4;
   const target = targetOf(spec, scale);
   const band = bandOf(spec, scale);
-  const padded = samples + win;
 
   const warm = TUNE.pghi ? phaseFromMagnitude(target, frames, bins, win, hop) : null;
   const anchor: Anchor | null =
@@ -590,8 +586,7 @@ async function invert(
         samples,
       );
 
-  const x = new Float64Array(padded);
-  for (let i = 0; i < samples; i++) x[win / 2 + i] = y[i]!;
+  const x = padOf(y, win);
   if (fine || TUNE.rtisiGl > 0)
     await glRefine(
       x,
@@ -621,6 +616,12 @@ export async function synthesise(
   return invert(spec, alive, onProgress, quality === "fine");
 }
 
+/**
+ * 无元数据的图反推参数：行数 → 窗长走 `pow2`，**向上**取整（保住全部行数）。
+ *
+ * 与 `image.ts` 的 `winFromBins`（同一个反推、**向下**取整）在截过带的图上会给出不同的窗长，
+ * 谁才是本意**未定案** —— 理由与量法写在那个函数的注释里。
+ */
 export function paramsForImage(
   frames: number,
   rows: number,

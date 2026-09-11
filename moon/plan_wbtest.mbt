@@ -1,16 +1,17 @@
-// 白盒：表组自己的性质（汉宁窗与旋转因子）。
+// White-box properties of the table group (Hann window and twiddle factors).
 //
-// 这三条原先住在 `app/lib/phase.test.ts` 里，靠宿主重建一份汉宁窗来比 —— 那份实现
-// （`app/lib/fft.ts` 的 `hannWindow`）已经随「数值只有内核这一份」删掉了。
-// 搬到内核里之后判据反而更硬：它们量的是**内核真的在用的那张表**，而不是它的复制品。
+// These three used to live in `app/lib/phase.test.ts`, comparing against a host rebuild of the
+// Hann window; that implementation (`hannWindow` in `app/lib/fft.ts`) was deleted when the
+// numerics became kernel-only. Moving them here made the gates stricter, not looser: they measure
+// the actual table the kernel uses rather than a copy of it.
 
 ///|
-/// 以参照序列峰值为尺度的最大绝对偏差。
+/// Max absolute deviation scaled by the reference peak.
 ///
-/// 变换的判据只能是**相对量**：绝对偏差随长度按 `eps · log₂n · Σ|x|` 增长，拿 ulp 当界
-/// 会在长窗上误报（实测 256 点时约 60 ulp，也就是 1.4e-14 的相对量）。
-/// 而一个写错的实现（符号、下标、结合顺序错一处）给出的相对偏差是 1e-2 量级 ——
-/// 界定在 1e-12 仍有十个数量级的余量。
+/// The gate must be relative: absolute error grows like `eps · log₂n · Σ|x|` with length, so an
+/// ulp bound false-alarms on long windows (measured ~60 ulp at 256 points, i.e. 1.4e-14
+/// relative). A wrong implementation (one bad sign, index, or summation order) lands at 1e-2
+/// relative, so a 1e-12 bound still leaves ten orders of margin.
 fn rel_peak_diff(
   arena : FixedArray[Double],
   off : Int,
@@ -38,12 +39,13 @@ fn rel_peak_diff(
 }
 
 ///|
-/// 汉宁窗关于中点对称、中点为 1、两端为 0。这三条错了，加窗叠接的归一化会整体偏。
-test "白盒：汉宁窗中点对称、峰值在中点" {
+/// Hann window: symmetric about the midpoint, 1 there, 0 at both ends. Getting any of these wrong
+/// skews the windowed-overlap normalization globally.
+test "white box: Hann window is symmetric about the midpoint, peak at the midpoint" {
   let n = 256
   let i = plan(n)
   assert_true(i >= 0)
-  let w = plan_hann.unsafe_get(i)
+  let w = plan_hann_of(i)
   assert_true(abs_f(w.unsafe_get(0)) < 1.0e-12)
   assert_true(abs_f(w.unsafe_get(n / 2) - 1.0) < 1.0e-12)
   let mut worst = 0.0
@@ -57,19 +59,23 @@ test "白盒：汉宁窗中点对称、峰值在中点" {
 }
 
 ///|
-/// `hop = win/4` 时，窗平方的叠接和**在整个周期上是常数** —— 这就是 WOLA 归一化能用一个
-/// 标量分母的原因。它同时钉住了重叠倍数与窗函数：两者任一变，和就不平了。
-test "白盒：hop = win/4 时窗平方的叠接和是平的" {
+/// At `hop = win/4` the overlap sum of the squared window is **constant over the whole period**,
+/// which is why WOLA normalization needs only a scalar denominator. It pins both the overlap
+/// factor and the window: changing either makes the sum non-flat.
+test "white box: the overlap sum of the squared window is flat at hop = win/4" {
   let n = 256
   let hop = n / 4
   let i = plan(n)
-  let w = plan_hann.unsafe_get(i)
+  let w = plan_hann_of(i)
   let cover = FixedArray::make(n, 0.0)
   let mut f = 0
   while f * hop < n {
     for m = 0; m < n; m = m + 1 {
       let at = (f * hop + m) % n
-      cover.unsafe_set(at, cover.unsafe_get(at) + w.unsafe_get(m) * w.unsafe_get(m))
+      cover.unsafe_set(
+        at,
+        cover.unsafe_get(at) + w.unsafe_get(m) * w.unsafe_get(m),
+      )
     }
     f = f + 1
   }
@@ -88,9 +94,10 @@ test "白盒：hop = win/4 时窗平方的叠接和是平的" {
 }
 
 ///|
-/// 正变换 ≡ 朴素 DFT。这是变换**唯一**一条与实现无关的判据：旋转因子的下标、位反转、
-/// 蝶形的结合顺序全在里面。判据取相对量，见 `rel_peak_diff`。
-test "白盒：正变换与朴素 DFT 一致（峰值相对 1e-12 以内）" {
+/// Forward transform ≡ naive DFT. The only implementation-independent gate on the transform: it
+/// covers twiddle indices, bit reversal, and butterfly summation order. Relative criterion, see
+/// `rel_peak_diff`.
+test "white box: forward transform matches a naive DFT (within 1e-12 relative peak)" {
   let n = 256
   release_all_slots()
   let src = noise_array(n, 0x2545f491)
@@ -99,7 +106,7 @@ test "白盒：正变换与朴素 DFT 一致（峰值相对 1e-12 以内）" {
   forward(s)
   let arena = slot_mem.unsafe_get(s)
 
-  // 朴素 DFT 的实部/虚部 —— 直接照定义写，不做任何优化。
+  // Naive DFT real/imaginary parts: written straight from the definition, no optimization.
   let want_re = FixedArray::make(n, 0.0)
   let want_im = FixedArray::make(n, 0.0)
   let nn = n.to_double()

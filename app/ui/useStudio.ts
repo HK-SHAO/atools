@@ -5,7 +5,7 @@ import type { Samples } from "../lib/arrays";
 import { imageToSpectrum, sniff, spectrumToPng, type Container, type ReadMode } from "../lib/image";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
-import { Aborted, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
+import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
 interface Source {
@@ -63,14 +63,15 @@ export function useStudio() {
   const enc = pick.enc;
 
   /**
-   * 开新一段叙事：旧的还原 / 编码当场作废。
+   * 开新一段叙事：旧的还原 / 编码当场作废，并返回本代的守卫（「还是本代吗」）。
    *
    * 原先靠 `alive()` 闭包把「不是本代」这件事传到计算里，现在计算在别的线程上，
    * 只能靠消息 —— 两边合起来是同一个代次守卫：主线程换代号 + 让 Worker 作废在算的活。
    */
-  const generation = useCallback((): number => {
+  const generation = useCallback((): (() => boolean) => {
     io.cancel();
-    return ++genRef.current;
+    const my = ++genRef.current;
+    return () => genRef.current === my;
   }, [io]);
 
   const jobRef = useRef<Job | null>(null);
@@ -122,7 +123,7 @@ export function useStudio() {
           return;
         }
         const sr = enc.sr > 0 ? enc.sr : source.sr;
-        const tuned = await io.resample(clipped, source.sr, sr, enc.mode === "compact" ? enc.fmax : 0);
+        const tuned = await io.resample(clipped, source.sr, sr, cutoffOf(enc));
         if (cancelled) return;
         await nextFrame();
 
@@ -161,8 +162,7 @@ export function useStudio() {
   /** 还原一张图的声音。`fine` 走精修档（更多迭代 + GL 打磨），「重建相位」用。 */
   const render = useCallback(
     async (spec: Spectrum, fine: boolean): Promise<Samples | null> => {
-      const my = generation();
-      const alive = () => genRef.current === my;
+      const alive = generation();
       const label = fine ? "精修" : "还原";
       setStage({ label, value: 0 });
       try {
@@ -215,8 +215,7 @@ export function useStudio() {
 
   const open = useCallback(
     async (file: File) => {
-      const my = generation();
-      const alive = () => genRef.current === my;
+      const alive = generation();
       setError(null);
       setStage({ label: "读取", value: 0 });
       try {
@@ -281,10 +280,8 @@ export function useStudio() {
   }, [render]);
 
   const demo = useCallback(async () => {
-    // 与 open / refine 同款代次守卫：演示在解码，用户中途点了「清空」或拖进新文件，
-    // 这个 Promise 回来时不能再往界面上盖。
-    const my = generation();
-    const alive = () => genRef.current === my;
+    // 演示在解码时用户可能点了「清空」或拖进新文件，回来时不能再往界面上盖。
+    const alive = generation();
     try {
       const buf = await (await fetch(DEMO_URL)).arrayBuffer();
       const { pcm, sr } = await decodeAudioFile(buf);

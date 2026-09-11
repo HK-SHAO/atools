@@ -1,6 +1,6 @@
 import { decodeAudioFile } from "../app/lib/audio";
 import { loadDsp, warmKernel } from "../app/lib/dsp";
-import { align, magnitudes, spectral } from "../app/lib/metric";
+import { align, levelGap, magnitudes, spectral } from "../app/lib/metric";
 import { READ_TUNE, imageToSpectrum, downloadName, spectrumToPng } from "../app/lib/image";
 import { FINENESS, type Encode, type Mode } from "../app/lib/params";
 import { SYNTH_TUNE } from "../app/lib/spectrum";
@@ -42,7 +42,7 @@ interface Metrics {
   conv: number;
   lsd: number;
   magSnr: number;
-  levelErr: number;
+  levelGap: number;
 }
 
 export interface Row {
@@ -537,20 +537,9 @@ export async function runCase(
       conv: Math.round(s.conv * 10) / 10,
       lsd: Math.round(s.lsd * 10) / 10,
       magSnr: Math.round(magSnr(ref, back) * 10) / 10,
-      levelErr: levelErr(spec, back),
+      levelGap: levelGap(spec, back),
     },
   };
-}
-
-function levelErr(a: Spectrum, b: Spectrum): number {
-  const n = Math.min(a.levels.length, b.levels.length);
-  if (n === 0 || a.meta.bins !== b.meta.bins) return 255;
-  let worst = 0;
-  for (let i = 0; i < n; i++) {
-    const d = Math.abs(a.levels[i]! - b.levels[i]!);
-    if (d > worst) worst = d;
-  }
-  return worst;
 }
 
 async function sigProbeBlob(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
@@ -631,7 +620,7 @@ export async function pngCheck(bits: number[]): Promise<string[]> {
     try {
       const blob = await spectrumToPng(spec);
       const { spec: back } = await imageToSpectrum(blob, downloadName("probe", spec.meta));
-      out.push(`${b} bit: ${blob.size}B  层级最大偏差 ${levelErr(spec, back)}`);
+      out.push(`${b} bit: ${blob.size}B  层级最大偏差 ${levelGap(spec, back)}`);
     } catch (e) {
       out.push(`${b} bit: 失败 — ${e instanceof Error ? e.message : String(e)}`);
     }

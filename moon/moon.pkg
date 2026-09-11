@@ -1,9 +1,11 @@
-// 宿主（JS）直调的数值库：无 _start、零 import，导出面即全部接口。
-// 内存契约、缓冲上限与降级路径写在 session.mbt 与 arena.mbt 顶部。
+// A numeric library called directly from JS: no _start, zero imports, the export surface is the
+// entire interface. Memory contracts, buffer caps and degradation paths are documented at the
+// top of session.mbt and arena.mbt.
 //
-// **这个包只用标准库**：`FixedArray` / `Bytes` / `@v128` 一概不引，`extern` 一个没有。
-// 取址那条边界走的是「导出函数返回数组，宿主拿到的整数就是数据区首址」，见 engine.mbt。
-// 于是同一份源码在 wasm / js / native 三个后端都能编 —— `bun run moon:ports` 盯着这条。
+// The package uses the standard library and nothing else: `extern` appears nowhere. The single
+// addressing convention is "an exported function returning an array hands the host the address of
+// its data area" (see engine.mbt), so the same source type-checks for wasm, js and native —
+// `bun run moon:ports` guards that.
 pkgtype(kind: "foreign_library")
 
 import {
@@ -14,11 +16,8 @@ import {
   "moonbitlang/core/bench",
 } for "wbtest"
 
-// 导出面用 #export_name 逐函数在源码内标注（名字贴着实现）。
+// Exports are marked per function with #export_name, next to the implementation.
+
 options(
-  link: {
-    "wasm": {
-      "export-memory-name": "memory",
-    },
-  },
+  link: { "wasm": { "export-memory-name": "memory" } },
 )

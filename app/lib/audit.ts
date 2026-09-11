@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { downloadName, imageToSpectrum } from "./image";
-import type { Metrics } from "./metric";
+import { levelGap, type Metrics } from "./metric";
 import { Aborted, type Spectrum } from "./spectrum";
 
 /**
@@ -43,18 +43,6 @@ async function recode(blob: Blob, mode: "jpeg" | "half"): Promise<Blob> {
   canvas.width = 0;
   canvas.height = 0;
   return out ?? blob;
-}
-
-function levelGap(a: Spectrum, b: Spectrum): number {
-  if (a.meta.bins !== b.meta.bins || a.meta.frames !== b.meta.frames) return -1;
-  const n = Math.min(a.levels.length, b.levels.length);
-  if (n === 0) return -1;
-  let worst = 0;
-  for (let i = 0; i < n; i++) {
-    const d = Math.abs(a.levels[i]! - b.levels[i]!);
-    if (d > worst) worst = d;
-  }
-  return worst;
 }
 
 async function one(

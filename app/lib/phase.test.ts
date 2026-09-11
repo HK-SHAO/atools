@@ -7,16 +7,17 @@ import { resample } from "./resample";
 import { hannOf, Frames } from "./stft";
 
 /**
- * 这里只剩**还住在宿主**的两条式子：相位反演（`phase.ts`）与重采样（`resample.ts`），
- * 外加它们的接口契约。
+ * 宿主侧**适配层**的契约：相位初值的绑定（`phase.ts` → `moon/pghi.mbt`）、重采样
+ * （`resample.ts`）、以及短时变换的骨架（`stft.ts`）。
  *
- * 原先这里还有三条在量内核的实现细节 —— 正变换与朴素 DFT 是否一致、汉宁窗是否对称、
- * 窗平方在 `hop = win/4` 时是否拼得平 —— 它们都已经被搬进 `moon/` 的白盒
- * （`plan_wbtest.mbt` / `fft_wbtest.mbt`）。搬过去之后判据更硬：量的是**内核真的在用的
- * 那张表**，而不是宿主拿同一条式子重算的一份复制品。
+ * PGHI 的**数值**已经搬进内核的白盒（`moon/pghi_wbtest.mbt` 量啁啾相位的加权 RMS）。
+ * 留在这里的是只有宿主这一层才可能做错的事：偏移与基址的拼法、进出两侧的拷贝、
+ * 退化输入的返回、以及内核到底有没有被调到。
  *
- * 于是本文件里的变换只是**造素材**的手段，走内核的 `Frames`（宿主不再自带 FFT）——
- * 性能不敏感，一致性要紧：素材的谱必须就是产品链会看到的那份谱。
+ * 变换本身没有第二种实现 —— 素材一律走 `Frames`（借内核会话槽）。所以本文件里的
+ * `stft()` 不是「另一份 STFT」，它是**产品链会看到的那份谱**；「频率步进带半个窗的 π」
+ * 正因此留在这里：内核侧的「真相位是不动点」用的是同一条路径造出来的相位，自洽，
+ * 锁不住补零与加窗的约定。
  */
 
 const TWO_PI = Math.PI * 2;
@@ -59,40 +60,60 @@ function stft(x: Float64Array, win: number, hop: number) {
   }
 }
 
-describe("phase from magnitude", () => {
-  test("a chirp's phase comes back almost exactly", () => {
-    const sr = 16000;
-    const win = 512;
-    const hop = 128;
-    const x = chirp(sr * 1, sr, 300, 4000);
-    const { mag, ph, frames, bins } = stft(x, win, hop);
-    const got = phaseFromMagnitude(mag, frames, bins, win, hop);
+describe("相位初值的绑定", () => {
+  test("幅度进、相位出，出来的是 frames×bins 个有限角度", () => {
+    const frames = 24;
+    const bins = 129;
+    const win = 256;
+    const hop = 64;
+    const mag = new Float64Array(frames * bins);
+    for (let i = 0; i < mag.length; i++) mag[i] = 1e-3 * (1 + (i % 7));
+    const before = mag.slice();
+    const out = phaseFromMagnitude(mag, frames, bins, win, hop);
 
-    let cr = 0;
-    let ci = 0;
-    for (let i = 0; i < mag.length; i++) {
-      const wt = mag[i]! ** 2;
-      cr += wt * Math.cos(got[i]! - ph[i]!);
-      ci += wt * Math.sin(got[i]! - ph[i]!);
+    expect(out.length).toBe(frames * bins);
+    // 幅度区要是被当成了相位区，这里会跳出量级（1e-3 对 π）。
+    let worst = 0;
+    for (let i = 0; i < out.length; i++) {
+      expect(Number.isFinite(out[i]!)).toBe(true);
+      worst = Math.max(worst, Math.abs(out[i]!));
     }
-    const k = Math.atan2(ci, cr);
-    let num = 0;
-    let den = 0;
-    for (let i = 0; i < mag.length; i++) {
-      const wt = mag[i]! ** 2;
-      num += wt * wrap(got[i]! - ph[i]! - k) ** 2;
-      den += wt;
-    }
-    const rms = (Math.sqrt(num / den) * 180) / Math.PI;
-    expect(rms).toBeLessThan(25);
+    expect(worst).toBeLessThanOrEqual(Math.PI);
+    expect(worst).toBeGreaterThan(0.5);
+    // 宿主只往内核拷，不动调用方的数组。
+    expect(mag.some((v, i) => v !== before[i]!)).toBe(false);
   });
 
-  test("the frequency step carries the half-window π", () => {
+  test("同一输入两次调用逐位相同（进出两侧都拷过，视图不会串）", () => {
+    const sr = 16000;
+    const { mag, frames, bins } = stft(chirp(sr, sr, 300, 4000), 256, 64);
+    const a = phaseFromMagnitude(mag, frames, bins, 256, 64);
+    const b = phaseFromMagnitude(mag, frames, bins, 256, 64);
+    expect(a.findIndex((v, i) => v !== b[i]!)).toBe(-1);
+  });
+
+  test("退化输入给零相位，不抛（内核在 open 就拒了这些参数）", () => {
+    const shallow = new Float64Array(4 * 5);
+    expect(phaseFromMagnitude(shallow, 1, 5, 256, 64).every(v => v === 0)).toBe(true);
+    expect(phaseFromMagnitude(shallow, 4, 1, 256, 64).every(v => v === 0)).toBe(true);
+    expect(phaseFromMagnitude(shallow, 4, 5, 256, 0).every(v => v === 0)).toBe(true);
+    // 幅度谱比 frames×bins 短：整条返回零相位，不做「半段算、半段留」。
+    expect(phaseFromMagnitude(new Float64Array(6), 4, 5, 256, 64).every(v => v === 0)).toBe(true);
+  });
+
+  test("无能量的谱走完整条路，留下零相位", () => {
+    const out = phaseFromMagnitude(new Float64Array(8 * 9), 8, 9, 256, 64);
+    expect(out.length).toBe(72);
+    expect(out.every(v => v === 0)).toBe(true);
+  });
+});
+
+describe("stft 约定", () => {
+  test("频率步进带半个窗的 π", () => {
     const sr = 16000;
     const win = 512;
     const hop = 128;
-    const x = chirp(sr * 1, sr, 1200, 1200);
-    const { mag, ph, frames, bins } = stft(x, win, hop);
+    const { mag, ph, frames, bins } = stft(chirp(sr, sr, 1200, 1200), win, hop);
     let top = 0;
     for (let i = 0; i < mag.length; i++) if (mag[i]! > top) top = mag[i]!;
     let num = 0;
@@ -107,13 +128,6 @@ describe("phase from magnitude", () => {
       }
     const deg = (Math.sqrt(num / den) * 180) / Math.PI;
     expect(deg).toBeLessThan(30);
-  });
-
-  test("a silent spectrum does not blow up", () => {
-    const mag = new Float64Array(64 * 33);
-    const out = phaseFromMagnitude(mag, 64, 33, 64, 16);
-    expect(out.length).toBe(mag.length);
-    for (let i = 0; i < out.length; i++) expect(Number.isFinite(out[i]!)).toBe(true);
   });
 });
 
