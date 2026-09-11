@@ -4,7 +4,6 @@ import type { Decoded } from "../lib/image";
 import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
-import PipelineWorker from "./pipeline.worker.ts?worker";
 
 export type { Metrics };
 
@@ -61,7 +60,7 @@ const scopes = new Map<string, Scope>();
 
 function connect(): Wire {
   if (wire) return wire;
-  const worker = new PipelineWorker();
+  const worker = new Worker(new URL("./pipeline.worker.js", document.baseURI), { type: "module" });
   const live: Wire = { worker, nextId: 1, pending: new Map() };
 
   const fail = (reason: string): void => {

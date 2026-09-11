@@ -3,19 +3,12 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "es2023",
     "lib": ["ES2023", "DOM"],
-    // types 留空是有意的：`app/` 跑在浏览器里，`process`、`import.meta.dirname`、任何服务端
-    // 全局在这里就不该可见 —— 它们在本机跑得通、进了浏览器才炸。真正用得着的那几条自己声明：
-    // 资源导入在 `app/assets.d.ts`，构建期常量与热更新在 `app/browser.d.ts`。
-    // `@types/react` 不受影响：它是按模块导入解析的，不走这里。
     "types": [],
     "skipLibCheck": true,
 
     /* Bundler mode */
     "moduleResolution": "bundler",
-    // `app/lib/` 是算法层，Bun 侧的评测台要直接加载它（`bench/kernel.ts`），所以那一层的相对
-    // 导入写显式扩展名 —— Bun 与 Node 一样不做扩展名补全。`app/ui/` 只管浏览器，不必跟。
     "allowImportingTsExtensions": true,
-    // `app/credit.ts` 从 package.json 取署名与版本号（打包器只留用到的那几个字段）
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
@@ -32,7 +25,6 @@
     "noFallthroughCasesInSwitch": true,
     "erasableSyntaxOnly": true
   },
-  // 测试不在这里：它们跑在 Bun 上，要 Bun 的类型（见 tsconfig.node.json）。
   "include": ["app"],
   "exclude": ["app/**/*.test.ts", "app/**/*.test.tsx"]
 }
