@@ -75,7 +75,7 @@ export function textToMeta(text: string): Meta | null {
       samples: samples!,
       bits: bits!,
       ref: ref!,
-      exact: exact! === 1,
+      exact: exact === 1,
     });
   } catch {
     return null;
@@ -98,7 +98,7 @@ export function metaFromName(name: string): Meta | null {
     samples: samples!,
     bits: bits!,
     ref: 0,
-    exact: bits! === 0,
+    exact: bits === 0,
   });
 }
 

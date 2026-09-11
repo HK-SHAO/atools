@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    // 测试跑在 Node 上（vitest），所以这里给 node 类型；`audio.test.ts` 要从 fixtures 读字节。
+    "types": ["vite/client", "node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "erasableSyntaxOnly": true
+  },
+  // 测试要 import 被它测的源码，所以两边都收进来。`app/` 那份只做类型检查、
+  // 不产出声明，靠 references 让测试去引用一个 noEmit 工程是做不到的；
+  // 重复收一遍源码、各写各的 tsbuildinfo 才是这条链上最简单的形状。
+  "include": ["app"]
+}

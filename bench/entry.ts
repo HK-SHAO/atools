@@ -98,7 +98,7 @@ function neuralRefine(spec: Spectrum): number {
   for (let f = 0; f < F; f++) {
     for (let b = 0; b < B; b++) {
       const i = f * B + b;
-      if (w[i]! === 0 || lv[i]! < lvMax * 0.05) continue;
+      if (w[i] === 0 || lv[i]! < lvMax * 0.05) continue;
       for (let df = 0; df < Pt; df++) {
         const ff = Math.min(F - 1, Math.max(0, f + df - 3));
         const fp = (ff / Math.max(F - 1, 1)) * 2 - 1;

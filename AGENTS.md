@@ -6,8 +6,10 @@
 
 ```bash
 bun install
-bun dev                  # 开发服务器 http://localhost:3000（源码直出 + HMR）
+bun dev                  # 开发服务器 http://localhost:3000（源码直出 + Fast Refresh）
 bun start                # 静态服务构建产物 dist/，本地验 PWA 与离线
+bun run typecheck        # `tsc -b`：三个工程一起检查（app / test / node，见下）
+bun run lint             # oxlint（含 React Compiler 那一组规则）
 bun run test             # 全量单元测试（vitest，Node 上跑；`npx vitest` 进监听模式）
 bun run test:kernel      # 内核白盒门禁：`moon test --release --target wasm`
 bun run moon:ports       # 内核同一份源码在 js / native 上也要能编（「只用标准库」的可证伪形式）
@@ -27,6 +29,10 @@ bun bench/ui.ts          # 界面链门禁：真页面走 演示 → 质检 → 
 每个评测台的判据、参数与环境变量见 `bench/README.md`。
 
 包管理一律 Bun（`bun install` / `bunx`）。单元测试与构建不绑运行时 —— `vitest` / `vite` 在 Node 上同样跑得通；`bench/` 那三个**真实 Chromium** 的驱动是 Bun 脚本（要用 `Bun.serve` 起本地服务、`Bun.spawn` 拉浏览器），它们的浏览器控制（关掉 HTTP 服务再冷加载、按 device metrics 出图、注入自建 bundle）vitest 的 browser mode 表达不了。
+
+**tsconfig 拆三个工程**（`tsconfig.json` 只是 solution）：`tsconfig.app.json`（`app/`，`types` 只给 `vite/client`）、`tsconfig.test.json`（`app/**/*.test.ts`，加 node 类型）、`tsconfig.node.json`（`vite.config.ts` / `scripts/` / `bench/`，node + bun 类型）。拆开是为了**让边界可证伪**：`Bun.*`、`import.meta.dir`、`process` 在 `app/` 里必须编译不过 —— 它们在本机会跑通，进了浏览器才炸。加一条断言时先故意写一次违例，确认真报错。
+
+**React 走官方插件 + `babel-plugin-react-compiler`**（`vite.config.ts`）。实测：`@vitejs/plugin-react` 本身对产物**零字节影响**（与不接逐字节相同），全部 +6.4 KB 都来自 React Compiler 的记忆化。`.oxlintrc.json` 里那一组 `react/*` 规则就是**编译器自己的退让理由** —— 它认不出的写法会静默不优化，于是把同一套校验放进 lint 让「没被优化」可见。当前有 10 条 warn，全部落在 `set-state-in-effect` / 依赖数组上：那是几个 effect 有意「取消在飞的作业 + 重置派生状态」，要改得重排异步取消与 ref 生命周期，属于另一件事。
 
 ## 架构
 
@@ -67,7 +73,7 @@ docs/        format-spec.md（图片格式契约）、algorithms.md（算法原�
 - `dsp.ts` 内核装载、握手、访存（`Job` / `Slot` / `Plan` 三件套，**视图只现切、不持有**）；`startKernel(url, {fft})` 是每一侧的启动入口（同一线程只加载一次）。
 - `stft.ts` STFT 宿主骨架：一个 `Frames` 占一个内核会话槽，窗与变换都来自内核表组。
 - `rtisi.ts` / `stub.ts` / `phase.ts` 三个薄壳（上传与分块推进），实现分别在 `moon/rtisi.mbt` / `moon/stub.mbt` / `moon/pghi.mbt`。
-- `spectrum.ts` 量化与重建调度〔**待搬进内核**〕；`image.ts` 容器嗅探、认图分级（可逆 / 紧凑 / 降级 / 通用）、缩放适配。
+- `spectrum.ts` 量化与重建调度（fast / fine，已裁定**不搬**：实测 30 s 细档合计 1.7 ms，是 `synthesise` 135 ms 的 1.2%，且搬它要把作业句柄穿进三个消费者 —— 见 `docs/algorithms.md`）；`image.ts` 容器嗅探、认图分级（可逆 / 紧凑 / 降级 / 通用）、缩放适配。
 - `audio.ts` 解码链与 `containerRate`；`pipeline.ts` + `pipeline.worker.ts` 跨线程代理（按 `scope` 分工、消息式取消）。
 
 **播放与「存音频」走 `synthesise(spec)` 的结果，不是编码前的原声。** 位深 / 窗长这类参数只改图，放原声等于让它们静默失效（2bit 与 8bit 听起来会一模一样）；这份还原结果按需算、随参数作废（`useStudio` 的 `listen`），时间轴长度一律取自 `meta.samples / meta.sr`。**这条没有自动门禁**（原先守它的界面冒烟台已删）：动播放链要人工核对 2bit 与 8bit 两次播出的 PCM 必须不同。

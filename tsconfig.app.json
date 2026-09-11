@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    // types 收窄到 vite/client 是有意的：它一钉死，`Bun.*`、`import.meta.dir`、`process`
+    // 这些宿主全局在 `app/` 里就不再可见 —— 它们在本机跑得通、进了浏览器才炸。
+    // 浏览器侧真正需要的只有资源模块声明与 `import.meta.env`（`*.css` / `*.ogg` 都在这）。
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    // `app/credit.ts` 从 package.json 取署名与版本号（打包器只留用到的那几个字段）
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "erasableSyntaxOnly": true
+  },
+  // 测试不在这里：它们跑在 Node 上，要 node 类型（见 tsconfig.test.json）。
+  "include": ["app"],
+  "exclude": ["app/**/*.test.ts", "app/**/*.test.tsx"]
+}

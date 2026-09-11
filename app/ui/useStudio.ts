@@ -146,8 +146,9 @@ export function useStudio() {
         setError(e instanceof Error ? e.message : "转换失败");
       } finally {
         release();
-        if (!alive()) return;
-        setStage(null);
+        // 不写成 `if (!alive()) return`：`finally` 里的 `return` 会盖掉 try/catch 的完成，
+        // 是 `no-unsafe-finally` 点名的形状，而这里要的只是「别往下写」。
+        if (alive()) setStage(null);
       }
     })();
 

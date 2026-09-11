@@ -100,7 +100,7 @@ describe("票根（跨边界的那一段）", () => {
   });
 
   test("认不出来的剖面给 null，而不是一个坏结果", () => {
-    expect(decodeStub(new Array(400).fill(111.2))).toBeNull();
+    expect(decodeStub(Array.from({ length: 400 }, () => 111.2))).toBeNull();
     expect(decodeStub([])).toBeNull();
   });
 });

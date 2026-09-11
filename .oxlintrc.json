@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc", "unicorn"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    // `babel-plugin-react-compiler` 已在编译期改写组件，这一组是**编译器自己的退让理由**：
+    // 它认不出的写法会静默地不优化，而静默正是最难察觉的那种退化。把编译器内部那套校验
+    // 也在 lint 里开一遍，「没被优化」就当场可见，不必靠人去猜。
+    "react/hooks": "error",
+    "react/purity": "error",
+    "react/immutability": "error",
+    "react/globals": "error",
+    "react/static-components": "error",
+    "react/set-state-in-render": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+
+    // 下面四条是**已知且有意**的偏离，降到 warn 而不是关掉：这几处 effect 都在做
+    // 「同步外部系统 + 重置派生状态」（取消在飞的作业、换 spec 就清空结果），也正是编译器
+    // 拒绝优化的地方。留着 warn 是为了让「编译器在这几个 hook 上没生效」永远看得见 ——
+    // 要真改掉得重排异步取消与 ref 的生命周期，那是另一件事，不该混进工具链这一轮。
+    "react/set-state-in-effect": "warn",
+    "react/exhaustive-effect-dependencies": "warn",
+    "react-hooks/exhaustive-deps": "warn",
+    "react/memo-dependencies": "warn",
+
+    // `react/refs` 把 JSX 上的 `ref={job.ref}` 读成「渲染期访问 ref 值」，连带把同一个元素上的
+    // `spec` / `audio` / `png` 也一起报了。本仓的 `ref` 是**格式字段**（编码前的参照样点，见
+    // docs/format-spec.md），不是 React ref，改名会动到文件格式，不做。
+    "react/refs": "off",
+
+    // 只适用于 classic JSX runtime；本项目是 `jsx: "react-jsx"`（自动运行时，无需 React 在作用域内）。
+    "react/react-in-jsx-scope": "off",
+
+    // 风格类，且这几条与本项目的取舍相反：
+    "unicorn/consistent-function-scoping": "off", // 只管「函数能否提出父作用域」，不判对错
+    "unicorn/prefer-add-event-listener": "off", // `node.onended = fn` 要的就是「只有一个处理者」
+    "unicorn/require-post-message-target-origin": "off", // 消息发给 Worker，没有 origin 这个参数
+    "unicorn/no-array-sort": "off" // 被点的几处排的都是刚 filter / 新建出来的数组
+  },
+  "ignorePatterns": ["dist", "node_modules", ".local", "moon/_build", "bench/bundle*.js"]
+}

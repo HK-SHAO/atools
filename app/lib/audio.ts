@@ -222,7 +222,7 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
       return await decodeWasm("amr", bytes);
     } catch (e) {
       console.error(e);
-      throw new Error(`解不出这段 AMR 音频。${DECODE_HELP}`);
+      throw new Error(`解不出这段 AMR 音频。${DECODE_HELP}`, { cause: e });
     }
   }
 

@@ -1,34 +1,8 @@
 {
-  "compilerOptions": {
-    // Environment setup & latest features
-    "lib": ["ESNext", "DOM"],
-    "target": "ESNext",
-    "module": "Preserve",
-    "moduleDetection": "force",
-    "jsx": "react-jsx",
-    "allowJs": true,
-    // vite/client 就是资源与 import.meta 的类型来源（*.css / *.ogg / import.meta.hot 都在里面）
-    "types": ["bun", "react", "vite/client"],
-
-    // Bundler mode
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-
-    // Best practices
-    "strict": true,
-    "skipLibCheck": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-
-    // Some stricter flags (disabled by default)
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noPropertyAccessFromIndexSignature": false
-  },
-
-  "exclude": ["dist", "node_modules", "moon/_build"]
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.test.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }

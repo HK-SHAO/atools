@@ -26,9 +26,20 @@ Worker 不设 `format`：默认 iife —— 模块 Worker 要 Firefox 114+，而
 `modulePreload: false`：Vite 默认给入口插 `<link rel="modulepreload">`，Safari 不消费这份缓存
 却会报 "preloaded but not used"；关掉它同时也让共享 chunk 不再进应用壳（壳只认 HTML 里真写的引用）。
 
-不引 `@vitejs/plugin-react`：按官方文档接上它（连 `babel-plugin-react-compiler`）产出的
-生产包与不接**逐字节相同**（实测同一内容哈希），却要多背 3 个包 / 7 MB。
-JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fast Refresh，本项目规模下可接受。
+React 走 `@vitejs/plugin-react` + `babel-plugin-react-compiler`（后者经 `@rolldown/plugin-babel` 的
+`reactCompilerPreset()`）。同一轮三档构建的**分层实测**：
+
+| 接法 | 入口 chunk | 预缓存壳 |
+|---|---|---|
+| 都不接 | 264 421 B | 339.88 KiB |
+| 只接 `react()` | 264 421 B（**逐字节相同**） | 339.88 KiB |
+| 再加 React Compiler | 270 801 B（+6 380 B / +2.4%） | 346.11 KiB |
+
+即：**插件本身零字节代价**（JSX 仍由打包器原生转换，它做的是 Fast Refresh 与 jsx-runtime 接线），
+多出来的 6.4 KB 全是编译器的自动记忆化（产物里 9 处 `react.memo_cache_sentinel`）。
+
+早先「接上却逐字节不变，故不引」那条结论**已作废**：当时走的是 `react({ babel: ... })` 通道，
+而那条通道根本没挂载，量到的是一个空操作（重测记在 `docs/migration.md` 的「被否掉的方案」）。
 
 ## 本地两个服务器
 
@@ -179,8 +190,9 @@ JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fas
   那一支写进缓存，一次偶发的缺文件就固化成永久坏死 —— 此后每次取到的都是这份 HTML，直到缓存换代。
   判据在 `cacheWillUpdate`：`response.ok` 且 `Content-Type` 不以 `text/html` 开头才收。
   （`index.html` 归预缓存清单管，本来也不走这条路。）
-- **只在生产注册**：`frontend.tsx` 以 `import.meta.hot` 为界，dev 下不注册，免得 HMR 被旧缓存顶着。
-  注册脚本不用插件注入（`injectRegister: null`）。
+- **只在生产注册**：`frontend.tsx` 以 `import.meta.env.PROD` 为界，dev 下不注册，免得旧缓存顶着源码。
+  判据刻意**不**取 `import.meta.hot` 的有无 —— 本模块不导出组件，改它只能是整页重载，
+  「有没有热更新运行时」与「生产 / 开发」是两件事。注册脚本不用插件注入（`injectRegister: null`）。
 - **门禁**：`bun bench/offline.ts`。**只加载一次页面**，后面所有断言都建立在这一次之上 ——
   若先加载第二遍再断网，安装期什么都没预热也照样能过（第一遍顺手就把壳填满了）。
   其中的「断网」是直接关掉 HTTP 服务，不是 CDP 模拟 —— 实测 `Network.emulateNetworkConditions`

@@ -164,9 +164,9 @@ if (process.env.PAGE !== "0") {
     for (const [at, text] of perf.notes) console.log(`  ${mark(at)}  ${text || "（静默）"}`);
     console.log("  长任务（>50ms，素材已先造好，「读取」之前的不计入）");
     let total = 0;
-    for (const [at, ms] of perf.tasks) {
-      total += ms;
-      console.log(`  ${mark(at)}  阻塞 ${ms}ms`);
+    for (const [at, block] of perf.tasks) {
+      total += block;
+      console.log(`  ${mark(at)}  阻塞 ${block}ms`);
     }
     console.log(`  合计阻塞 ${total}ms，共 ${perf.tasks.length} 个长任务`);
   } finally {

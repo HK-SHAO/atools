@@ -19,20 +19,17 @@ import { startKernel, wasmUrl } from "./lib/dsp";
 void startKernel(wasmUrl(new URL("..", import.meta.url).href), { fft: false });
 
 const elem = document.getElementById("root")!;
-const app = (
+createRoot(elem).render(
   <StrictMode>
     <App />
-  </StrictMode>
+  </StrictMode>,
 );
 
-// HMR 重跑本模块时复用同一个 root。
-// 不能直接写 `import.meta.hot.data.root`：生产构建里 `import.meta.hot` 是 undefined
-// （Bun 的打包器会把整个表达式折掉，Vite 不会），那样首屏就崩在取 .data 上。
-const hot = import.meta.hot;
-const root = hot?.data.root ?? createRoot(elem);
-if (hot) hot.data.root = root;
-root.render(app);
-
-if (!hot && "serviceWorker" in navigator) {
+// Service Worker 只在**生产**注册。判据是 `import.meta.env.PROD` 而不是「有没有热更新运行时」：
+// 本模块不导出组件，改它只能是整页重载，`import.meta.hot` 的存在与否与「生产/开发」无关。
+//
+// 静默失败：不支持的环境与隐私模式都会拒，那不该让首屏报错。dev 下没有 `sw.js` 这个文件
+// （它是构建期产物），注册上去也只是 404。
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
 }

@@ -1,3 +1,5 @@
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
 import { defineConfig } from "vitest/config";
 import { VitePWA } from "vite-plugin-pwa";
 import { moonKernel } from "./scripts/moon.ts";
@@ -11,14 +13,16 @@ import { pwaGate } from "./scripts/pwa.ts";
  * `modulePreload: false`：Vite 默认给入口插 `<link rel="modulepreload">`，Safari 不消费这份缓存
  * 却会报 "preloaded but not used"；关掉它同时也让共享 chunk 不再进应用壳（壳只认 HTML 里真写的引用）。
  *
- * 不引 @vitejs/plugin-react：按官方文档接上它（连 `babel-plugin-react-compiler`）产出的
- * 生产包与不接**逐字节相同**（实测同一内容哈希），却要多背 3 个包 / 7 MB。
- * JSX 由打包器原生转换；代价是改组件时走整页刷新而不是 Fast Refresh，本项目规模下可接受。
+ * React 走官方插件（`@vitejs/plugin-react`）+ `babel-plugin-react-compiler`：编译器把组件里
+ * 那些「稳定引用」自动加上记忆化，手写的 `useMemo`/`useCallback` 因此可以省着点用；dev 侧
+ * 顺带拿回 Fast Refresh（原先靠整页刷新）。
  */
 export default defineConfig({
   base: "./",
   plugins: [
     moonKernel(),
+    react(),
+    babel({ presets: [reactCompilerPreset()] }),
     /**
      * 应用壳的预缓存清单由 workbox 在构建期 glob `dist/` 生成，注入 `app/sw.ts` 的 `__WB_MANIFEST`。
      * 壳因此是**产物自己**说了算，不再需要「按 HTML 引用推导壳 + 内容指纹定缓存名 + 槽位替换」那一套
