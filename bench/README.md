@@ -13,7 +13,9 @@
 | `bun bench/offline.ts` | 是 | **PWA 门禁**：先 `bun run build:web`，再校验 manifest 可装（MIME、`scope`/`start_url` 落在应用根、图标可达）、iOS 头标签齐备、预缓存**逐项**对照（10 项一项不落，且 `sw.js` 不在其中）、断网可用。**只加载一次页面**（「第二遍才离线」不算数）；另验 SPA 回落出来的 HTML 不进运行期缓存、新版 SW 停在 `waiting` 不夺取正在用的页面。 |
 | `bun run perf` | 是 | **性能体检**：重采样相位表的倍数对照 + 相位数最多那几个组合「不得慢于逐样点」的门禁（机器无关，可当门禁）+ 真实页面里加载长音频的主线程长任务清单。`SECS=60` 改素材时长，`PAGE=0` 只跑前半。 |
 
-另有单元测试 `bun test`，覆盖 FFT/相位/PNG/参数等纯逻辑。
+另有单元测试 `bun run test`（vitest，Node 上跑），覆盖 FFT/相位/PNG/参数等纯逻辑。
+本目录的四个工具**不并进 vitest**：真实浏览器的三个要靠 `Bun.serve` 起本地服务、关掉服务再冷加载、
+按 device metrics 出图；`quality.ts` 虽不经浏览器，但印的是给人看的表而不是红/绿断言。
 
 **2026-09 删减**：`scale.ts`（尺度门禁）、`smoke.ts`（界面行为门禁）、`ml/`（相位修正网络训练脚本）
 已从仓库移除 —— 它们绑死的都是当时的界面形态与列宽，每改一次布局就要跟着改。**代价要认**：
@@ -58,7 +60,7 @@
 - **解码缓存**（cache.ts）：无头 Chromium 快照没有 AAC 等专有编解码，m4a 整曲走 WASM 解码要几分钟。启动时先用 bun 侧解码一次，按「路径 + mtime + size」落盘前 30 秒 PCM（`bench/.cache`，`PRECACHE_SEC` 可调），之后评测直接读缓存。
 - `DATA='["jpeg","s75"]'` —— **训练对转储**：走真实管线（encode → 降损 → 读回），把损伤相位/幅度/置信度与真值相位成对落盘 `bench/.data/`，供相位修正网络的训练（脚本自备，见 `docs/algorithms.md` 的 ML 负结果）。二进制布局见 `entry.ts` 的 `dumpPair`：40 字节小端头（frames/bins/win/hop/sr/bits/exact/ref/hasW）→ uint16 层级 → 损伤 cos/sin/置信度三路 uint8 → 对齐后的真值 cos/sin。层级统一升到 **uint16**，免得 compact 的 uint8 与 exact 的 uint16 在训练侧分成两套读法（compact 升位无损）。
 - `NEURAL=<weights.json>` —— 启用训练好的修正网络（读回后、合成前逐 bin 修正），用于 ML 实验对比。
-  这个口子留着，但权重文件与训练脚本**不随仓库**（本地训练产物，`bench/ml/*.json` 一直在 `.gitignore` 里）。
+  这个口子留着，但权重文件与训练脚本**不随仓库**（本地训练产物）。
 - 消融与全语料基准数字（含 ML 负结果）见 `docs/algorithms.md`。
 
 ## PWA 门禁（offline.ts）
@@ -128,7 +130,9 @@
 
 ## 约定
 
-- `docs/` 在 `.gitignore` 中（评测素材本地留档），评测台从 `docs/` 读音频。
+- `docs/` 只有三份说明与一张截图入库；评测素材（`docs/voice`、`docs/ra2`、`docs/audio-examples`）在
+  `.gitignore` 里（本地留档），评测台从那儿读音频。单元测试的夹具不在这里 —— 它们是入库的
+  `fixtures/`（10 个真容器样本，三百多 KB），由 `app/lib/audio.test.ts` 读。
 - Chromium 路径写死在 `cdp.ts` 顶部（本机快照），换机器只改这一处。
 - 改动读端/写端行为后：先 `bun run quality -- --gate`，再 `bun run bench`（含缩放/JPEG 矩阵）。
 - 动播放链或 `tokens.css` 之后，那两条没有门禁的链按 `AGENTS.md` 里写的人工步骤核一遍。

@@ -33,8 +33,9 @@ app/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/styles/ 里，组件上只有语义类名
 app/sw.ts    Service Worker（workbox：预缓存清单由 vite-plugin-pwa 构建期注入 + 运行期缓存）
 public/      原样复制进 dist/ 根的字面资源：manifest.webmanifest、logo.svg、icons/*.png
+fixtures/    单测的音频夹具（10 个真容器样本，三百多 KB）；`app/` 只放会进产物的东西
 bench/       评测台（cdp.ts 会话壳；quality.ts 是纯数值消融，不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
-docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）
+docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）· migration.md（迁移里程碑与消融记录）
 ```
 
 数据流：`pcm → encode() → Spectrum{levels, phaseCos/Sin, Meta} → PNG/容器 → 读图 → Spectrum → synthesise() → pcm`。`Meta` 是唯一权威参数（sr/win/hop/frames/bins/samples/bits/ref/exact），随 tEXt、文件名、条码票根三路冗余传递。

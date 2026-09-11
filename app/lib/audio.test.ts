@@ -3,9 +3,9 @@ import { readFile } from "node:fs/promises";
 import { containerRate, decodeAudioFile, sniffAudio } from "./audio";
 import type { Samples } from "./arrays";
 
-/** 夹具字节。用 node:fs 而不是 `Bun.file` —— 测试链跑在 vitest（Node）上。 */
+/** 夹具字节。素材在仓库根的 `fixtures/`：`app/` 只放会进产物的东西。 */
 const fixtureBytes = async (name: string): Promise<ArrayBuffer> => {
-  const bytes = await readFile(new URL(`./fixtures/${name}`, import.meta.url));
+  const bytes = await readFile(new URL(`../../fixtures/${name}`, import.meta.url));
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 };
 
