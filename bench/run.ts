@@ -87,8 +87,11 @@ session.on(m => {
 const ev = session.ev;
 const rows: Row[] = [];
 
+// 赋值那一步**不能**带 `return`：`ev` 一律 returnByValue，而 `__src.pcm` 是整段素材
+// （一首歌几百万个样点），把按值序列化回来会当场卡死 —— 症状是「一条日志都没有」，
+// 而它发生在第一条日志之前，看起来像启动挂了。要什么就只取那点标量。
 const load = async (file: string): Promise<[number, number]> => {
-  await ev(`return (window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)}));`);
+  await ev(`window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)});`);
   return ev<[number, number]>("return [window.__src.sr, window.__src.pcm.length]");
 };
 
@@ -158,7 +161,7 @@ try {
   if (process.env.DATA) {
     const dir = `${import.meta.dir}/.data`;
     for (const file of list) {
-      await ev(`return (window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)}));`);
+      await ev(`window.__src = await Bench.loadAudio(${JSON.stringify(`/audio/${file}`)});`);
       const tag = file.replaceAll("/", "_").replace(/\.[^.]+$/, "");
       for (const via of JSON.parse(process.env.DATA) as string[]) {
         const b64 = await ev<string>(
