@@ -2,7 +2,7 @@ import type { Samples } from "./arrays";
 import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params.ts";
 import { TUNE, phaseFromMagnitude } from "./phase.ts";
 import { resampledLength } from "./resample.ts";
-import { DEFAULT_BUDGET, rtisiLa } from "./rtisi.ts";
+import { rtisiLa } from "./rtisi.ts";
 import { Frames, coverFloor, coverage, olaFromPhase, padOf, uncovered } from "./stft.ts";
 
 export const BANDS = 2;
@@ -490,7 +490,7 @@ async function invert(
   const y = TUNE.rtisi
     ? await rtisiLa(target, frames, bins, win, hop, samples, {
         iters: fine ? TUNE.fine.rtisiIters : TUNE.rtisiIters,
-        budget: fine ? TUNE.fine.rtisiBudget : DEFAULT_BUDGET,
+        budget: fine ? TUNE.fine.rtisiBudget : TUNE.rtisiBudget,
         warm,
         band,
         tick: (m, total) => {

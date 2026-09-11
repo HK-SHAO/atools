@@ -43,12 +43,23 @@ bun start
 下面这些是实测结论，不是文档承诺；换工具链或升级 Bun 时先重测：
 
 - **没有 `?url` / `?worker` 这类后缀。** `.wasm` 直接 import 拿到的是**路径字符串**：dev 下是 `/_bun/asset/<hash>.wasm`，产物里是与引用它的 chunk 同目录的相对路径。
-- **打包器不认 `new Worker(new URL(…))`。** 那个调用点被原样透传、Worker 文件根本不产出。所以 Worker 是**独立入口**、固定文件名，应用侧手写 `new URL("pipeline.worker.js", document.baseURI)`。
+- **Worker 只能单独构建，没有「顺手产出」的写法。** 看着该管用的五种写法都试过，Bun 1.4.3 一种都不接：
+
+  | 写法 | 实测结果 |
+  | --- | --- |
+  | `new Worker(new URL("./x.js", document.baseURI))` | 调用点原样透传，Worker 文件不产出 |
+  | `new Worker(new URL("./x.ts", import.meta.url))` | 同上（`import.meta.url` 是源码的 `file://` 路径） |
+  | `import u from "./x.ts?url"` | `Could not resolve` |
+  | `import u from "./x.ts" with { type: "file" }` | 产出的是**逐字节拷贝的 `.ts`**：不转译、也不打包 |
+  | `Bun.serve({ routes: { "/x.js": "./x.ts" } })` | 路由值不接受字符串；`Bun.file("./x.ts")` 供出去的是**未打包的原文**，`import` 原样留在里面 |
+
+  所以 `scripts/build.ts` 与 `scripts/serve.ts` 各自有一个**独立**的 Worker 入口构建，固定文件名 `pipeline.worker.js`，应用侧手写 `new URL("pipeline.worker.js", document.baseURI)`。这不是冗余，是打包器边界 —— 想省掉它，先重跑这张表。
 - **dev 下 `import.meta.url` 被静态替换成源码的 `file://` 路径**，`new URL(x, import.meta.url)` 在产物里也不改写。Worker 地址一律以 `document.baseURI` 为基准——`new URL(绝对路径, 任意基准)` 直接返回那个绝对路径，于是 dev（根绝对路径）与产物（相对路径）用同一个表达式。
 - **扁平布局是 manifest 的硬约束**，不是审美：`manifest.webmanifest` 是手写件、不经打包器改写，`"scope": "./"` 与 `./icons/…` 都按它自己所在的位置解析，一挪就装不起来。
 - **`import.meta.hot` 就是「开发 / 生产」判据**：dev 是真对象，生产构建折叠成 `undefined`（`app/ui/pipeline.ts` 的 HMR 清理挂在它上面）。
 - **`@types/node` 删不得**：`bun-types/index.d.ts` 第一行就 `/// <reference types="node" />`，移走它连 `process` 与 `node:fs/promises` 都解析不出来。「移除 node」只落在运行时与脚本这一层。
 - **React Compiler 判「有没有生效」看产物里有没有 `react.memo_cache_sentinel`**，不能看见体积没变就下结论。`oxlint` 的 `react/*` 那组就是编译器自己的退让理由（认不出的写法会静默不优化），两边必须一起开。
+- **入口 chunk 的字节不只由入口自己的代码决定。** 给一个只从 worker 走的模块加一条 `import`（`app/lib/rtisi.ts` 引入 `TUNE`），入口里**它一行都没有**（独有的错误字符串在入口里 0 次、worker 里 1 次）、体积**逐字节同长**（244 632 B），却有 251 处标识符各差 1 字节、文件名跟着从 `index-6ayybrnh.js` 变成 `index-w3zhy93z.js` —— 压缩器的短名分配随模块图整体挪了位。**同一棵树连打两次是逐字节相同的**（单独验过），所以这不是不确定性；但**「入口哈希变了」不能当回归的证据**，这类改动要用行为门禁（`quality --gate` 五项 + `kernel` 倍率）判。
 
 ## 开发服务
 

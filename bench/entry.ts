@@ -128,6 +128,7 @@ export function setTune(
     gamma: number;
     rtisi: boolean;
     rtisiIters: number;
+    rtisiBudget: number;
     rtisiGl: number;
     relaxFloor: boolean;
     phaseReliable: number;
@@ -141,6 +142,7 @@ export function setTune(
   if (t.gamma !== undefined) TUNE.gamma = t.gamma;
   if (t.rtisi !== undefined) TUNE.rtisi = t.rtisi;
   if (t.rtisiIters !== undefined) TUNE.rtisiIters = t.rtisiIters;
+  if (t.rtisiBudget !== undefined) TUNE.rtisiBudget = t.rtisiBudget;
   if (t.rtisiGl !== undefined) TUNE.rtisiGl = t.rtisiGl;
   if (t.relaxFloor !== undefined) TUNE.relaxFloor = t.relaxFloor;
   if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;

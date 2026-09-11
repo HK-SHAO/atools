@@ -92,3 +92,50 @@ describe("perceptual metrics", () => {
     expect(envelopeCorr(x, y, sr)).toBeGreaterThan(0.9);
   });
 });
+
+describe("lag search", () => {
+  const scan = (a: Samples, b: Samples, span: number): number => {
+    const n = Math.min(a.length, b.length);
+    let bv = -2;
+    for (let lag = -span; lag <= span; lag++) {
+      let sa = 0;
+      let sb = 0;
+      let sab = 0;
+      for (let i = 0; i < n; i++) {
+        const j = i + lag;
+        if (j < 0 || j >= n) continue;
+        sa += a[i]! * a[i]!;
+        sb += b[j]! * b[j]!;
+        sab += a[i]! * b[j]!;
+      }
+      const v = sab / Math.sqrt(Math.max(sa * sb, 1e-30));
+      if (v > bv) bv = v;
+    }
+    return bv;
+  };
+
+  const shifted = (x: Samples, by: number): Samples => {
+    const y = new Float32Array(x.length);
+    for (let i = 0; i < x.length; i++) {
+      const j = i + by;
+      y[i] = j >= 0 && j < x.length ? x[j]! : 0;
+    }
+    return y as Samples;
+  };
+
+  test("能量用前缀和取整段，与逐点累加给出同一个峰", () => {
+    const x = voice(0.5);
+    for (const by of [-511, -353, -31, -16, -1, 0, 1, 9, 16, 137, 511]) {
+      const y = shifted(x, by);
+      expect(Math.abs(align(x, y, 512).corr - scan(x, y, 512))).toBeLessThan(1e-9);
+    }
+  });
+
+  test("峰落在任意整数延迟上都定得住", () => {
+    const x = voice(0.5);
+    for (const by of [-480, -97, -33, 0, 33, 97, 480]) {
+      const y = shifted(x, by);
+      expect(align(x, y, 512).corr).toBeGreaterThan(0.999999);
+    }
+  });
+});

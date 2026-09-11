@@ -67,7 +67,8 @@ Plan 表按窗长缓存，Session slot 池 6 个（必须归还），Job arena �
 | PWA 可装与断网可用 | `offline` | 断网后内核取不回 200 |
 
 `bun run bench` 是端到端评测台（真 Chromium 跑完整链路，覆盖 PNG / JPEG / 缩放降级），
-不是门禁但发布前该跑。`moon:ports` 与 `moon fmt --check` 管语言与格式。
+不是门禁但发布前该跑。**它的 `ms` 列含测量自身的对齐搜索**（O(n·span)，30 秒素材约 2 秒），
+读它判性能前先减掉，见 [algorithms.md](algorithms.md)。`moon:ports` 与 `moon fmt --check` 管语言与格式。
 
 跨分支判「有没有下降」用 `git worktree` 出两侧、跑同一批仪器，不要读 diff；比绝对值前先找一列阴性对照，
 **低于 1.2 倍的差不要写成结论**。

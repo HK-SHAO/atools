@@ -8,6 +8,7 @@ export const TUNE = {
   tol: [0.1, 1e-10] as [number, number],
   rtisi: true,
   rtisiIters: 8,
+  rtisiBudget: 5e7,
   rtisiGl: 0,
   anchorLambda: 0.85,
   deadZone: 0.1,

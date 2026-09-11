@@ -1,4 +1,5 @@
 import { jobBytes, jobSlice, mustKernel } from "./dsp.ts";
+import { TUNE } from "./phase.ts";
 
 export interface Band {
   levels: Uint8Array;
@@ -13,8 +14,6 @@ interface RtisiOptions {
   band?: Band | null;
   tick?: (m: number, frames: number) => Promise<void> | void;
 }
-
-export const DEFAULT_BUDGET = 5e7;
 
 const PART = { mag: 0, warm: 1, y: 2, band: 4 } as const;
 
@@ -43,10 +42,10 @@ export async function rtisiLa(
     win,
     Math.max(1, Math.round(hop)),
     samples,
-    Math.max(1, opts.iters ?? 8),
+    Math.max(1, opts.iters ?? TUNE.rtisiIters),
     opts.warm ? 1 : 0,
     band ? 1 : 0,
-    opts.budget ?? DEFAULT_BUDGET,
+    opts.budget ?? TUNE.rtisiBudget,
   );
   if (h === 0) throw new Error(`RTISI 作业开不出来：frames=${frames} win=${win} bins=${bins}`);
 
