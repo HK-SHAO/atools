@@ -16,9 +16,11 @@ interface WorkerScope {
   addEventListener(type: "fetch", listener: (event: Routed) => void): void;
 }
 
-const { cache: CACHE, home, files } = PRECACHE;
+const { cache: version, home, files } = PRECACHE;
 
 const scope = self as unknown as WorkerScope;
+const PREFIX = `atools:${scope.location.pathname}:`;
+const CACHE = PREFIX + version;
 const HOME = new URL(home, scope.location.href).href;
 const SHELL = files.map(file => new URL(file, scope.location.href).href);
 
@@ -42,7 +44,11 @@ scope.addEventListener("activate", event => {
   event.waitUntil(
     caches
       .keys()
-      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
+      .then(keys =>
+        Promise.all(
+          keys.filter(key => key.startsWith(PREFIX) && key !== CACHE).map(key => caches.delete(key)),
+        ),
+      )
       .then(() => scope.clients.claim()),
   );
 });
@@ -52,18 +58,22 @@ scope.addEventListener("fetch", event => {
   if (!usable(request)) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(() => caches.match(HOME).then(hit => hit ?? Response.error())));
+    event.respondWith(
+      fetch(request).catch(() =>
+        caches.match(HOME, { cacheName: CACHE }).then(hit => hit ?? Response.error()),
+      ),
+    );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then(
+    caches.match(request, { cacheName: CACHE }).then(
       hit =>
         hit ??
         fetch(request).then(response => {
           if (cacheable(response)) {
             const copy = response.clone();
-            void caches.open(CACHE).then(cache => cache.put(request, copy));
+            event.waitUntil(caches.open(CACHE).then(store => store.put(request, copy)));
           }
           return response;
         }),
