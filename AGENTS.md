@@ -15,7 +15,7 @@ bun run test:kernel      # 内核白盒门禁：`moon test --release --target wa
 bun run moon:ports       # 内核同一份源码在 js / native 上也要能编（「只用标准库」的可证伪形式）
 bun run bench:kernel     # 内核自带基准：`moon bench --release --target wasm`
 bun run bench:moonebench # `moon bench` 读数的归属：同一份产物拿到 V8 里量（先 bench:kernel:build）
-bun run build:web        # 生产构建 → dist/（build:toy 另出 toy.zip）
+bun run build:web        # 生产构建 → dist/
 bun run build:wasm       # 单独重编数值内核（--force 全量重编，否则按 mtime 判 stale）
 bun run deploy           # build:web → Cloudflare 纯静态部署（配置在 cloudflare/wrangler.jsonc）
 bun run quality          # 算法消融：15 用例 × 6 指标，改数值层前后逐项比（--gate 出门禁退出码）
@@ -57,7 +57,7 @@ moon/        数值内核（MoonBit → `moon/_build/…/dsp.wasm`，由 `app/li
              （`bun run moon:ports` 盯着）。三层内存、边界约定、导出面与搬迁流程见 `moon/README.md`。
 scripts/     build.ts（编内核 → 打包 worker → 打包应用 → 推应用壳 → 取壳指纹 → 把壳装进 SW）、
              serve.ts（dev 与 --dist 两种模式）、moon.ts（编内核：dev 期盯源码重编、构建前先编）、
-             toy.ts（压 toy.zip）、test-setup.ts（`bun test` 的 preload：先编一次内核）
+             test-setup.ts（`bun test` 的 preload：先编一次内核）
 app/styles/  样式，`index.css` 一个 `@import` 入口，按 reset → tokens → primitives → layout →
              spectrogram → workbench 分层
 app/index.html  唯一入口（Bun 的 HTML loader 的入口约定），与 `frontend.tsx` 同级；它引到的

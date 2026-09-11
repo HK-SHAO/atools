@@ -16,7 +16,6 @@
     "start": "bun scripts/serve.ts --dist",
     "build:web": "bun scripts/build.ts",
     "build:wasm": "bun scripts/moon.ts --force",
-    "build:toy": "bun scripts/build.ts && bun scripts/toy.ts",
     "deploy": "bun scripts/build.ts && bunx wrangler deploy --config cloudflare/wrangler.jsonc",
     "typecheck": "tsc -b",
     "test": "bun test",

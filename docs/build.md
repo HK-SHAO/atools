@@ -1,7 +1,6 @@
 # 构建与样式管线
 
-纯静态产物，无后端。源码一份，出两个包：`dist/` 目录给静态服务器（`bun run build:web`），
-`toy.zip` 给 B站 Toy（`bun run build:toy` = 构建 + `scripts/toy.ts` 打包）。
+纯静态产物，无后端。源码一份，出 `dist/` 目录给任意静态服务器（`bun run build:web`）。
 
 ## 构建：Bun.build，四步
 
@@ -34,7 +33,7 @@
 - `.wasm` 是 Bun 的**内置 loader**：导入拿到的是**路径字符串**，不是模块对象、也不是 DataURL。
   dev 下是根绝对路径 `/_bun/asset/<hash>.wasm`；产物里是 `dsp-<hash>.wasm`，与引用它的 chunk 同目录。
 - 拿到之后要**补成绝对地址再用**（`kernelUrl()`）：产物里给的是相对模块自身的路径，直接 `fetch`
-  会按**文档**地址解析，深链（`/toy/<slug>/a/b`）下就取错文件。dev 那条本来就是绝对路径，原样放行。
+  会按**文档**地址解析，深链（`/sub/path/a/b`）下就取错文件。dev 那条本来就是绝对路径，原样放行。
 - **谁进壳**：按 `.wasm` 后缀显式挑进壳。读图链在主线程上，每一步都要问内核，断网后编不了图
   就等于应用废了。
 - 首屏并不需要它**下载完成**：它在入口 chunk 执行时开始取，与 React 首次渲染并行，而真正用到它的
@@ -123,9 +122,7 @@ Bun 默认 `modulePreload: true`，会给入口**静态**依赖的 chunk 插 `<l
 端口与地址钉死在 `127.0.0.1:3000`：PWA 只认回环上的 `http://`（那才算安全上下文，Service Worker
 才装得上）。dev 那条 worker 路由的路径不是配出来的，而是入口脚本相对解析的**结果**（见上）。
 
-`dist/` 是默认产物，多文件，交给任意静态服务器。`scripts/toy.ts` 在原地产出 `dist/` 之后把它压成
-`toy.zip`，`index.html` 落在包根。zip 是「更新」语义（已存在的包不会自动剔除消失的文件），
-所以每次先删掉旧包再压，且压的是目录里的**内容**（`cd dist && zip ... .`）而不是目录本身。
+`dist/` 是唯一产物，多文件，交给任意静态服务器（Cloudflare 那份配置见 `cloudflare/`）。
 
 ## 样式：分层 CSS
 
@@ -303,7 +300,7 @@ workbox 的代价：`bun add` 装 319 个包、`node_modules` 94 MB → 162 MB�
   这不是洁癖，是「首次访问不该下载七种音频解码器」。它的第 2 版是另一条反面教材：删掉安装期预热
   就等于丢掉了首次访问的离线能力，所以本仓库的门禁改成**只加载一次**就必须全绿，不接受「第二遍才离线」。
 - **manifest 与图标不进打包器的改写范围**，理由也一样：它们交出去生成会把 `<link rel="manifest">`
-  与 `scope` / `start_url` 写成以 base 为前缀的路径，`/toy/<slug>/` 这类子路径部署就断了。
+  与 `scope` / `start_url` 写成以 base 为前缀的路径，`/sub/path/` 这类子路径部署就断了。
 - **`_headers` 不需要**。它当年给 `/sw.js` 写 `Cache-Control: no-cache`；而 Cloudflare Workers 的静态
   资源**默认**就是 `Cache-Control: public, max-age=0, must-revalidate` + `ETag`，每次回源校验，
   `sw.js` 不会卡在旧版本。哈希资源同理不配 `immutable` —— 受控页面根本不走 HTTP，走的是 SW 缓存。
