@@ -165,7 +165,7 @@ const TYPES: Record<string, string> = {
   ".wasm": "application/wasm",
 };
 
-export interface Site {
+interface Site {
   dir?: string;
   files?: Record<string, string | Uint8Array>;
   spa?: boolean;

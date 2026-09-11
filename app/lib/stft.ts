@@ -60,33 +60,6 @@ export function padOf(x: ArrayLike<number>, win: number): Float64Array {
   return out;
 }
 
-export function stftOf(
-  x: Samples,
-  win: number,
-  hop: number,
-  frames: number,
-): { mag: Float64Array; ph: Float64Array; bins: number; padded: number } {
-  const core = new Frames(win);
-  try {
-    const bins = core.bins;
-    const pad = padOf(x, win);
-    const mag = new Float64Array(frames * bins);
-    const ph = new Float64Array(frames * bins);
-    const { re, im } = core.data();
-    for (let f = 0; f < frames; f++) {
-      core.analyse(pad, f * hop);
-      const base = f * bins;
-      for (let b = 0; b < bins; b++) {
-        mag[base + b] = Math.sqrt(re[b]! ** 2 + im[b]! ** 2);
-        ph[base + b] = Math.atan2(im[b]!, re[b]!);
-      }
-    }
-    return { mag, ph, bins, padded: pad.length };
-  } finally {
-    core.close();
-  }
-}
-
 export function olaFromPhase(
   target: Float64Array,
   phase: Float64Array,

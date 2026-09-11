@@ -23,8 +23,6 @@ export function usePlayback(
   const nodeRef = useRef<AudioBufferSourceNode | null>(null);
   const rafRef = useRef(0);
   const posRef = useRef(0);
-  const atRef = useRef(0);
-  const t0Ref = useRef(0);
 
   const headRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
@@ -121,15 +119,14 @@ export function usePlayback(
 
       node.start(0, from);
       nodeRef.current = node;
-      atRef.current = from;
       startedRef.current = from;
-      t0Ref.current = ctx.currentTime;
+      const t0 = ctx.currentTime;
       liveRef.current = true;
       mark(true);
 
       const tick = () => {
         if (nodeRef.current !== node) return;
-        const pos = atRef.current + (ctx.currentTime - t0Ref.current);
+        const pos = from + (ctx.currentTime - t0);
         posRef.current = Math.min(Math.max(0, pos), duration);
         paint(posRef.current);
         rafRef.current = requestAnimationFrame(tick);

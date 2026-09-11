@@ -10,6 +10,7 @@ export const TUNE = {
   rtisiIters: 8,
   rtisiGl: 0,
   anchorLambda: 0.85,
+  deadZone: 0.1,
   fine: {
     rtisiIters: 16,
     rtisiBudget: 2e8,

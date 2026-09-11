@@ -24,8 +24,6 @@ const DB_MAX = 0;
 const DB_SPAN = DB_MAX - DB_MIN;
 const DB_TO_LIN = Math.LN10 / 20;
 
-export const SYNTH_TUNE = { phaseDeadZone: 0.1 };
-
 const SLICE_MS = 12;
 
 const GL_BUDGET_MS = 2600;
@@ -297,7 +295,7 @@ async function synthesiseExact(
         const h = Math.sqrt(cr * cr + cs * cs);
         let c: number;
         let s: number;
-        if (h > SYNTH_TUNE.phaseDeadZone) {
+        if (h > TUNE.deadZone) {
           c = cr / h;
           s = cs / h;
           holdC[b] = c;

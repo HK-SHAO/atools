@@ -4,7 +4,6 @@ import { align, levelGap, magnitudes, spectral } from "../app/lib/metric";
 import { downloadName } from "../app/lib/container";
 import { READ_TUNE, imageToSpectrum, spectrumToPng } from "../app/lib/image";
 import { FINENESS, type Encode, type Mode } from "../app/lib/params";
-import { SYNTH_TUNE } from "../app/lib/spectrum";
 import { resample, slice } from "../app/lib/resample";
 import { encode, synthesise, type Spectrum } from "../app/lib/spectrum";
 import { TUNE } from "../app/lib/phase";
@@ -145,7 +144,7 @@ export function setTune(
   if (t.rtisiGl !== undefined) TUNE.rtisiGl = t.rtisiGl;
   if (t.relaxFloor !== undefined) TUNE.relaxFloor = t.relaxFloor;
   if (t.phaseReliable !== undefined) READ_TUNE.phaseReliable = t.phaseReliable;
-  if (t.phaseDeadZone !== undefined) SYNTH_TUNE.phaseDeadZone = t.phaseDeadZone;
+  if (t.phaseDeadZone !== undefined) TUNE.deadZone = t.phaseDeadZone;
   if (t.anchorLambda !== undefined) TUNE.anchorLambda = t.anchorLambda;
   if (t.fine) Object.assign(TUNE.fine, t.fine);
   return JSON.stringify(TUNE);
