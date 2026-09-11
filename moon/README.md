@@ -64,7 +64,7 @@ sliced. Views therefore must never be held: `dsp_job_d` / `dsp_job_b` / `dsp_slo
 | `plan.mbt` | per-window tables: bit reversal, twiddles, Hann window |
 | `session.mbt` | session slot pool |
 | `pair.mbt` | two real transforms packed into one complex transform (halves the FFT count of RTISI) |
-| `fft.mbt` | complex FFT, inverse, and `real_ifft` (one-sided spectrum → conjugate-symmetric, then inverse) |
+| `fft.mbt` | complex FFT (`dsp_fft`, plus `inverse` for tests) and `real_ifft` — the one-sided → conjugate-symmetric inverse that the host's exact path and RTISI's inner loop both call |
 | `arena.mbt` | job arenas (variable-size, one per job) |
 | `rtisi.mbt` | RTISI-LA phase reconstruction (the whole iterative loop) |
 | `pghi.mbt` | PGHI phase initialisation: the magnitude spectrum in, a phase guess out |
@@ -96,13 +96,17 @@ Failure is expressed in return values, never by throwing across the boundary:
 - `dsp_real_ifft` returns `1` when it ran, `0` when it refused.
 
 Exports are grouped by layer: `dsp_abi` · `dsp_probe_*` · `dsp_plan_*` · `dsp_slot_*` ·
-`dsp_pair_*` · `dsp_job_*` · `dsp_pghi_*` · `dsp_rtisi_*` · `dsp_stub_*`. Every one of them
-carries an English doc comment in the source; `dsp_*` names are the ABI (fixed) while the
-MoonBit identifier may be named differently (e.g. `dsp_job_words` ↔ `job_words_of`).
+`dsp_pair_*` · `dsp_fft` · `dsp_real_ifft` · `dsp_job_*` · `dsp_pghi_*` · `dsp_rtisi_*` ·
+`dsp_stub_*`. That list is the whole surface, and it is checkable rather than remembered:
+`WebAssembly.Module.exports` on the built module and the `Kernel` interface in `app/lib/dsp.ts`
+agree one for one. `dsp_*` names are the ABI (fixed) while the MoonBit identifier may be named
+differently (e.g. `dsp_job_words` ↔ `job_words_of`).
 
-The surface is the ABI: `dsp_abi` is `7`. Anything the host never calls is **not exported** —
-`inverse`, `pair_forward` and `pair_inverse` are still the functions RTISI and the benchmarks
-call, but they are plain `fn`s now, so a grep for `dsp_` in `app/` and `bench/` is the list.
+The surface is the ABI: `dsp_abi` is `7`. Anything the host never calls stays unexported —
+`inverse`, `pair_forward` and `pair_inverse` are `pub` only within the package and carry no
+`#export_name`, so that attribute is what separates "ABI" from "entry point for our own tests":
+`inverse` is the oracle `real_ifft` is compared against, and RTISI calls the `pair_*` pair.
+A grep for `dsp_` in `app/` and `bench/` is therefore the list.
 
 ## Build and verify
 
@@ -122,7 +126,9 @@ separated by `///|`, the order of blocks does not matter, and a formatting pass 
 safe to run at any point.
 
 It does strip redundant parentheses, so "this association order matches the reference" cannot be
-said with brackets — write it in a comment instead (`plan.mbt`'s twiddle loop does). Note that
+said with brackets — and this directory carries **no comments at all** (`///|` is `moon fmt`'s
+block separator, not prose), so it cannot be said that way either. A constraint that has to
+survive a reformat has to be expressed as code or pinned by a test. Note that
 the tables are **not** bit-identical to a JS recomputation anyway: `@math.cos` and V8's
 `Math.cos` disagree in the last bit on roughly 4% of the points, which is measured in
 `docs/algorithms.md` and is far below the precision the encoders store.
@@ -142,8 +148,7 @@ The migration recipe, in this order:
    table is not bit-identical to a JS recomputation — that one belongs in a measurement, not
    in an assertion).
 3. Leave the host with nothing numeric — no reference implementation, no fallback branch.
-4. Re-export through `dsp_*` with an English doc comment, and bump `dsp_abi` if the export
-   surface or its semantics changed.
+4. Re-export through `dsp_*`, and bump `dsp_abi` if the export surface or its semantics changed.
 5. Before moving anything, check its domain against the segment caps (`max_job_words`,
    `max_job_bytes`). Those are sized for **pixels**; a module that works in the **sample**
    domain (`resample` wants `src + dst` in one segment, and a 96 kHz source reaches that cap at

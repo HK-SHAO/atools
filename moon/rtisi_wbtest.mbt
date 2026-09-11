@@ -474,7 +474,6 @@ test "white box: illegal parameters are rejected, not crashed on" {
   assert_eq(rtisi_off(max_jobs + 1, 2), -1)
   assert_eq(rtisi_off(0, 3), -1)
   assert_eq(rtisi_levels(0, 0), -1)
-  assert_eq(rtisi_len(0, 0), 0)
   assert_eq(job_words_of(0), 0)
   assert_eq(rtisi_run(0, 0, 4), 0)
   rtisi_finish(0)

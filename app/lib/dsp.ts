@@ -50,7 +50,6 @@ interface Kernel {
   ): number;
   dsp_rtisi_off(handle: number, which: number): number;
   dsp_rtisi_levels(handle: number, which: number): number;
-  dsp_rtisi_len(handle: number, which: number): number;
   dsp_rtisi_run(handle: number, from: number, to: number): number;
   dsp_rtisi_finish(handle: number): void;
   dsp_rtisi_close(handle: number): void;

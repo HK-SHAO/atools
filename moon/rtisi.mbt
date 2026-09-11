@@ -16,7 +16,6 @@ priv struct RtJob {
   padded : Int
   span : Int
   full : Int
-  plan_id : Int
   slot_id : Int
   has_warm : Bool
   has_band : Bool
@@ -128,7 +127,6 @@ pub fn rtisi_open(
     padded,
     span,
     full: win / 2 + 1,
-    plan_id,
     slot_id,
     has_warm: has_warm != 0,
     has_band: has_band != 0,
@@ -185,15 +183,6 @@ pub fn rtisi_levels(h : Int, which : Int) -> Int {
       } else {
         -1
       }
-  }
-}
-
-///|
-#export_name("dsp_rtisi_len")
-pub fn rtisi_len(h : Int, which : Int) -> Int {
-  match rt_at(h) {
-    None => 0
-    Some(job) => if which == 0 { job.frames * job.bins } else { job.padded }
   }
 }
 
@@ -468,13 +457,7 @@ pub fn rtisi_run(h : Int, from : Int, to : Int) -> Int {
           job.slot.unsafe_set(n, job.arena.unsafe_get(job.off_work + n))
           job.slot.unsafe_set(win + n, job.arena.unsafe_get(job.off_workim + n))
         }
-        job.slot.unsafe_set(win, 0.0)
-        job.slot.unsafe_set(win + job.full - 1, 0.0)
-        for b = 1; b < job.full - 1; b = b + 1 {
-          job.slot.unsafe_set(win - b, job.slot.unsafe_get(b))
-          job.slot.unsafe_set(2 * win - b, -1.0 * job.slot.unsafe_get(win + b))
-        }
-        fft_at(job.plan_id, job.slot, 0, win, true)
+        ignore(real_ifft(job.slot_id, job.full))
         let room = win.min(job.padded - at)
         for n = 0; n < room; n = n + 1 {
           job.arena.unsafe_set(

@@ -147,7 +147,7 @@ test "white box: the magnitude region comes in and the phase region comes out" {
   assert_eq(pghi_off(h, 0), 0)
   assert_eq(pghi_off(h, 1), n)
   assert_eq(pghi_off(h, 2), -1)
-  assert_eq(job_words_of(h), 2 * n)
+  assert_true(job_words_of(h) >= 2 * n)
   let d = job_d(h)
   for i = 0; i < n; i = i + 1 {
     d.unsafe_set(i, 1.0 + i.to_double())

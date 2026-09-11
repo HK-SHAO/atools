@@ -1,5 +1,5 @@
 ///|
-pub let max_win : Int = 4096
+let max_win : Int = 4096
 
 ///|
 let min_win : Int = 256
