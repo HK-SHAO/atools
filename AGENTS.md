@@ -34,14 +34,19 @@ app/lib/     算法层（纯函数，无 DOM 依赖；单测跑在 vitest 上，
 moon/        数值内核的 MoonBit 源，由 scripts/moon.ts 编成 wasm/dsp.wasm。
              两根轴：**表组**（按窗长缓存、只读，plan.mbt）与**会话槽**（工作区，有限池，session.mbt）。
              热循环一律 unsafe_get/unsafe_set —— `arr[i]` 编出来是两次不内联的调用（见 docs/algorithms.md）
-scripts/     moon.ts（编内核）· pwa.ts（核对预缓存清单）· toy.ts（压 toy.zip）；都是 Vite 插件或构建脚本
+scripts/     moon.ts（编内核）· pwa.ts（核对产物里的 PWA 契约：预缓存清单 + 内核 preload 的路径与 crossorigin）
+             · test-setup.ts（vitest 的 globalSetup：先编一次内核，免得并行起的测试文件互相删中间产物）
+             · toy.ts（压 toy.zip）；都是 Vite 插件或构建脚本
 app/styles/  样式：index.css 一个 @import 入口，按职责分层放 reset/tokens/primitives/layout/spectrogram/workbench
 app/App.tsx  外壳与布局，组合 Dropzone 与 Workbench
 app/ui/      组件与 hooks，只是结构与行为；样式一律在 app/styles/ 里，组件上只有语义类名
 app/sw.ts    Service Worker（workbox：预缓存清单由 vite-plugin-pwa 构建期注入 + 运行期缓存）
 public/      原样复制进 dist/ 根的字面资源：manifest.webmanifest、logo.svg、icons/*.png
-fixtures/    单测的音频夹具（10 个真容器样本，三百多 KB）；`app/` 只放会进产物的东西
-bench/       评测台（cdp.ts 会话壳；quality.ts 纯数值消融、kernel.ts 内核 A/B，都不经过浏览器；run.ts 端到端、offline.ts 守 PWA、perf.ts 看性能三个驱动真实 dist 页面）
+fixtures/    单测的音频夹具（10 个真容器样本，三百多 KB）；`app/` 只放会进产物的东西，
+             唯一的例外是 `app/icons/icon.svg` —— 三个 PNG 图标的 maskable 作图源，不留注释、不进产物
+bench/       评测台（cdp.ts 会话壳）。quality.ts 纯数值消融、kernel.ts 内核 A/B 都不经浏览器，直接 import `app/lib`；
+             run.ts 跑的是 `bench/index.html` 这份自建页 —— 它把 entry.ts 打成 bundle、按真实管线调 `app/lib`，
+             启动时重打一次以免测到旧代码；只有 offline.ts 与 perf.ts 驱动真实 dist 页面
 docs/        format-spec.md（图片格式契约）· algorithms.md（算法原理与实测）· build.md（构建、样式与 PWA 管线）· migration.md（迁移里程碑与消融记录）
 ```
 
