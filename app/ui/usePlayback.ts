@@ -71,11 +71,8 @@ export function usePlayback(
       pcm = await prepare();
       if (!pcm) return null;
     }
-    let ctx = ctxRef.current;
-    if (!ctx) {
-      ctx = new AudioContext();
-      ctxRef.current = ctx;
-    }
+    const ctx = ctxRef.current;
+    if (!ctx) return null;
     const buf = bufRef.current;
     if (!buf || bufPcmRef.current !== pcm || buf.sampleRate !== sr) {
       const next = ctx.createBuffer(1, pcm.length, sr);

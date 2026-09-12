@@ -9,7 +9,7 @@ const BASELINE = process.env.UI_BASELINE ?? "";
 
 type Ev = <R = unknown>(expression: string) => Promise<R>;
 
-const COUNT_CONTEXT = `
+const INSTRUMENT = `
   window.__ac = 0;
   for (const name of ["AudioContext", "webkitAudioContext"]) {
     const Native = window[name];
@@ -21,7 +21,40 @@ const COUNT_CONTEXT = `
       }
     };
   }
+  const live = new Set();
+  window.__synth = { posted: 0, inflight: 0 };
+  const NativeWorker = window.Worker;
+  window.Worker = class extends NativeWorker {
+    constructor(...args) {
+      super(...args);
+      const post = this.postMessage.bind(this);
+      this.postMessage = (message, ...rest) => {
+        if (message && message.kind === "synthesise") {
+          window.__synth.posted += 1;
+          window.__synth.inflight += 1;
+          live.add(message.id);
+        }
+        post(message, ...rest);
+      };
+      this.addEventListener("message", (event) => {
+        const data = event.data;
+        if (data && live.has(data.id) && data.kind !== "progress") {
+          live.delete(data.id);
+          window.__synth.inflight -= 1;
+        }
+      });
+    }
+  };
 `;
+
+const PLAY = `(() => {
+   const b = document.querySelector('button.icon-btn');
+   if (!b) throw new Error("界面上没有播放按钮");
+   b.click();
+   return 1;
+ })()`;
+
+const PLAYING = `return document.querySelector('button.icon-btn')?.getAttribute('aria-label') === "暂停" ? 1 : 0`;
 
 const press = (sel: string, label: string): string =>
   `(() => {
@@ -46,6 +79,7 @@ async function chain(
   ev: Ev,
   mark: (label: string) => void,
   onReady?: () => Promise<void>,
+  probe = false,
 ): Promise<readonly [string, string]> {
   await waitFor("应用载入", async () =>
     (await ev<number>("return document.querySelector('.drop') ? 1 : 0")) ? 1 : null,
@@ -66,6 +100,55 @@ async function chain(
       "演示就绪时还没有构造过 AudioContext：那一百多毫秒的一次性开销会落在第一次点播放那一刻",
     );
   if (contexts > 0) mark(`播放前 AudioContext ${contexts} 个`);
+
+  if (probe) {
+    const posted = await waitFor(
+      "后台预载开始",
+      async () => {
+        const s = await ev<{ posted: number; inflight: number }>("return window.__synth");
+        return s.posted >= 1 ? s.posted : null;
+      },
+      10000,
+    ).catch(() => 0);
+    const baked = posted
+      ? await waitFor(
+          "后台预载完成",
+          async () => {
+            const s = await ev<{ posted: number; inflight: number }>("return window.__synth");
+            return s.inflight === 0 ? s : null;
+          },
+          120000,
+        ).catch(() => null)
+      : null;
+    if (!baked)
+      failures.push("演示就绪后 worker 没把「还原」算完：点播放仍然要现算，那段等待会落在用户身上");
+    else {
+      const ms = await ev<number>(`
+        return await new Promise((done) => {
+          const b = document.querySelector('button.icon-btn');
+          const t0 = performance.now();
+          const mo = new MutationObserver(() => {
+            if (b.getAttribute('aria-label') === '暂停') {
+              mo.disconnect();
+              done(Math.round(performance.now() - t0));
+            }
+          });
+          mo.observe(b, { attributes: true, attributeFilter: ['aria-label'] });
+          b.click();
+          setTimeout(() => { mo.disconnect(); done(-1); }, 60000);
+        });
+      `);
+      await ev(PLAY);
+      await waitFor("停下", async () => ((await ev<number>(PLAYING)) ? null : 1));
+      const after = await ev<{ posted: number; inflight: number }>("return window.__synth");
+      mark(`点播放到出声 ${ms} ms（材料就绪时已算 ${baked.posted} 次）`);
+      if (ms < 0) failures.push("点了播放但一直没有出声");
+      else if (after.posted !== baked.posted)
+        failures.push(
+          `点播放又让 worker 现算了一遍「还原」（${baked.posted} → ${after.posted}）：材料就绪时没有把它算掉`,
+        );
+    }
+  }
 
   await ev(press("button.act", "质检"));
   const compact = await waitFor(
@@ -117,7 +200,7 @@ const base = `http://127.0.0.1:${PORT}${SUBPATH}/`;
 const server = serve(PORT, { dir: staged || `${project}/dist` });
 const session = await open({ port: PORT + 1000, size: [1200, 900], url: "about:blank" });
 const ev = session.ev;
-await session.send("Page.addScriptToEvaluateOnNewDocument", { source: COUNT_CONTEXT });
+await session.send("Page.addScriptToEvaluateOnNewDocument", { source: INSTRUMENT });
 
 const failures: string[] = [];
 const errs: string[] = [];
@@ -140,23 +223,28 @@ const mark = (label: string, at = performance.now()) =>
 let compact = "";
 let exact = "";
 try {
-  [compact, exact] = await chain(ev, mark, async () => {
-    origin = await ev<number>("return Math.round(performance.now())");
-    await ev(`
-      window.__ui = { tasks: [], notes: [] };
-      new PerformanceObserver((l) => {
-        for (const e of l.getEntries()) window.__ui.tasks.push([Math.round(e.startTime), Math.round(e.duration)]);
-      }).observe({ entryTypes: ['longtask'] });
-      let last = '';
-      setInterval(() => {
-        const notes = document.querySelectorAll('p.note');
-        const text = notes.length ? notes[notes.length - 1].textContent.replace(/\\d+%$/, '') : '';
-        if (text !== last) { last = text; window.__ui.notes.push([Math.round(performance.now()), text]); }
-      }, 20);
-      return true;
-    `);
-    console.log("界面链：");
-  });
+  [compact, exact] = await chain(
+    ev,
+    mark,
+    async () => {
+      origin = await ev<number>("return Math.round(performance.now())");
+      await ev(`
+        window.__ui = { tasks: [], notes: [] };
+        new PerformanceObserver((l) => {
+          for (const e of l.getEntries()) window.__ui.tasks.push([Math.round(e.startTime), Math.round(e.duration)]);
+        }).observe({ entryTypes: ['longtask'] });
+        let last = '';
+        setInterval(() => {
+          const notes = document.querySelectorAll('p.note');
+          const text = notes.length ? notes[notes.length - 1].textContent.replace(/\\d+%$/, '') : '';
+          if (text !== last) { last = text; window.__ui.notes.push([Math.round(performance.now()), text]); }
+        }, 20);
+        return true;
+      `);
+      console.log("界面链：");
+    },
+    true,
+  );
 
   const pairs = [
     ["紧凑", compact],

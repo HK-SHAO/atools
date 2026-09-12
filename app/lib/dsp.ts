@@ -1,8 +1,7 @@
 import kernelWasm from "../../moon/_build/wasm/release/build/dsp.wasm";
 import { FINENESS } from "./params.ts";
 
-const kernelUrl = (): string =>
-  kernelWasm.startsWith("/") ? kernelWasm : new URL(kernelWasm, import.meta.url).href;
+const kernelUrl = (): string => new URL(kernelWasm, import.meta.url).href;
 
 interface Kernel {
   memory: WebAssembly.Memory;
@@ -98,8 +97,6 @@ let attached: Dsp | null = null;
 export const attachKernel = (dsp: Dsp | null): void => {
   attached = dsp;
 };
-
-export const kernel = (): Dsp | null => attached;
 
 export const mustKernel = (): Dsp => {
   if (!attached)

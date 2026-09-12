@@ -66,6 +66,8 @@ function connect(): Wire {
   const fail = (reason: string): void => {
     for (const job of live.pending.values()) job.reject(new Error(reason));
     live.pending.clear();
+    worker.terminate();
+    if (wire === live) wire = null;
   };
 
   worker.onmessage = (event: MessageEvent<FromWorker>) => {

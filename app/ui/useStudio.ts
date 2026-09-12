@@ -61,6 +61,7 @@ export function useStudio() {
   const jobRef = useRef<Job | null>(null);
   const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
   const readyRef = useRef<Promise<void>>(Promise.resolve());
+  const wantedRef = useRef(false);
 
   const putJob = useCallback((next: Job | null) => {
     jobRef.current = next;
@@ -135,13 +136,16 @@ export function useStudio() {
   }, [source, enc, putJob, generation, io]);
 
   const render = useCallback(
-    async (spec: Spectrum, fine: boolean): Promise<Samples | null> => {
+    async (spec: Spectrum, fine: boolean, show: boolean): Promise<Samples | null> => {
       const alive = generation();
       const label = fine ? "精修" : "还原";
-      setStage({ label, value: 0 });
+      const note = (next: Stage): void => {
+        if (show || wantedRef.current) setStage(next);
+      };
+      note({ label, value: 0 });
       try {
         const audio = await io.synthesise(spec, fine, v => {
-          if (alive()) setStage({ label, value: v });
+          if (alive()) note({ label, value: v });
         });
         if (!alive()) return null;
         const cur = jobRef.current;
@@ -154,10 +158,24 @@ export function useStudio() {
         if (alive()) setError(e instanceof Error ? e.message : "还原失败");
         return null;
       } finally {
-        if (alive()) setStage(null);
+        if (alive()) note(null);
       }
     },
     [io, putJob, generation],
+  );
+
+  const bake = useCallback(
+    (spec: Spectrum, show: boolean): Promise<Samples | null> => {
+      const pend = pendingRef.current;
+      if (pend && pend.spec === spec) return pend.p;
+      const p = render(spec, false, show);
+      pendingRef.current = { spec, p };
+      void p.then(() => {
+        if (pendingRef.current?.p === p) pendingRef.current = null;
+      });
+      return p;
+    },
+    [render],
   );
 
   const listen = useCallback(async (): Promise<Samples | null> => {
@@ -169,15 +187,20 @@ export function useStudio() {
     const j = jobRef.current;
     if (!j) return null;
     if (j.audio) return j.audio;
-    const pend = pendingRef.current;
-    if (pend && pend.spec === j.spec) return pend.p;
-    const p = render(j.spec, false);
-    pendingRef.current = { spec: j.spec, p };
-    void p.then(() => {
-      if (pendingRef.current?.p === p) pendingRef.current = null;
-    });
-    return p;
-  }, [render]);
+    if (pendingRef.current?.spec !== j.spec) return bake(j.spec, true);
+    wantedRef.current = true;
+    setStage({ label: "还原", value: 0 });
+    try {
+      return await bake(j.spec, true);
+    } finally {
+      wantedRef.current = false;
+      setStage(null);
+    }
+  }, [bake]);
+
+  useEffect(() => {
+    if (job && !job.audio) void bake(job.spec, false);
+  }, [job, bake]);
 
   const open = useCallback(
     async (file: File) => {
@@ -242,7 +265,7 @@ export function useStudio() {
     const j = jobRef.current;
     if (!j) return;
     setError(null);
-    if (await render(j.spec, true)) setHint("相位已重建");
+    if (await render(j.spec, true, true)) setHint("相位已重建");
   }, [render]);
 
   const demo = useCallback(async () => {
