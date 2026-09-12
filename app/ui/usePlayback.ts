@@ -182,6 +182,11 @@ export function usePlayback(
     paint(0);
   }, [halt, paint]);
 
+  useEffect(() => {
+    if (duration <= 0 || ctxRef.current) return;
+    ctxRef.current = new AudioContext();
+  }, [duration]);
+
   const followedRef = useRef<Samples | null>(null);
   useEffect(() => {
     if (!playingRef.current || followedRef.current === audio) return;

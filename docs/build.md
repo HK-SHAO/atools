@@ -47,14 +47,14 @@ bun start
 
   | 写法 | 实测结果 |
   | --- | --- |
-  | `new Worker(new URL("./x.js", document.baseURI))` | 调用点原样透传，Worker 文件不产出 |
+  | `new Worker("./x.js")` | 调用点原样透传，Worker 文件不产出 |
   | `new Worker(new URL("./x.ts", import.meta.url))` | 同上（`import.meta.url` 是源码的 `file://` 路径） |
   | `import u from "./x.ts?url"` | `Could not resolve` |
   | `import u from "./x.ts" with { type: "file" }` | 产出的是**逐字节拷贝的 `.ts`**：不转译、也不打包 |
   | `Bun.serve({ routes: { "/x.js": "./x.ts" } })` | 路由值不接受字符串；`Bun.file("./x.ts")` 供出去的是**未打包的原文**，`import` 原样留在里面 |
 
-  所以 `scripts/build.ts` 与 `scripts/serve.ts` 各自有一个**独立**的 Worker 入口构建，固定文件名 `pipeline.worker.js`，应用侧手写 `new URL("pipeline.worker.js", document.baseURI)`。这不是冗余，是打包器边界 —— 想省掉它，先重跑这张表。
-- **dev 下 `import.meta.url` 被静态替换成源码的 `file://` 路径**，`new URL(x, import.meta.url)` 在产物里也不改写。Worker 地址一律以 `document.baseURI` 为基准——`new URL(绝对路径, 任意基准)` 直接返回那个绝对路径，于是 dev（根绝对路径）与产物（相对路径）用同一个表达式。
+  所以 `scripts/build.ts` 与 `scripts/serve.ts` 各自有一个**独立**的 Worker 入口构建，固定文件名 `pipeline.worker.js`，应用侧 `new Worker("./pipeline.worker.js", { type: "module" })`。这不是冗余，是打包器边界 —— 想省掉它，先重跑这张表。
+- **Worker 地址按文档基准解析，调用点不需要 `new URL` 包装。** `new Worker(相对路径)` 的基准由构造函数自己取，就是 `document.baseURI`，与手写 `new URL(相对路径, document.baseURI)` 同解：根路径拉到 `/pipeline.worker.js`、`SUBPATH=/sub/path` 拉到 `/sub/path/pipeline.worker.js`，两处的 `ui` 都过。基准不能改用 `import.meta.url` —— dev 下它被静态替换成源码的 `file://` 路径。
 - **扁平布局是 manifest 的硬约束**，不是审美：`manifest.webmanifest` 是手写件、不经打包器改写，`"scope": "./"` 与 `./icons/…` 都按它自己所在的位置解析，一挪就装不起来。
 - **`import.meta.hot` 就是「开发 / 生产」判据**：dev 是真对象，生产构建折叠成 `undefined`（`app/ui/pipeline.ts` 的 HMR 清理挂在它上面）。
 - **`@types/node` 删不得**：`bun-types/index.d.ts` 第一行就 `/// <reference types="node" />`，移走它连 `process` 与 `node:fs/promises` 都解析不出来。「移除 node」只落在运行时与脚本这一层。

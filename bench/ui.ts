@@ -9,6 +9,20 @@ const BASELINE = process.env.UI_BASELINE ?? "";
 
 type Ev = <R = unknown>(expression: string) => Promise<R>;
 
+const COUNT_CONTEXT = `
+  window.__ac = 0;
+  for (const name of ["AudioContext", "webkitAudioContext"]) {
+    const Native = window[name];
+    if (!Native) continue;
+    window[name] = class extends Native {
+      constructor(...args) {
+        super(...args);
+        window.__ac += 1;
+      }
+    };
+  }
+`;
+
 const press = (sel: string, label: string): string =>
   `(() => {
      const b = [...document.querySelectorAll(${JSON.stringify(sel)})].find(v => (v.textContent ?? '').trim() === ${JSON.stringify(label)});
@@ -45,6 +59,13 @@ async function chain(
     120000,
   );
   mark("演示就绪");
+
+  const contexts = await ev<number>("return window.__ac ?? -1");
+  if (contexts === 0)
+    failures.push(
+      "演示就绪时还没有构造过 AudioContext：那一百多毫秒的一次性开销会落在第一次点播放那一刻",
+    );
+  if (contexts > 0) mark(`播放前 AudioContext ${contexts} 个`);
 
   await ev(press("button.act", "质检"));
   const compact = await waitFor(
@@ -94,12 +115,9 @@ const staged = SUBPATH ? `${tmpdir()}/atools-subpath-${process.pid}` : "";
 if (staged) await cp(`${project}/dist`, `${staged}${SUBPATH}`, { recursive: true });
 const base = `http://127.0.0.1:${PORT}${SUBPATH}/`;
 const server = serve(PORT, { dir: staged || `${project}/dist` });
-const session = await open({
-  port: PORT + 1000,
-  size: [1200, 900],
-  url: `${base}${staged ? "index.html" : ""}`,
-});
+const session = await open({ port: PORT + 1000, size: [1200, 900], url: "about:blank" });
 const ev = session.ev;
+await session.send("Page.addScriptToEvaluateOnNewDocument", { source: COUNT_CONTEXT });
 
 const failures: string[] = [];
 const errs: string[] = [];
@@ -112,6 +130,8 @@ session.on(m => {
         (m.params.args ?? []).map((a: any) => a.description ?? JSON.stringify(a.value) ?? "").join(" "),
     );
 });
+
+await session.goto(`${base}${staged ? "index.html" : ""}`, ".drop");
 
 let origin = 0;
 const mark = (label: string, at = performance.now()) =>

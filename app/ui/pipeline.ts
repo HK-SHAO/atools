@@ -60,7 +60,7 @@ const scopes = new Map<string, Scope>();
 
 function connect(): Wire {
   if (wire) return wire;
-  const worker = new Worker(new URL("./pipeline.worker.js", document.baseURI), { type: "module" });
+  const worker = new Worker("./pipeline.worker.js", { type: "module" });
   const live: Wire = { worker, nextId: 1, pending: new Map() };
 
   const fail = (reason: string): void => {
