@@ -65,7 +65,6 @@ const shell = [
     ...worker.outputs.map(rel),
     ...[...html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)].map(match => match[1]!),
     ...pwa.icons.map(icon => icon.src.replace(/^\.\//, "")),
-    ...app.outputs.filter(output => output.path.endsWith(".wasm")).map(rel),
   ]),
 ].sort();
 
@@ -88,6 +87,7 @@ await build({
 const sw = await Bun.file(at("sw.js")).text();
 if (sw.includes("PRECACHE")) fail("dist/sw.js 里还留着 PRECACHE：define 没注入上");
 
-for (const output of app.outputs) console.log(`${rel(output)}  ${(output.size / 1024).toFixed(1)} KB`);
+for (const [file, size] of new Map([...app.outputs, ...worker.outputs].map(o => [rel(o), o.size])))
+  console.log(`${file}  ${(size / 1024).toFixed(1)} KB`);
 console.log(`${cache}  sw.js ${(sw.length / 1024).toFixed(1)} KB  预缓存 ${shell.length} 项`);
 for (const file of shell) console.log(`  ${file}`);

@@ -25,11 +25,13 @@ bun start
 2. `app/index.html` → 应用、CSS 和按需加载的音频解码器，启用 React Compiler。
 3. `app/sw.ts` → `sw.js`，注入应用壳清单和内容指纹。
 
+顺序不能换：第 3 步要注入的壳指纹由前两步的产物算出来，所以 `sw.js` 永远最后（实测依据见「Bun 打包器的几条事实」末两条）。此外 `scripts/serve.ts` 在开发模式下自己有一份 Worker 构建（改动源码刷新即可生效，SW 不在开发模式注册）。
+
 产物为纯静态文件。应用与 Worker 位于 `dist/` 根目录，Worker 地址相对文档解析，Wasm 地址相对引用它的模块解析。部署到子路径时必须保留这个结构。Worker 使用固定文件名，其他打包资源使用内容哈希。
 
 构建自带四道校验，任一不过即退 1：
 
-1. 应用壳里的每一项真在 `dist/`。壳是推出来的（入口产物 ∪ HTML 里的 `./` 引用 ∪ manifest 图标 ∪ Worker 产物 ∪ `.wasm`），缺项就是引用或图标路径写错了。
+1. 应用壳里的每一项真在 `dist/`。壳是推出来的（入口产物 ∪ HTML 里的 `./` 引用 ∪ manifest 图标 ∪ Worker 产物 —— 后者已含内核 `.wasm`），缺项就是引用或图标路径写错了。
 2. `sw.js` 里不许残留 `PRECACHE`。`define` 是文本替换，键名写错构建照过、只在浏览器炸。
 3. 所有产物必须在 `dist/` 根。这是**规则而不是清单**：Worker 按文档基准、Wasm 按模块基准解析，都只在「同级文件」下成立。
 4. 入口产物里不许出现 `dsp_abi`。数值计算与图片处理只跑在 Worker 内，主线程负责交互、音频解码和播放；主线程挂内核是构建期错误。
@@ -54,6 +56,10 @@ bun start
   | `Bun.serve({ routes: { "/x.js": "./x.ts" } })` | 路由值不接受字符串；`Bun.file("./x.ts")` 供出去的是**未打包的原文**，`import` 原样留在里面 |
 
   所以 `scripts/build.ts` 与 `scripts/serve.ts` 各自有一个**独立**的 Worker 入口构建，固定文件名 `pipeline.worker.js`，应用侧 `new Worker("./pipeline.worker.js", { type: "module" })`。这不是冗余，是打包器边界 —— 想省掉它，先重跑这张表。
+- **Service Worker 也没有「顺手产出」的写法，而且比 Worker 更没得商量。** 实测在 HTML 里写 `<link rel="serviceworker" href="./sw.ts">`，产物 HTML 里那行**原样留着**：不转译、不重命名、更不会复制（那个 `.ts` 在 `dist/` 里根本不存在）；`navigator.serviceWorker.register("./sw.js")` 是**运行期字符串**，打包器看不见它。所以 `sw.ts` 同样是固定名字的独立构建，与应用侧的 `register("./sw.js")` 对齐。
+- **三趟的顺序被指纹链锁死，不是保守。** 壳清单里含 `pipeline.worker.js` 与 `dsp-*.wasm`，而缓存名 = 壳名单 ＋ **每个成员的字节**一起喂 `Bun.hash`，这个缓存名又要写进 `sw.js` 自己的内容里 —— Worker 因此必须早于壳、壳必须早于 `sw.js`；把这两趟并起来是**循环依赖**，做不出来。唯一另一种合并（`entrypoints: [index.html, pipeline.worker.ts]` 一趟出）实测**更差**：Worker 从 32.3 KB 掉到 **18.0 KB**（不再自包含，改去 import 共享 chunk）、应用入口裂成 236.3 + 16.5 KB、HTML 入口被 `naming.entry` 改名成 `index.js`（部署直接坏）。而两趟合计只要 **15 ms**（合并后 14 ms）—— 这里没有可省的东西，别再试第三遍。
+- **内核 `.wasm` 在两趟里都会产出一份，且逐字节相同**（`sha256` 一致）。应用那趟会有它，是因为主线程确实用到 `spectrum.ts` 的 `fitEncode` / `cutoffOf`，模块图够得着 `dsp.ts`，Bun 会给图里的模块照发 asset —— 即使那份代码已被 tree-shake 掉。所以壳只按 Worker 那趟登记 `.wasm` 就够（`Set` 去重，两处登记的是同一个文件）。
+- **入口那条 `dsp_abi` 校验覆盖到什么程度，实测过**：它守的是「主线程不把内核挂上」。两种看起来能溜过去的形态都试了 —— 主线程直接 `import("./lib/dsp.ts")`，以及先 `import()` 一个「自己再 `import()` 内核」的模块 —— **两种都被抓**，因为 Bun 把这种一次性动态导入**内联进入口**，入口里照样出现 `dsp_abi`。**未验**：若哪天它落进的是另一个 chunk（像本项目 `decode-*.js` 那样），这条入口级校验会漏；那时要改成扫全部 JS 产物，而不是搜入口。
 - **Worker 地址按文档基准解析，调用点不需要 `new URL` 包装。** `new Worker(相对路径)` 的基准由构造函数自己取，就是 `document.baseURI`，与手写 `new URL(相对路径, document.baseURI)` 同解：根路径拉到 `/pipeline.worker.js`、`SUBPATH=/sub/path` 拉到 `/sub/path/pipeline.worker.js`，两处的 `ui` 都过。基准不能改用 `import.meta.url` —— dev 下它被静态替换成源码的 `file://` 路径。
 - **扁平布局是 manifest 的硬约束**，不是审美：`manifest.webmanifest` 是手写件、不经打包器改写，`"scope": "./"` 与 `./icons/…` 都按它自己所在的位置解析，一挪就装不起来。
 - **`import.meta.hot` 就是「开发 / 生产」判据**：dev 是真对象，生产构建折叠成 `undefined`（`app/ui/pipeline.ts` 的 HMR 清理挂在它上面）。

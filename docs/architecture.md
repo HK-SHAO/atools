@@ -86,7 +86,7 @@ Plan 表按窗长缓存，Session slot 池 6 个（必须归还），Job arena �
 | `test:kernel` | 48 通过 |
 | `quality --gate` | 五项通过（脚本自己退出，1.9 s） |
 | `kernel` | 0.006 / 0.005 / 0.005 / 0.002× 实时 |
-| `build:web` | 入口 239.2 KB · CSS 7.2 KB · 内核 43.8 KB · 预缓存 10 项 · `sw.js` 1.2 KB |
+| `build:web` | 入口 239.2 KB · Worker 32.3 KB · CSS 7.2 KB · 内核 43.8 KB · 预缓存 10 项 · `sw.js` 1.2 KB |
 | `offline` / `perf` / `ui`（含 `SUBPATH`） | 通过 |
 | `ui` 的播放读数 | 材料就绪后点播放→出声 1 ~ 3 ms（`main` 同档 422 ~ 457 ms） |
 
