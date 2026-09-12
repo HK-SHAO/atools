@@ -1020,3 +1020,29 @@ describe("image footprint", () => {
     expect(r.frames * r.bins * BANDS).toBe(BANDS * (c.frames * c.bins));
   });
 });
+
+describe("让出方式", () => {
+  test("让出走消息通道，不走会被浏览器夹到 4 ms 的定时器", async () => {
+    const sr = 8000;
+    const spec = await encode(signal(sr * 4, sr), sr, VOICE);
+
+    const real = globalThis.setTimeout;
+    let timers = 0;
+    globalThis.setTimeout = ((...args: Parameters<typeof real>) => {
+      timers += 1;
+      return real(...args);
+    }) as typeof real;
+
+    let yields = 0;
+    try {
+      await synthesise(spec, undefined, () => {
+        yields += 1;
+      });
+    } finally {
+      globalThis.setTimeout = real;
+    }
+
+    expect(yields).toBeGreaterThan(0);
+    expect(timers).toBe(0);
+  });
+});

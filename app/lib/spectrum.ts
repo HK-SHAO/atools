@@ -72,7 +72,16 @@ interface Shape {
   samples: number;
 }
 
-const yieldToUi = (): Promise<void> => new Promise(done => setTimeout(done, 0));
+const yieldNow = (): Promise<void> =>
+  new Promise(done => {
+    const chan = new MessageChannel();
+    chan.port2.onmessage = () => {
+      chan.port1.close();
+      chan.port2.close();
+      done();
+    };
+    chan.port1.postMessage(0);
+  });
 
 const pow2 = (n: number): number => {
   let v = MIN_WIN;
@@ -213,7 +222,7 @@ export async function encode(
         if (Date.now() >= next) {
           if (alive && !alive()) throw new Aborted();
           onProgress?.((f + 1) / frames);
-          await yieldToUi();
+          await yieldNow();
           ({ re, im } = core.data());
           next = Date.now() + SLICE_MS;
         }
@@ -256,7 +265,7 @@ export async function encode(
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
         onProgress?.((f + 1) / frames);
-        await yieldToUi();
+        await yieldNow();
         ({ re, im } = core.data());
         next = Date.now() + SLICE_MS;
       }
@@ -315,7 +324,7 @@ async function synthesiseExact(
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
         onProgress?.((f + 1) / frames);
-        await yieldToUi();
+        await yieldNow();
         ({ re, im } = core.data());
         next = Date.now() + SLICE_MS;
       }
@@ -458,7 +467,7 @@ async function glRefine(
       onProgress?.((it + 1) / iters);
       if (Date.now() >= next) {
         if (alive && !alive()) throw new Aborted();
-        await yieldToUi();
+        await yieldNow();
         ({ re, im } = core.data());
         next = Date.now() + SLICE_MS;
       }
@@ -498,7 +507,7 @@ async function invert(
           if (alive && !alive()) throw new Aborted();
           onProgress?.(m / total);
           return (async () => {
-            await yieldToUi();
+            await yieldNow();
             next = Date.now() + SLICE_MS;
           })();
         },
