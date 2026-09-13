@@ -1,93 +1,59 @@
 # 架构
 
-浏览器里的音频 ↔ 频谱图双向转换。纯静态 PWA：没有后端、没有数据库、没有账号，全部计算在本机完成。
-图片格式契约见 [format-spec.md](format-spec.md)，算法原理与实测见 [algorithms.md](algorithms.md)，构建与部署见 [build.md](build.md)。
+atools 是浏览器本地运行的音频 ↔ 频谱图工具。它是纯静态 PWA，没有后端、数据库或账号。格式契约见 [format-spec.md](format-spec.md)，算法取舍见 [algorithms.md](algorithms.md)，构建与部署见 [build.md](build.md)。
 
-## 分层
+## 数据流
 
-```
-文件 ─┬─ 音频 ─→ 解码（主线程：Web Audio）
-      └─ 图片 ─→ sniff（主线程：判断拖进来的是图还是音频）
-                     │  递 Blob 与参数
-                     ▼
-                Worker —— 唯一挂内核的一侧
-                ├ resample    重采样
-                ├ encode      量化 → 像素 → PNG
-                ├ synthesise  相位重建 → 波形
-                ├ readImage   图片 → 频谱
-                └ png / audit / compare
-                     │  返回 ArrayBuffer 时转移所有权
-                     ▼
-                Wasm 内核（moon/，零 import，只用标准库）
-                FFT · STFT 编解码 · PGHI + RTISI-LA · 票根
+```text
+文件 ─┬─ 音频 → 主线程解码 ──────────────┐
+      └─ 图片 → 主线程识别容器 ─┐        │
+                                ▼        ▼
+                         Pipeline Worker
+                         ├ 重采样与频谱编码
+                         ├ 图片编解码与质检
+                         ├ 相位重建与波形合成
+                         └ MoonBit Wasm 内核
+                                │
+                                ▼
+                         主线程播放与交互
 ```
 
-主线程只做三件 DOM 事：读文件、解码音频、播放。其余全部在 Worker；内核只被 Worker 装载。
+主线程只保留文件输入、音频解码、播放和 DOM。可无头运行的重计算放在 Worker；Worker 是浏览器中唯一装载 Wasm 内核的一侧。
+
+## 边界
+
+**Worker 协议。** `app/ui/pipeline.ts` 定义请求、响应、取消和作用域。返回的数组缓冲转移所有权；主线程仍需播放的输入 PCM 保持可用。Worker 崩溃会拒绝全部待处理请求并释放实例，下一次请求重新连接。
+
+**Wasm ABI。** `app/lib/dsp.ts` 是唯一宿主绑定。启动时核对 ABI 版本、导出集合和线性内存读写。Plan、Slot 或 Job 的创建可能触发 `memory.grow`，所以数组视图按需取得，不能跨 `await` 保存。
+
+**容量。** 内核报告 Plan、Slot 和 Job 的地址与容量；宿主不复制内存布局。池耗尽或形状不合法用返回值拒绝。图片另受 1600 万输出像素、2400 万输入像素和 65535 单边尺寸限制。
+
+**PWA 缓存。** Service Worker 的缓存名包含部署路径和应用壳内容指纹。更新只清理同一路径的旧版本；不同子路径和其他应用缓存互不影响。
 
 ## 目录
 
 | 路径 | 职责 |
 | --- | --- |
-| `app/lib/` | 数值与格式：`spectrum`（量化 / 重建调度）、`phase`（调参表 + PGHI 入口）、`rtisi`、`image`（读图）、`png`、`stub`（票根）、`metric`、`resample`、`audio`（解码）、`wav`、`container`（`sniff` / `ReadMode` / `downloadName`，主线程仅有的三件读图件） |
-| `app/lib/dsp.ts` | 宿主与内核之间的唯一接缝：装载、ABI 握手、Plan / Slot / Job 的取址 |
-| `app/ui/` | React 交互：`useStudio`（编码流水线）、`usePlayback`、`useAudit`、`pipeline`（Worker 调用面）、`pipeline.worker`（Worker 侧） |
-| `app/styles/` | `reset` → `tokens` → `primitives` → `layout` → `spectrogram` → `workbench`，按此顺序导入 |
-| `app/sw.ts` | 自建 Service Worker（产物 1.2 KB），运行期没有第三方 |
-| `moon/` | 内核源码与它的白盒测试；改法与加模块见 [../moon/README.md](../moon/README.md) |
-| `bench/` | 评测基建与浏览器门禁，见 [../bench/README.md](../bench/README.md) |
-| `scripts/` | 三个文件：`build.ts`（构建）、`serve.ts`（dev / `--dist` 两种静态服务）、`moon.ts`（内核编译与 `--test` / `--ports` / `--bench`） |
+| `app/lib/` | 音频、频谱、图片、PNG、指标与内核绑定 |
+| `app/ui/` | React 交互、Worker 客户端与 Worker 入口 |
+| `app/styles/` | reset、令牌、基础控件和页面布局 |
+| `app/sw.ts` | 无第三方运行期的 Service Worker |
+| `moon/` | MoonBit 数值内核与白盒测试 |
+| `bench/` | 质量、性能、浏览器和离线门禁 |
+| `scripts/` | Bun 构建、开发服务和 MoonBit 驱动 |
 
-## 三条边界
+## 门禁
 
-**一、Worker 是唯一挂内核的一侧。** 主线程不 `startKernel`、不 import 任何要问内核的模块，
-只递 `Blob` 与参数、接结果。构建期的第 ④ 道校验挡在入口（见下）。
-`startKernel` 仍按侧缓存（同一线程只装载一次），线上只有 Worker 调它。
-
-**二、数组视图只现切、不持有。** `memory.grow` 会把先前切出的视图全部 detach，而开 Plan / Slot / Job
-都可能触发它。`Job` / `Slot` / `Plan` 都把「取数组」做成方法、每次调用重切，**`await` 之后必须重新取一次**。
-
-**三、内核的内存回答一切。** 池子大小、窗长上限、容量上限都由内核给，宿主不自己算布局：
-Plan 表按窗长缓存，Session slot 池 6 个（必须归还），Job arena 池 4 个（`1 << 26` 元素 / 字节）。
-内核说「装不下」一律是返回 0 —— 那是正式语义，不是异常。
-
-## 契约与守着它的门禁
-
-| 契约 | 门禁 | 怎么证伪 |
-| --- | --- | --- |
-| 主线程不挂内核 | `build:web` 第 ④ 道 | 把 `startKernel` 写回主线程 → 构建退 1 并报出是哪个产物 |
-| 产物落在 `dist/` 根 | `build:web` 第 ③ 道 | 给 `naming.chunk` 加 `dir` → 构建失败 |
-| 壳清单完整、`PRECACHE` 真注入 | `build:web` ①② + `offline` | 键名写错 → `define` 是文本替换，构建照过、`offline` 红 |
-| 量化与相位重建不回归 | `quality --gate` 五项 | 动浮点结合顺序 → 指标变、退 1 |
-| 数值逻辑本身 | `test:kernel`（`moon/*_wbtest.mbt`） | 改一个常量 → 白盒红 |
-| 跨边界取址与内核装载 | `bun test` | — |
-| 整链吞吐 | `kernel`（实时倍率，门禁 `0.05×`） | — |
-| 重采样相位表不许慢于逐样点现算 | `perf` | — |
-| 真页面交互链与图片数值 | `ui`；`UI_BASELINE=<目录>` 并排比两版 | 把基线演示音频截断 → 两行 `p.facts` 都红 |
-| 第一次播放不付音频上下文的一次性开销 | `ui` 数 `AudioContext` 构造次数 | 去掉 `usePlayback` 的预热 → 「演示就绪」时计数为 0，退 1 |
-| 材料就绪后不把「还原」留给点击 | `ui` 数 worker 收到的 `synthesise` 条数 | ① 去掉预载 → 「演示就绪」后一条都没收到，退 1；② 让预载算了却不落进 `job.audio` → 点播放后计数 1→2，退 1 |
-| 数值链的让出不走被夹住的定时器 | `bun test`（「让出方式」用例） | 把 `yieldNow` 换回 `setTimeout(done, 0)` → 让出 5 次、定时器计数 5，红 |
-| 让出不把宿主事件循环钉住 | `quality`（跑完必须自己退出） | 把通道建回模块顶层、两端常驻 → 打完成绩单后不再退出（实测 28 分钟不返回）；这一类没有更早的警报（`bun test` 挡不住，运行器自己强退） |
-| 子路径部署 | `ui` 的 `SUBPATH=<路径>` | 换成根绝对引用 → 根路径照样绿、子路径红 |
-| PWA 可装与断网可用 | `offline` | 断网后内核取不回 200 |
-
-`bun run bench` 是端到端评测台（真 Chromium 跑完整链路，覆盖 PNG / JPEG / 缩放降级），
-不是门禁但发布前该跑。**它的 `ms` 列含测量自身的对齐搜索**（O(n·span)，30 秒素材约 2 秒），
-读它判性能前先减掉，见 [algorithms.md](algorithms.md)。`moon:ports` 与 `moon fmt --check` 管语言与格式。
-
-跨分支判「有没有下降」用 `git worktree` 出两侧、跑同一批仪器，不要读 diff；比绝对值前先找一列阴性对照，
-**低于 1.2 倍的差不要写成结论**。
-
-## 基线（2026-09-12，本机 Bun 1.4.3）
-
-| 检查 | 读数 |
+| 命令 | 守住的边界 |
 | --- | --- |
-| `tsc -b` / `oxlint` | 干净 / 0 warning 0 error（59 文件 163 规则） |
-| `bun test` | 145 通过 / 0 失败，164036 次断言（9 文件） |
-| `test:kernel` | 48 通过 |
-| `quality --gate` | 五项通过（脚本自己退出，1.9 s） |
-| `kernel` | 0.006 / 0.005 / 0.005 / 0.002× 实时 |
-| `build:web` | 入口 239.2 KB · Worker 32.3 KB · CSS 7.2 KB · 内核 43.8 KB · 预缓存 10 项 · `sw.js` 1.2 KB |
-| `offline` / `perf` / `ui`（含 `SUBPATH`） | 通过 |
-| `ui` 的播放读数 | 材料就绪后点播放→出声 1 ~ 3 ms（`main` 同档 422 ~ 457 ms） |
+| `bun run typecheck` / `bun run lint` | TypeScript 与 React 静态规则 |
+| `bun run test` | 格式、算法、解码与 Wasm 宿主边界 |
+| `bun run test:kernel` | FFT、内存池、PGHI、RTISI 与票根 |
+| `bun run quality -- --gate` | 确定性素材的重建质量 |
+| `bun run kernel` | 完整数值链低于 `0.05×` 实时 |
+| `bun run perf` | 重采样缓存必须快于逐样点计算 |
+| `bun run build:web` | 扁平产物、完整壳、SW 注入、主线程无内核 |
+| `bun run ui` | 演示、播放、质检、精修和可逆模式 |
+| `bun run offline` | 安装、更新、缓存隔离和断网重载 |
 
-这张快照是本仓唯一的门禁与体积读数落点；时间是本机单次读数，不是跨机器性能承诺。
+`SUBPATH=/path bun run ui` 验证子路径部署；`UI_BASELINE=/old/dist bun run ui` 比较两个构建。真实素材经 PNG、JPEG 和缩放的评测方法见 [bench/README.md](../bench/README.md)。
