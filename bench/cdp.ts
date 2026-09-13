@@ -99,6 +99,12 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
     >();
     const listeners: ((msg: any) => void)[] = [];
+    const rejectPending = (message: string): void => {
+      for (const call of pending.values()) call.reject(new Error(message));
+      pending.clear();
+    };
+    ws.onerror = () => rejectPending("CDP 连接出错");
+    ws.onclose = () => rejectPending("CDP 连接已关闭");
     ws.onmessage = e => {
       const m = JSON.parse(String(e.data)) as {
         id?: number;
