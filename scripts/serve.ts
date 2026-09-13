@@ -30,22 +30,23 @@ function distServer(): ReturnType<typeof Bun.serve> {
 
 const workerSource = path.join(project, "app/ui/pipeline.worker.ts");
 const workerDir = path.join(project, "node_modules/.tmp/dev-worker");
+const workerEntry = "pipeline.worker.js";
 
-const workerNames = async (): Promise<string[]> => {
+const buildWorker = async (): Promise<string[]> => {
   const done = await Bun.build({
     entrypoints: [workerSource],
     outdir: workerDir,
     target: "browser",
     naming: { entry: "[name].js", asset: "[name].[ext]" },
   });
-  if (!done.success) for (const log of done.logs) console.error(log);
+  if (!done.success) throw new AggregateError(done.logs, "Worker 构建失败");
   return done.outputs.map(output => path.basename(output.path));
 };
 
 async function devServer(): Promise<ReturnType<typeof Bun.serve>> {
   const { ensureWasm } = await import("./moon.ts");
 
-  const names = await workerNames();
+  const names = await buildWorker();
   const serve = (name: string): Response =>
     new Response(Bun.file(path.join(workerDir, name)), { headers: { "cache-control": "no-store" } });
 
@@ -57,7 +58,7 @@ async function devServer(): Promise<ReturnType<typeof Bun.serve>> {
         names.map(name => [
           `/${name}`,
           async () => {
-            await workerNames();
+            if (name === workerEntry) await buildWorker();
             return serve(name);
           },
         ]),
@@ -67,12 +68,11 @@ async function devServer(): Promise<ReturnType<typeof Bun.serve>> {
     development: { hmr: true, console: true },
   });
 
-  const entry = "pipeline.worker.js";
-  if (!names.includes(entry))
-    throw new Error(`worker 出的是 ${names.join("、")}，而 app 侧算出来的地址是 /${entry}：两边对不上`);
-  const type = (await fetch(new URL(`/${entry}`, server.url))).headers.get("content-type") ?? "";
+  if (!names.includes(workerEntry))
+    throw new Error(`worker 出的是 ${names.join("、")}，而 app 侧需要 /${workerEntry}`);
+  const type = (await fetch(new URL(`/${workerEntry}`, server.url))).headers.get("content-type") ?? "";
   if (!type.includes("javascript"))
-    throw new Error(`/${entry} 供出来的是「${type}」：被 SPA 回落吞了，worker 会静默拉不到`);
+    throw new Error(`/${workerEntry} 返回了 ${type || "未知类型"}`);
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   watch(path.join(project, "moon"), { recursive: true }, (_event, file) => {

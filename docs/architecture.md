@@ -16,7 +16,7 @@
                 ├ synthesise  相位重建 → 波形
                 ├ readImage   图片 → 频谱
                 └ png / audit / compare
-                     │  递 ArrayBuffer（转移所有权，不留副本）
+                     │  返回 ArrayBuffer 时转移所有权
                      ▼
                 Wasm 内核（moon/，零 import，只用标准库）
                 FFT · STFT 编解码 · PGHI + RTISI-LA · 票根
