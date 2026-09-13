@@ -2,7 +2,7 @@
 
 ## 工具链
 
-使用 Bun 安装依赖、运行 TypeScript、测试、开发服务和生产打包。TypeScript 做类型检查，Oxlint 做静态检查；MoonBit 仅编译数值内核。
+Bun 安装依赖、运行 TypeScript、测试、开发服务和生产构建；MoonBit 只编译数值内核。
 
 ```sh
 bun install --frozen-lockfile
@@ -15,103 +15,40 @@ bun run build:web
 bun start
 ```
 
-开发与静态服务默认使用 `http://127.0.0.1:3000`，可通过 `PORT` 修改端口。MoonBit 通过 PATH、`~/.moon/bin` 或 `MOON` 环境变量定位。`bun start` 只读取已有的 `dist/`，不需要编译器。
+服务默认监听 `http://127.0.0.1:3000`，`PORT` 可改端口。MoonBit 从 `MOON`、`PATH` 或 `~/.moon/bin` 定位。`bun start` 只读取 `dist/`。
 
 ## 生产构建
 
-`scripts/build.ts` 先确保 Wasm 产物存在，再依次打包：
+`scripts/build.ts` 按依赖顺序执行三次 Bun 构建：
 
-1. `app/ui/pipeline.worker.ts` → `pipeline.worker.js` 与带哈希的 Wasm。
-2. `app/index.html` → 应用、CSS 和按需加载的音频解码器，启用 React Compiler。
-3. `app/sw.ts` → `sw.js`，注入应用壳清单和内容指纹。
+1. `pipeline.worker.ts` → 固定名称的 `pipeline.worker.js` 和 Wasm。
+2. `index.html` → 应用、CSS 与按需音频解码器。
+3. `sw.ts` → 注入应用壳清单和内容指纹的 `sw.js`。
 
-顺序不能换：第 3 步要注入的壳指纹由前两步的产物算出来，所以 `sw.js` 永远最后（实测依据见「Bun 打包器的几条事实」末两条）。此外 `scripts/serve.ts` 在开发模式下自己有一份 Worker 构建（改动源码刷新即可生效，SW 不在开发模式注册）。
+Bun 不会从 `new Worker()` 或 `serviceWorker.register()` 的运行期字符串发现入口，因此 Worker 和 Service Worker 必须单独构建。Service Worker 依赖前两步的完整产物计算缓存版本，所以最后构建。
 
-产物为纯静态文件。应用与 Worker 位于 `dist/` 根目录，Worker 地址相对文档解析，Wasm 地址相对引用它的模块解析。部署到子路径时必须保留这个结构。Worker 使用固定文件名，其他打包资源使用内容哈希。
+产物保持在 `dist/` 根目录：Worker 相对页面解析，Wasm 相对 Worker 模块解析，manifest 也以自身位置解析图标。构建会拒绝缺失的壳文件、嵌套产物、未注入的 Service Worker 清单，以及意外进入主线程入口的 Wasm 内核。
 
-构建自带四道校验，任一不过即退 1：
-
-1. 应用壳里的每一项真在 `dist/`。壳是推出来的（入口产物 ∪ HTML 里的 `./` 引用 ∪ manifest 图标 ∪ Worker 产物 —— 后者已含内核 `.wasm`），缺项就是引用或图标路径写错了。
-2. `sw.js` 里不许残留 `PRECACHE`。`define` 是文本替换，键名写错构建照过、只在浏览器炸。
-3. 所有产物必须在 `dist/` 根。这是**规则而不是清单**：Worker 按文档基准、Wasm 按模块基准解析，都只在「同级文件」下成立。
-4. 入口产物里不许出现 `dsp_abi`。数值计算与图片处理只跑在 Worker 内，主线程负责交互、音频解码和播放；主线程挂内核是构建期错误。
-
-应用壳包括 HTML、入口脚本、CSS、Worker、Wasm、manifest 和图标。音频解码器与演示音频按需下载：12 个解码分包合计约 1.6 MB，刻意不进壳，改由运行期缓存按需兜住。manifest 中的图标路径不经过打包器，构建脚本按原路径复制。
-
-契约与门禁的对应关系见 [architecture.md](architecture.md)。
-
-## Bun 打包器的几条事实
-
-下面这些是实测结论，不是文档承诺；换工具链或升级 Bun 时先重测：
-
-- **没有 `?url` / `?worker` 这类后缀。** `.wasm` 直接 import 拿到的是**路径字符串**：dev 下是 `/_bun/asset/<hash>.wasm`，产物里是与引用它的 chunk 同目录的相对路径。
-- **Worker 只能单独构建，没有「顺手产出」的写法。** 看着该管用的五种写法都试过，Bun 1.4.3 一种都不接：
-
-  | 写法 | 实测结果 |
-  | --- | --- |
-  | `new Worker("./x.js")` | 调用点原样透传，Worker 文件不产出 |
-  | `new Worker(new URL("./x.ts", import.meta.url))` | 同上（`import.meta.url` 是源码的 `file://` 路径） |
-  | `import u from "./x.ts?url"` | `Could not resolve` |
-  | `import u from "./x.ts" with { type: "file" }` | 产出的是**逐字节拷贝的 `.ts`**：不转译、也不打包 |
-  | `Bun.serve({ routes: { "/x.js": "./x.ts" } })` | 路由值不接受字符串；`Bun.file("./x.ts")` 供出去的是**未打包的原文**，`import` 原样留在里面 |
-
-  所以 `scripts/build.ts` 与 `scripts/serve.ts` 各自有一个**独立**的 Worker 入口构建，固定文件名 `pipeline.worker.js`，应用侧 `new Worker("./pipeline.worker.js", { type: "module" })`。这不是冗余，是打包器边界 —— 想省掉它，先重跑这张表。
-- **Service Worker 也没有「顺手产出」的写法，而且比 Worker 更没得商量。** 实测在 HTML 里写 `<link rel="serviceworker" href="./sw.ts">`，产物 HTML 里那行**原样留着**：不转译、不重命名、更不会复制（那个 `.ts` 在 `dist/` 里根本不存在）；`navigator.serviceWorker.register("./sw.js")` 是**运行期字符串**，打包器看不见它。所以 `sw.ts` 同样是固定名字的独立构建，与应用侧的 `register("./sw.js")` 对齐。
-- **三趟的顺序被指纹链锁死，不是保守。** 壳清单里含 `pipeline.worker.js` 与 `dsp-*.wasm`，而缓存名 = 壳名单 ＋ **每个成员的字节**一起喂 `Bun.hash`，这个缓存名又要写进 `sw.js` 自己的内容里 —— Worker 因此必须早于壳、壳必须早于 `sw.js`；把这两趟并起来是**循环依赖**，做不出来。唯一另一种合并（`entrypoints: [index.html, pipeline.worker.ts]` 一趟出）实测**更差**：Worker 从 32.3 KB 掉到 **18.0 KB**（不再自包含，改去 import 共享 chunk）、应用入口裂成 236.3 + 16.5 KB、HTML 入口被 `naming.entry` 改名成 `index.js`（部署直接坏）。而两趟合计只要 **15 ms**（合并后 14 ms）—— 这里没有可省的东西，别再试第三遍。
-- **内核 `.wasm` 在两趟里都会产出一份，且逐字节相同**（`sha256` 一致）。应用那趟会有它，是因为主线程确实用到 `spectrum.ts` 的 `fitEncode` / `cutoffOf`，模块图够得着 `dsp.ts`，Bun 会给图里的模块照发 asset —— 即使那份代码已被 tree-shake 掉。所以壳只按 Worker 那趟登记 `.wasm` 就够（`Set` 去重，两处登记的是同一个文件）。
-- **入口那条 `dsp_abi` 校验覆盖到什么程度，实测过**：它守的是「主线程不把内核挂上」。两种看起来能溜过去的形态都试了 —— 主线程直接 `import("./lib/dsp.ts")`，以及先 `import()` 一个「自己再 `import()` 内核」的模块 —— **两种都被抓**，因为 Bun 把这种一次性动态导入**内联进入口**，入口里照样出现 `dsp_abi`。**未验**：若哪天它落进的是另一个 chunk（像本项目 `decode-*.js` 那样），这条入口级校验会漏；那时要改成扫全部 JS 产物，而不是搜入口。
-- **Worker 地址按文档基准解析，调用点不需要 `new URL` 包装。** `new Worker(相对路径)` 的基准由构造函数自己取，就是 `document.baseURI`，与手写 `new URL(相对路径, document.baseURI)` 同解：根路径拉到 `/pipeline.worker.js`、`SUBPATH=/sub/path` 拉到 `/sub/path/pipeline.worker.js`，两处的 `ui` 都过。基准不能改用 `import.meta.url` —— dev 下它被静态替换成源码的 `file://` 路径。
-- **扁平布局是 manifest 的硬约束**，不是审美：`manifest.webmanifest` 是手写件、不经打包器改写，`"scope": "./"` 与 `./icons/…` 都按它自己所在的位置解析，一挪就装不起来。
-- **`import.meta.hot` 就是「开发 / 生产」判据**：dev 是真对象，生产构建折叠成 `undefined`（`app/ui/pipeline.ts` 的 HMR 清理挂在它上面）。
-- **`@types/node` 删不得**：`bun-types/index.d.ts` 第一行就 `/// <reference types="node" />`，移走它连 `process` 与 `node:fs/promises` 都解析不出来。「移除 node」只落在运行时与脚本这一层。
-- **React Compiler 判「有没有生效」看产物里有没有 `react.memo_cache_sentinel`**，不能看见体积没变就下结论。`oxlint` 的 `react/*` 那组就是编译器自己的退让理由（认不出的写法会静默不优化），两边必须一起开。
-- **入口 chunk 的字节不只由入口自己的代码决定。** 给一个只从 worker 走的模块加一条 `import`（`app/lib/rtisi.ts` 引入 `TUNE`），入口里**它一行都没有**（独有的错误字符串在入口里 0 次、worker 里 1 次）、体积**逐字节同长**（244 632 B），却有 251 处标识符各差 1 字节、文件名跟着从 `index-6ayybrnh.js` 变成 `index-w3zhy93z.js` —— 压缩器的短名分配随模块图整体挪了位。**同一棵树连打两次是逐字节相同的**（单独验过），所以这不是不确定性；但**「入口哈希变了」不能当回归的证据**，这类改动要用行为门禁（`quality --gate` 五项 + `kernel` 倍率）判。
+音频解码器和演示音频按需下载并进入运行时缓存，不计入首次离线应用壳。完整职责与门禁见 [architecture.md](architecture.md)。
 
 ## 开发服务
 
-`scripts/serve.ts` 的开发模式使用 Bun HTML 路由与 HMR，单独构建并提供 Worker 及其 Wasm。修改 Worker 后刷新页面；修改 `moon/` 源码会触发内核重编。
+`scripts/serve.ts` 使用 Bun HTML 路由和 HMR。Worker 独立构建；请求 Worker 入口时刷新其产物，修改 `moon/` 时重编内核。开发环境不注册 Service Worker。
 
-静态模式提供 `dist/`，缺失文件回落到 `index.html`，用于验证部署产物、PWA 和离线行为。Cloudflare 配置位于 `cloudflare/wrangler.jsonc`。
+静态模式提供 `dist/`，未知路径回落到 `index.html`，用于验证生产产物、子路径和离线行为。Cloudflare 配置位于 `cloudflare/wrangler.jsonc`。
 
 ## 离线与更新
 
-Service Worker 在生产环境注册。首次安装缓存应用壳；新版本等待旧页面关闭后激活，避免切断正在进行的转换。激活时只删除当前部署路径的旧缓存。
+首次安装缓存应用壳。新版本等待旧页面关闭后激活，避免中断正在进行的转换；激活时只删除当前部署路径的旧版本缓存。
 
-导航优先访问网络，断网时返回本版本首页；其他同源 GET 请求优先使用本版本缓存。成功的非 HTML 响应可以写入运行期缓存，Range 请求不缓存。缓存不会跨部署读取或清理；旧版未标明路径的缓存保留。
+导航优先网络，断网时返回当前版本首页；其他同源 GET 请求优先读当前版本缓存。成功的非 HTML 响应可写入运行时缓存，Range 请求不缓存。不同部署路径的缓存互不读取和清理。
 
-`bun run offline` 使用真实浏览器验证安装、更新等待、其他应用缓存保留、运行期缓存和断网重载。`bun run ui` 验证主要交互；`UI_BASELINE=/path/to/old/dist bun run ui` 对照两版图片大小与还原指标。
-
-## 样式与浏览器
-
-`app/styles/index.css` 按顺序导入 reset、tokens、primitives、layout、spectrogram 和 workbench。公共控件几何放在 primitives，组件布局放在对应样式文件。
-
-`.app` 提供尺寸查询容器，`.shell` 定义尺寸令牌。`--u` 和 `--c-vh` 用 `@property` 注册为长度，使容器单位在令牌根解析后继承。修改 tokens 后应同时检查窄屏、矮屏和嵌入容器。
-
-应用需要 WebAssembly、模块 Worker、OffscreenCanvas、CompressionStream / DecompressionStream、容器查询与容器相对单位、`@property`。
+`bun run offline` 验证安装、更新等待、缓存隔离、运行时缓存和真正断服后的重载。`bun run ui` 验证主要交互；`UI_BASELINE=/path/to/old/dist bun run ui` 可对比两个构建。
 
 ## 浏览器基线
 
-**Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+。**
+**Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**。
 
-这三列由下面四条定下。**硬门**是缺了就进不来的，**软**是缺了只是不好看：
+硬要求是 WebAssembly SIMD、模块 Worker、OffscreenCanvas、CompressionStream / DecompressionStream、容器查询、容器相对单位和 `@property`。其中 Firefox 128 才完整支持 `@property`，Safari 16.4 才支持所用的 Wasm SIMD 指令；Chrome 108 保证动态视口单位，其余硬要求更早可用。
 
-| 特性 | 最晚满足的引擎 | 性质 |
-| --- | --- | --- |
-| `@property` | Firefox 128 · Safari 16.4 | **硬门**——令牌不注册，容器单位漏进继承的令牌并静默错缩放：界面能开、尺寸全错，比打不开更难查 |
-| Wasm v128（SIMD） | Safari 16.4 | **硬门**——模块直接编译不过 |
-| `container-type` + `cqi` / `cqb`、`:has()` | Chrome 105 | **硬门**——尺寸令牌的来源 |
-| `dvh`（`100vh` 兜底就写在它上一行） | Chrome 108 · Firefox 101 · Safari 15.4 | 软——缺了只是移动端拿不到动态视口高度 |
-
-Chrome 那一列因此取最晚的 108；取 105 也不算错，只是不承诺移动端视口高度正确。
-其余所需特性（Wasm bulk memory 与非陷阱转整、`OffscreenCanvas`、`CompressionStream`、
-`backdrop-filter`、`:focus-visible`、`color-scheme`）都远早于这四条；
-`@supports (corner-shape: squircle)` 只是渐进增强，不构成门槛。
-
-Wasm 侧的门槛取自内核的**指令集读数**（`moon build --output-wat` 的 wat）：`f64x2.splat` + `v128.store`
-是 v128，bulk memory 是 `memory.copy` / `memory.fill`，非陷阱转整是 `i32.trunc_sat_f64_s`；
-**导入面为空**，所以不需要 WASI。
-
-当前验证状态：Chromium（152）与 WebKit（26.6）上真实 `dist/` 都跑通，两边零控制台错误。
-**Firefox 没有实机测过**（Nightly 要往 `~/Library/Application Support/Firefox` 写 profile，
-本环境对该目录 `EPERM`，与代码无关），所以 Firefox 一列是门槛推导而非实测。
-自动化验证走本机 Chrome，不能用特性支持表代替真机端到端验证。
+自动化门禁使用本机 Chrome。Chromium 152 与 WebKit 26.6 已跑通真实 `dist/`；Firefox 基线来自特性支持范围，尚未完成实机端到端验证。
