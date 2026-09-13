@@ -57,6 +57,7 @@ interface Props {
   png: Blob;
   name: string;
   srcSr: number;
+  srcDuration: number;
   mode: ReadMode;
   enc: Encode;
   onEnc: (e: Encode) => void;
@@ -74,6 +75,7 @@ export function Workbench({
   png,
   name,
   srcSr,
+  srcDuration,
   mode,
   enc,
   onEnc,
@@ -171,7 +173,7 @@ export function Workbench({
         )}
       </div>
 
-      <ParamPanel enc={enc} srcSr={srcSr} duration={duration} onEnc={onEnc} />
+      <ParamPanel enc={enc} srcSr={srcSr} srcDuration={srcDuration} onEnc={onEnc} />
     </section>
   );
 }

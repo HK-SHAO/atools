@@ -35,6 +35,7 @@ export function App() {
             png={job.png}
             name={source.name}
             srcSr={source.sr}
+            srcDuration={source.pcm.length / source.sr}
             mode={studio.mode}
             enc={studio.enc}
             onEnc={studio.setEnc}

@@ -34,7 +34,7 @@ const FINENESS_OPTS: readonly Option<Encode["fineness"]>[] = FINENESS.map((f, i)
 interface Props {
   enc: Encode;
   srcSr: number;
-  duration: number;
+  srcDuration: number;
   onEnc: (e: Encode) => void;
 }
 
@@ -43,7 +43,7 @@ interface Draft {
   text: { start: string; end: string };
 }
 
-export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
+export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const open = draft && draft.at.start === enc.start && draft.at.end === enc.end ? draft.text : null;
 
@@ -51,6 +51,7 @@ export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
   const endShown = (end: number): string => (end === 0 ? "" : String(end));
   const compact = enc.mode === "compact";
   const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
+  const maxLabel = srcDuration > 0 ? String(Math.round(srcDuration * 10) / 10) : undefined;
 
   const commitRange = () => {
     if (!open) return;
@@ -74,8 +75,9 @@ export function ParamPanel({ enc, srcSr, duration, onEnc }: Props) {
         autoComplete="off"
         aria-label={aria}
         min={0}
-        max={duration}
+        max={srcDuration}
         step={0.1}
+        placeholder={side === "end" ? maxLabel : undefined}
         value={open ? open[side] : side === "start" ? String(enc.start) : endShown(enc.end)}
         onChange={e =>
           setDraft({
