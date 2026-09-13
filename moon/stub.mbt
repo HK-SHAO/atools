@@ -158,12 +158,14 @@ fn stub_lum_at(bits : FixedArray[Int], x : Int, w : Int) -> Int {
 }
 
 ///|
+/// Returns the number of metadata rows reserved in an image.
 #export_name("dsp_stub_rows")
 pub fn stub_rows_of() -> Int {
   stub_rows
 }
 
 ///|
+/// Returns a supported sample rate by index, or zero.
 #export_name("dsp_stub_sr")
 pub fn stub_sr_at(i : Int) -> Int {
   if i < 0 || i >= stub_sr.length() {
@@ -174,6 +176,7 @@ pub fn stub_sr_at(i : Int) -> Int {
 }
 
 ///|
+/// Returns a supported window size by index, or zero.
 #export_name("dsp_stub_win")
 pub fn stub_win_at(i : Int) -> Int {
   if i < 0 || i >= stub_wins.length() {
@@ -184,24 +187,28 @@ pub fn stub_win_at(i : Int) -> Int {
 }
 
 ///|
+/// Returns the byte capacity needed to paint an RGBA metadata strip.
 #export_name("dsp_stub_paint_bytes")
 pub fn stub_paint_bytes(w : Int) -> Int {
   w * stub_rows * 4
 }
 
 ///|
+/// Returns the byte capacity needed for a luma metadata profile.
 #export_name("dsp_stub_luma_bytes")
 pub fn stub_luma_bytes(w : Int) -> Int {
   w
 }
 
 ///|
+/// Returns the double capacity needed to decode a luma profile.
 #export_name("dsp_stub_decode_words")
 pub fn stub_decode_words(n : Int) -> Int {
   3 * n + 8
 }
 
 ///|
+/// Reports whether an image width can hold the metadata strip.
 #export_name("dsp_stub_fits")
 pub fn stub_fits(w : Int) -> Int {
   if w >= stub_span(w) + 2 && w >= stub_min_decode {
@@ -212,6 +219,7 @@ pub fn stub_fits(w : Int) -> Int {
 }
 
 ///|
+/// Paints an RGBA metadata strip into an open job arena.
 #export_name("dsp_stub_paint")
 pub fn stub_paint(h : Int, w : Int, sr : Int, win : Int, exact : Int) -> Int {
   if job_seg(h) < 0 {
@@ -235,6 +243,7 @@ pub fn stub_paint(h : Int, w : Int, sr : Int, win : Int, exact : Int) -> Int {
 }
 
 ///|
+/// Writes a luma metadata profile into an open job arena.
 #export_name("dsp_stub_luma")
 pub fn stub_luma(h : Int, w : Int, sr : Int, win : Int, exact : Int) -> Int {
   if job_seg(h) < 0 {
@@ -258,6 +267,7 @@ fn stub_run(mem : FixedArray[Double], runs : Int, i : Int, field : Int) -> Int {
 }
 
 ///|
+/// Decodes a luma metadata profile in an open job arena.
 #export_name("dsp_stub_decode")
 pub fn stub_decode(h : Int, n : Int) -> Int {
   if job_seg(h) < 0 {

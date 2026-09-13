@@ -40,6 +40,7 @@ fn plan_at(i : Int) -> Plan? {
 }
 
 ///|
+/// Returns the cached plan for a supported window, or `-1`.
 #export_name("dsp_plan")
 pub fn plan(win : Int) -> Int {
   let i = plan_of(win)
@@ -87,6 +88,7 @@ pub fn plan(win : Int) -> Int {
 }
 
 ///|
+/// Returns a plan's bit-reversal table, or an empty array.
 #export_name("dsp_plan_rev")
 pub fn plan_rev_of(i : Int) -> FixedArray[Int] {
   match plan_at(i) {
@@ -96,6 +98,7 @@ pub fn plan_rev_of(i : Int) -> FixedArray[Int] {
 }
 
 ///|
+/// Returns a plan's cosine table, or an empty array.
 #export_name("dsp_plan_cos")
 pub fn plan_cos_of(i : Int) -> FixedArray[Double] {
   match plan_at(i) {
@@ -105,6 +108,7 @@ pub fn plan_cos_of(i : Int) -> FixedArray[Double] {
 }
 
 ///|
+/// Returns a plan's sine table, or an empty array.
 #export_name("dsp_plan_sin")
 pub fn plan_sin_of(i : Int) -> FixedArray[Double] {
   match plan_at(i) {
@@ -114,6 +118,7 @@ pub fn plan_sin_of(i : Int) -> FixedArray[Double] {
 }
 
 ///|
+/// Returns a plan's Hann window, or an empty array.
 #export_name("dsp_plan_hann")
 pub fn plan_hann_of(i : Int) -> FixedArray[Double] {
   match plan_at(i) {

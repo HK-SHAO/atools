@@ -54,6 +54,7 @@ priv struct Pg {
 }
 
 ///|
+/// Opens a PGHI job, returning zero when its shape or allocation is invalid.
 #export_name("dsp_pghi_open")
 pub fn pghi_open(
   frames : Int,
@@ -89,6 +90,7 @@ pub fn pghi_open(
 }
 
 ///|
+/// Returns the magnitude or phase offset of an open PGHI job.
 #export_name("dsp_pghi_off")
 pub fn pghi_off(h : Int, which : Int) -> Int {
   match pghi_at(h) {
@@ -105,6 +107,7 @@ pub fn pghi_off(h : Int, which : Int) -> Int {
 }
 
 ///|
+/// Releases a PGHI job and its arena.
 #export_name("dsp_pghi_close")
 pub fn pghi_close(h : Int) -> Unit {
   let j = job_seg(h)
@@ -373,6 +376,7 @@ fn pg_propagate(pg : Pg) -> Unit {
 }
 
 ///|
+/// Reconstructs phase from the magnitude stored in an open PGHI job.
 #export_name("dsp_pghi_run")
 pub fn pghi_run(h : Int) -> Int {
   match pghi_at(h) {

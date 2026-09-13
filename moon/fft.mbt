@@ -63,6 +63,7 @@ fn fft_at(
 }
 
 ///|
+/// Transforms the complex buffers in an open FFT slot in place.
 #export_name("dsp_fft")
 pub fn forward(s : Int) -> Unit {
   if slot_live(s) {
@@ -73,6 +74,7 @@ pub fn forward(s : Int) -> Unit {
 }
 
 ///|
+/// Inverts the complex buffers in an open FFT slot in place.
 pub fn inverse(s : Int) -> Unit {
   if slot_live(s) {
     let plan_id = slot_plan.unsafe_get(s)
@@ -82,6 +84,7 @@ pub fn inverse(s : Int) -> Unit {
 }
 
 ///|
+/// Reconstructs and inverts a one-sided real spectrum in place.
 #export_name("dsp_real_ifft")
 pub fn real_ifft(s : Int, bins : Int) -> Int {
   if !slot_live(s) {

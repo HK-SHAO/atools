@@ -1,4 +1,5 @@
 ///|
+/// Returns the host ABI version expected by the JavaScript loader.
 #export_name("dsp_abi")
 pub fn abi() -> Int {
   7
@@ -17,6 +18,7 @@ fn probe_seg(h : Int) -> (FixedArray[Double], FixedArray[Byte])? {
 }
 
 ///|
+/// Writes the kernel probe pattern into an open job arena.
 #export_name("dsp_probe_stamp")
 pub fn probe_stamp(h : Int) -> Int {
   match probe_seg(h) {
@@ -32,6 +34,7 @@ pub fn probe_stamp(h : Int) -> Int {
 }
 
 ///|
+/// Checks that the kernel can read a probe pattern written by the host.
 #export_name("dsp_probe_check")
 pub fn probe_check(h : Int, want_d : Int, want_b : Int) -> Int {
   match probe_seg(h) {
@@ -51,6 +54,7 @@ pub fn probe_check(h : Int, want_d : Int, want_b : Int) -> Int {
 }
 
 ///|
+/// Returns a probe seed or the required probe length.
 #export_name("dsp_probe_want")
 pub fn probe_want(which : Int) -> Int {
   match which {

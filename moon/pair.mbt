@@ -16,6 +16,7 @@ fn pair_off(which : Int, size : Int) -> Int {
 }
 
 ///|
+/// Returns a paired-transform buffer offset, or `-1`.
 #export_name("dsp_pair_off")
 pub fn pair_off_of(s : Int, which : Int) -> Int {
   if !slot_live(s) || which < 0 || which > 5 {
@@ -25,6 +26,7 @@ pub fn pair_off_of(s : Int, which : Int) -> Int {
 }
 
 ///|
+/// Returns the one-sided spectrum length of an open slot.
 #export_name("dsp_pair_half")
 pub fn pair_half_of(s : Int) -> Int {
   if !slot_live(s) {
@@ -35,6 +37,7 @@ pub fn pair_half_of(s : Int) -> Int {
 }
 
 ///|
+/// Returns the transform size of an open slot.
 #export_name("dsp_pair_size")
 pub fn pair_size_of(s : Int) -> Int {
   if !slot_live(s) {
@@ -45,6 +48,7 @@ pub fn pair_size_of(s : Int) -> Int {
 }
 
 ///|
+/// Computes two real spectra with one complex transform.
 pub fn pair_forward(s : Int) -> Unit {
   if !slot_live(s) {
     return
@@ -79,6 +83,7 @@ pub fn pair_forward(s : Int) -> Unit {
 }
 
 ///|
+/// Inverts two real spectra with one complex transform.
 pub fn pair_inverse(s : Int) -> Unit {
   if !slot_live(s) {
     return

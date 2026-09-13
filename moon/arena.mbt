@@ -30,6 +30,7 @@ fn job_seg(h : Int) -> Int {
 }
 
 ///|
+/// Opens a zeroed job arena, returning zero when the request cannot be served.
 #export_name("dsp_job_open")
 pub fn job_open(dwords : Int, bytes : Int) -> Int {
   if dwords < 0 || bytes < 0 || dwords > max_job_words || bytes > max_job_bytes {
@@ -49,6 +50,7 @@ pub fn job_open(dwords : Int, bytes : Int) -> Int {
 }
 
 ///|
+/// Releases a job arena; invalid handles are ignored.
 #export_name("dsp_job_close")
 pub fn job_close(h : Int) -> Unit {
   let j = job_seg(h)
@@ -61,6 +63,7 @@ pub fn job_close(h : Int) -> Unit {
 }
 
 ///|
+/// Returns the double arena for an open job, or an empty array.
 #export_name("dsp_job_d")
 pub fn job_d(h : Int) -> FixedArray[Double] {
   let j = job_seg(h)
@@ -72,6 +75,7 @@ pub fn job_d(h : Int) -> FixedArray[Double] {
 }
 
 ///|
+/// Returns the byte arena for an open job, or an empty array.
 #export_name("dsp_job_b")
 pub fn job_b(h : Int) -> FixedArray[Byte] {
   let j = job_seg(h)
@@ -83,6 +87,7 @@ pub fn job_b(h : Int) -> FixedArray[Byte] {
 }
 
 ///|
+/// Returns the double capacity of an open job.
 #export_name("dsp_job_words")
 pub fn job_words_of(h : Int) -> Int {
   let j = job_seg(h)
@@ -94,6 +99,7 @@ pub fn job_words_of(h : Int) -> Int {
 }
 
 ///|
+/// Returns the byte capacity of an open job.
 #export_name("dsp_job_bytes")
 pub fn job_bytes_of(h : Int) -> Int {
   let j = job_seg(h)
@@ -105,6 +111,7 @@ pub fn job_bytes_of(h : Int) -> Int {
 }
 
 ///|
+/// Returns the number of open job arenas.
 #export_name("dsp_job_live")
 pub fn job_live_count() -> Int {
   let mut n = 0

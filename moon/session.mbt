@@ -18,6 +18,7 @@ fn slot_live(s : Int) -> Bool {
 }
 
 ///|
+/// Opens a zeroed FFT slot for a supported window size.
 #export_name("dsp_slot_open")
 pub fn slot_open(win : Int) -> Int {
   let plan_id = plan(win)
@@ -37,6 +38,7 @@ pub fn slot_open(win : Int) -> Int {
 }
 
 ///|
+/// Releases an FFT slot; invalid slot IDs are ignored.
 #export_name("dsp_slot_close")
 pub fn slot_close(s : Int) -> Unit {
   if s >= 0 && s < max_slots {
@@ -45,6 +47,7 @@ pub fn slot_close(s : Int) -> Unit {
 }
 
 ///|
+/// Returns the memory of an open FFT slot, or an empty array.
 #export_name("dsp_slot_mem")
 pub fn slot_mem_of(s : Int) -> FixedArray[Double] {
   if !slot_live(s) {
@@ -55,6 +58,7 @@ pub fn slot_mem_of(s : Int) -> FixedArray[Double] {
 }
 
 ///|
+/// Returns the double capacity of an open FFT slot.
 #export_name("dsp_slot_words")
 pub fn slot_words_of(s : Int) -> Int {
   if !slot_live(s) {

@@ -54,6 +54,7 @@ fn rt_at(h : Int) -> RtJob? {
 }
 
 ///|
+/// Opens an RTISI-LA job, adapting its workload to the supplied budget.
 #export_name("dsp_rtisi_open")
 pub fn rtisi_open(
   frames : Int,
@@ -155,6 +156,7 @@ pub fn rtisi_open(
 }
 
 ///|
+/// Returns a double-buffer offset of an open RTISI-LA job.
 #export_name("dsp_rtisi_off")
 pub fn rtisi_off(h : Int, which : Int) -> Int {
   match rt_at(h) {
@@ -171,6 +173,7 @@ pub fn rtisi_off(h : Int, which : Int) -> Int {
 }
 
 ///|
+/// Returns a byte-buffer offset of an open RTISI-LA job.
 #export_name("dsp_rtisi_levels")
 pub fn rtisi_levels(h : Int, which : Int) -> Int {
   match rt_at(h) {
@@ -187,6 +190,7 @@ pub fn rtisi_levels(h : Int, which : Int) -> Int {
 }
 
 ///|
+/// Releases an RTISI-LA job, its FFT slot, and its arena.
 #export_name("dsp_rtisi_close")
 pub fn rtisi_close(h : Int) -> Unit {
   let j = job_seg(h)
@@ -363,6 +367,7 @@ fn rt_second(kk : Int, act : Int) -> Int {
 }
 
 ///|
+/// Reconstructs a bounded range of frames for an open RTISI-LA job.
 #export_name("dsp_rtisi_run")
 pub fn rtisi_run(h : Int, from : Int, to : Int) -> Int {
   match rt_at(h) {
@@ -490,6 +495,7 @@ pub fn rtisi_run(h : Int, from : Int, to : Int) -> Int {
 }
 
 ///|
+/// Normalizes and crops the completed RTISI-LA waveform.
 #export_name("dsp_rtisi_finish")
 pub fn rtisi_finish(h : Int) -> Unit {
   match rt_at(h) {
