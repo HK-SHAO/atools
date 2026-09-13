@@ -125,8 +125,7 @@ async function decodeNative(data: ArrayBuffer, rate: number | null): Promise<Dec
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
     if (channels[0]!.length === 0) throw new Error("空流");
     return { pcm: mixdown(channels), sr: buffer.sampleRate };
-  } catch (e) {
-    console.error("原生解码失败，尝试 WASM 兜底", e);
+  } catch {
     return null;
   }
 }
@@ -140,7 +139,6 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
     try {
       return await decodeWasm("amr", bytes);
     } catch (e) {
-      console.error(e);
       throw new Error(`解不出这段 AMR 音频。${DECODE_HELP}`, { cause: e });
     }
   }
@@ -148,13 +146,16 @@ export async function decodeAudioFile(data: ArrayBuffer): Promise<Decoded> {
   const native = await decodeNative(data, await containerRate(head, bytes));
   if (native) return native;
 
+  let cause: unknown;
   for (const engine of FALLBACKS[head] ?? []) {
     try {
       return await decodeWasm(engine, bytes);
     } catch (e) {
-      console.error(`WASM ${engine} 引擎解码失败`, e);
+      cause = e;
     }
   }
 
-  throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`);
+  throw new Error(`解不出这段音频${head ? `（识别为 ${head}）` : ""}。${DECODE_HELP}`, {
+    cause,
+  });
 }
