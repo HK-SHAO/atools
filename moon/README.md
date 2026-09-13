@@ -2,6 +2,9 @@
 
 This package is the numeric kernel for atools. Bun compiles it to `moon/_build/wasm/release/build/dsp.wasm`; the pipeline Worker is its only browser consumer. There is no JavaScript fallback or WASI dependency.
 
+- Live demo: https://atools.shao.fun/
+- Source: https://github.com/HK-SHAO/atools
+
 ## Responsibilities
 
 | File | Role |
