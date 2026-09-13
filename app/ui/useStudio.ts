@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import DEMO_URL from "../assets/fade-demo.ogg";
+import DEMO_URL from "../assets/demo.ogg";
 import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
+import { bandwidthOf, srForBandwidth } from "../lib/bandwidth";
 import { sniff, type Container, type ReadMode } from "../lib/container";
-import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
+import { FINENESS, SR_OPTIONS, VOICE, reopen, srLabel, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
 import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
@@ -26,6 +27,17 @@ export type Stage = { label: string; value: number } | null;
 const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
 const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
+
+// 名义采样率高但内容带宽低时（Opus 恒为 48k 是典型），自动选能覆盖带宽的最低档，
+// 消除频谱图上方/下方的空黑场，画面更满、还原更快。
+const autoSrPick = (
+  pcm: Samples,
+  sr: number,
+): { sr: number; note: string | null } => {
+  const bw = bandwidthOf(pcm, sr);
+  const sr2 = srForBandwidth(bw, sr);
+  return { sr: sr2, note: sr2 > 0 && sr2 < sr ? `内容带宽约 ${srLabel(bw)}，采样率自动选 ${srLabel(sr2)}` : null };
+};
 
 function adoptMeta(meta: Meta): Encode {
   const at = FINENESS.findIndex(f => f.win >= meta.win);
@@ -248,7 +260,13 @@ export function useStudio() {
         if (!alive()) return;
 
         setMode("compact");
-        setEnc(e => ({ ...reopen(e), ...trimRange(mono, sr) }));
+        const range = trimRange(mono, sr);
+        // 只在用户当前选「原」时自动选档；用户明确选了档位就尊重他的选择。
+        setPick(p => {
+          if (p.enc.sr !== 0) return { enc: { ...reopen(p.enc), ...range }, note: null };
+          const auto = autoSrPick(mono, sr);
+          return { enc: { ...reopen(p.enc), sr: auto.sr, ...range }, note: auto.note };
+        });
         setSource({ pcm: mono, sr, name: file.name });
       } catch (e) {
         if (!alive() || e instanceof Aborted) return;
@@ -275,14 +293,15 @@ export function useStudio() {
       const { pcm, sr } = await decodeAudioFile(buf);
       if (!alive()) return;
       setMode("compact");
-      setEnc(e => ({ ...reopen(e), sr: 0, ...trimRange(pcm, sr) }));
-      setSource({ pcm, sr, name: "fade-demo" });
+      const auto = autoSrPick(pcm, sr);
+      setPick(p => ({ enc: { ...reopen(p.enc), sr: auto.sr, ...trimRange(pcm, sr) }, note: auto.note }));
+      setSource({ pcm, sr, name: "demo" });
     } catch (e) {
       if (!alive() || e instanceof Aborted) return;
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
     }
-  }, [generation, setEnc]);
+  }, [generation]);
 
   const clear = useCallback(() => {
     generation();
