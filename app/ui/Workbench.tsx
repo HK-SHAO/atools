@@ -32,8 +32,9 @@ const kb = (n: number): string =>
 function lossLine(rows: LossRow[], exact: boolean): string {
   const own = rows[0]!;
   if (exact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
-  const cell = (r: LossRow): string => `${r.label} ${Math.round(r.corr * 100)}%`;
-  return `还原度：${rows.map(cell).join("；")}`;
+  const cell = (r: LossRow): string =>
+    `${r.label} ${Math.round(r.corr * 100)}%, ${r.snr.toFixed(1)}dB, ${r.lsd.toFixed(1)}`;
+  return `相关度，信噪比，谱距离：${rows.map(cell).join("；")}`;
 }
 
 function save(blob: Blob, filename: string): void {
