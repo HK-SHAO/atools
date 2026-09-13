@@ -18,25 +18,25 @@ Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop
 
 | | 紧凑 Compact（默认 default） | 可逆 Exact |
 | -- | -- | -- |
-| 存什么 / Stored | 频谱幅度，2 / 4 / 8 bit 档位 | 16 bit 幅度 + 相位 |
-| 大小 / Size | 几 KB ~ 几十 KB / KBs | 几百 KB / Hundreds of KBs |
-| 还原 / Restored | 相位重建，音质接近原声 / near-original | 直接逆变换，近乎无损 / near-lossless |
-| 抗折腾 / Survives | 随便转格式、缩放、截图 / survives anything | 相位段被破坏则降级 / degrades if phase lost |
+| 存什么 / Stored | 2 / 4 / 8 bit 幅度 / magnitude | 8 bit 幅度 + 相位 / magnitude + phase |
+| 大小 / Size | 更小 / smaller | 更大 / larger |
+| 还原 / Restored | 相位重建，近似音频 / approximate | 原始 PNG 近乎无损 / near-lossless from the original PNG |
+| 编辑后 / After edits | 可继续读取，质量取决于保留的像素 | 相位受损时自动降级 |
 
-紧凑模式的图就是频谱图本身，相位没存：随便转发、压缩、再编辑，工具照样能读。
+紧凑模式不存相位。常见的转发、压缩和缩放后通常仍可读取，但编辑越重，声音损失越大。
 
-A compact image is just the spectrogram — no phase stored — so it survives forwarding, compression and re-editing, and the tool still reads it.
+Compact images omit phase. They usually remain readable after common sharing, compression, and resizing, with quality determined by the pixels that survive.
 
 ## 陌生图片也能出声 / Any image can play
 
-按图里幸存的信息自动选档：相位完好 → 近乎无损；本工具的图 → 幅度反查；被压缩或缩放过 → 自动降级；完全陌生的图 → 整张当幅度读。总有声音出来。
+按图里保留的信息自动选择还原路径：相位完好时直接逆变换；相位受损时重建；陌生图片则把整张图当作幅度谱尝试合成。
 
-Reading adapts to what survived in the image: intact phase → near-lossless; our own images → amplitude lookup; compressed or rescaled → graceful degrade; a total stranger → read as raw amplitude. Something always plays.
+Decoding adapts to the available information: intact phase is inverted directly, damaged phase is reconstructed, and an unfamiliar image is treated as a magnitude spectrum for synthesis.
 
 ## 开发 / Development
 
 ```bash
-bun i
+bun install
 bun dev              # 源码直出 + HMR → http://localhost:3000
 bun run test         # 算法与格式测试 / tests（bun test）
 bun run build:web    # 生产构建 → dist/ / build
