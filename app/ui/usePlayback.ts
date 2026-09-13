@@ -86,15 +86,14 @@ export function usePlayback(
   const start = useCallback(
     async (at: number) => {
       playingRef.current = true;
-      const wake = ctxRef.current?.resume().catch(() => {});
+      void ctxRef.current?.resume().catch(() => {});
       let ctx: AudioContext | null = null;
       try {
         ctx = await ensure();
-        await wake;
       } catch (e) {
         console.error(e);
       }
-      if (!ctx || ctx.state !== "running") {
+      if (!ctx) {
         playingRef.current = false;
         return;
       }
