@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 
 function chromium(): string {
   const candidates = process.env.CHROME
@@ -172,56 +170,41 @@ interface Site {
 }
 
 export function serve(port: number, site: Site): { stop(): void } {
-  const server = createServer((req, res) => {
-    const path = decode(new URL(req.url ?? "/", "http://127.0.0.1").pathname);
-    void respond(res, site, path).catch((error: unknown) => {
-      if (res.headersSent) return;
-      res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-      res.end(`静态服务供不出 ${path}：${String(error)}`);
-    });
-  });
-  server.listen(port, "127.0.0.1");
-  return {
-    stop: () => {
-      server.closeAllConnections();
-      server.close();
+  return Bun.serve({
+    port,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      let path: string;
+      try {
+        path = decodeURIComponent(new URL(request.url).pathname);
+      } catch {
+        return new Response("bad path", { status: 400 });
+      }
+      const exact = site.files?.[path];
+      if (exact !== undefined)
+        return response(
+          typeof exact === "string" ? Bun.file(exact) : exact,
+          path === "/" ? "index.html" : path,
+        );
+
+      if (site.dir) {
+        const root = resolve(site.dir);
+        const target = resolve(root, path === "/" ? "index.html" : `.${path}`);
+        if (target.startsWith(root + sep)) {
+          const file = Bun.file(target);
+          if (await file.exists()) return response(file, target);
+        }
+        if (site.spa) {
+          const home = Bun.file(join(root, "index.html"));
+          if (await home.exists()) return response(home, "index.html");
+        }
+      }
+      return new Response("missing", { status: 404 });
     },
-  };
+  });
 }
 
-const decode = (path: string): string => {
-  try {
-    return decodeURIComponent(path);
-  } catch {
-    return path;
-  }
-};
-
-const asName = (path: string): string => (path === "/" ? "index.html" : path);
-
-async function respond(res: ServerResponse, site: Site, path: string): Promise<void> {
-  const exact = site.files?.[path];
-  if (exact)
-    return put(
-      res,
-      typeof exact === "string" ? await readFile(exact) : exact,
-      typeof exact === "string" ? exact : asName(path),
-    );
-
-  if (site.dir) {
-    const file = path === "/" ? `${site.dir}/index.html` : `${site.dir}${path}`;
-    const body = await readFile(file).catch(() => null);
-    if (body) return put(res, body, file);
-    if (site.spa) {
-      const fallback = await readFile(`${site.dir}/index.html`).catch(() => null);
-      if (fallback) return put(res, fallback, "index.html");
-    }
-  }
-  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-  res.end("missing");
-}
-
-const put = (res: ServerResponse, body: Uint8Array, name: string): void => {
-  res.writeHead(200, { "content-type": contentType(name) });
-  res.end(body);
-};
+const response = (body: Blob | Uint8Array, name: string): Response =>
+  new Response(body instanceof Blob ? body : Uint8Array.from(body).buffer, {
+    headers: { "content-type": contentType(name) },
+  });
