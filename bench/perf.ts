@@ -1,9 +1,6 @@
-import path from "node:path";
 import type { Samples } from "../app/lib/arrays";
 import { resample } from "../app/lib/resample.ts";
-import { open, serve, sleep } from "./cdp.ts";
 
-const project = path.resolve(import.meta.dirname, "..");
 const SECS = Number(process.env.SECS ?? 60);
 const SR = 44100;
 
@@ -86,83 +83,6 @@ for (const [from, to] of [
   );
   if (ratio < 1.05)
     failures.push(`${from}→${to} 相位表 ${ratio.toFixed(2)}× —— 相位种类超过预算时退化得比逐样点还慢`);
-}
-
-if (process.env.PAGE !== "0") {
-  const PORT = Number(process.env.PORT ?? 4370);
-  const CDP = PORT + 700;
-  const WAV = `
-    const sr = ${SR};
-    const n = sr * ${SECS};
-    const pcm = new Int16Array(n);
-    for (let i = 0; i < n; i++) {
-      const env = 0.4 + 0.6 * Math.sin((2 * Math.PI * 3 * i) / sr);
-      pcm[i] = Math.round(12000 * env * Math.sin((2 * Math.PI * 220 * i) / sr));
-    }
-    const head = new ArrayBuffer(44);
-    const view = new DataView(head);
-    const put = (at, text) => { for (let i = 0; i < text.length; i++) view.setUint8(at + i, text.charCodeAt(i)); };
-    put(0, 'RIFF'); view.setUint32(4, 36 + pcm.byteLength, true); put(8, 'WAVE');
-    put(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, sr, true); view.setUint32(28, sr * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    put(36, 'data'); view.setUint32(40, pcm.byteLength, true);
-    return new File([head, pcm.buffer], 'perf.wav', { type: 'audio/wav' });
-  `;
-
-  const server = serve(PORT, { dir: `${project}/dist` });
-  const session = await open({ port: CDP, size: [1200, 900], url: `http://127.0.0.1:${PORT}/` });
-  try {
-    await session.goto(`http://127.0.0.1:${PORT}/`, ".app");
-    await session.ev(`
-      window.__perf = { tasks: [], notes: [], file: (() => { ${WAV} })() };
-      return true;
-    `);
-    await session.ev(`
-      new PerformanceObserver((list) => {
-        for (const e of list.getEntries()) window.__perf.tasks.push([Math.round(e.startTime), Math.round(e.duration)]);
-      }).observe({ entryTypes: ['longtask'] });
-      let last = '';
-      setInterval(() => {
-        const note = document.querySelector('.note');
-        const text = note ? note.textContent.replace(/\\d+%$/, '') : '';
-        if (text !== last) { last = text; window.__perf.notes.push([Math.round(performance.now()), text]); }
-      }, 20);
-      return true;
-    `);
-    const from = await session.ev<number>(`return Math.round(performance.now());`);
-
-    await session.ev(`
-      const dt = new DataTransfer();
-      dt.items.add(window.__perf.file);
-      document.querySelector('.app').dispatchEvent(
-        new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }),
-      );
-      return true;
-    `);
-    for (let i = 0; i < 600; i++) {
-      await sleep(500);
-      if (await session.ev<boolean>(`return !!document.querySelector('.params');`)) break;
-    }
-    await sleep(500);
-
-    const perf = await session.ev<{ tasks: [number, number][]; notes: [number, string][] }>(
-      `return window.__perf;`,
-    );
-    const mark = (at: number) => `${String(at - from).padStart(6)}ms`;
-    console.log(`\n真实页面：落一个 ${SECS}s 的 44.1k WAV，看默认参数（8k 紧凑）走完`);
-    for (const [at, text] of perf.notes) console.log(`  ${mark(at)}  ${text || "（静默）"}`);
-    console.log("  长任务（>50ms，素材已先造好，「读取」之前的不计入）");
-    let total = 0;
-    for (const [at, block] of perf.tasks) {
-      total += block;
-      console.log(`  ${mark(at)}  阻塞 ${block}ms`);
-    }
-    console.log(`  合计阻塞 ${total}ms，共 ${perf.tasks.length} 个长任务`);
-  } finally {
-    await session.stop();
-    server.stop();
-  }
 }
 
 void sink;
