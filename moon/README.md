@@ -1,11 +1,11 @@
-# `dsp` MoonBit kernel
+# `dsp`
 
-This package is the numeric kernel for atools. The MoonBit toolchain compiles it to `moon/_build/wasm/release/build/dsp.wasm`; the pipeline Worker is its only browser consumer. There is no JavaScript fallback or WASI dependency.
+A spectral DSP kernel written in MoonBit and compiled to WebAssembly. It is the numeric core of [atools](https://github.com/HK-SHAO/atools)' audio ↔ spectrogram conversion: FFT analysis and synthesis of audio, and reconstruction of audio from a magnitude-only spectrum.
 
 - Live demo: <https://atools.shao.fun/>
 - Source: <https://github.com/HK-SHAO/atools>
 
-## Responsibilities
+## Functionality
 
 | File | Role |
 | --- | --- |
@@ -19,21 +19,13 @@ This package is the numeric kernel for atools. The MoonBit toolchain compiles it
 | `rtisi.mbt` | RTISI-LA phase reconstruction |
 | `stub.mbt` | Image metadata strip codec |
 
-White-box tests live in `*_wbtest.mbt`; kernel benchmarks live in `*_bench_wbtest.mbt`.
+White-box tests live in `*_wbtest.mbt`, benchmarks in `*_bench_wbtest.mbt`.
 
 ## Host ABI
 
-`app/lib/dsp.ts` is the only host binding. Every `#export_name` function has a concise English doc comment and a stable `dsp_*` name. Change `dsp_abi` whenever an export or its semantics changes.
+Exports are stable `dsp_*` functions; bump `dsp_abi` whenever an export or its semantics changes. Failures cross the boundary as values: `0` rejects a request, `-1` marks an invalid handle, booleans are `1`/`0`.
 
-An exported `FixedArray` reaches JavaScript as the address of its data. The startup probe verifies this toolchain convention in both directions before useful work begins. The guest returns element offsets; the host converts them to byte addresses in one place.
-
-Failures use values across the boundary:
-
-- `0` from open, fit, paint, or decode rejects the request.
-- `-1` from an offset accessor means an invalid handle.
-- Boolean operations return `1` or `0`.
-
-The host compares `WebAssembly.Module.exports` with its `Kernel` interface at startup, so an incomplete or stale module fails before processing user data.
+An exported `FixedArray` reaches the host as the address of its data. The startup probe verifies this convention in both directions before useful work begins, and the host checks `WebAssembly.Module.exports` against its kernel interface, so a stale module fails before processing user data.
 
 ## Memory
 
@@ -43,18 +35,13 @@ The host compares `WebAssembly.Module.exports` with its `Kernel` interface at st
 | Slot | One transform session | Pool of six; always release |
 | Arena | One PGHI, RTISI, or stub job | Owns one double and one byte segment |
 
-Opening any of these may grow linear memory and detach existing typed arrays. Host views are therefore temporary: obtain them after allocation and obtain them again after every `await`.
+Opening any of these may grow linear memory and detach existing host views: obtain views after each allocation, and again after every `await`. Hot loops use unchecked access only where Plan, Slot, or Arena capacity proves the index range — in release builds, checked indexing on the kernel's non-provable index patterns measures 2–3× slower (reads and writes alike), and every unchecked loop is covered by white-box tests.
 
-Hot loops use unchecked array access only where Plan, Slot, or Arena capacity proves the index range. White-box tests cover FFT round trips, Parseval, supported shapes, handle reuse, and rejection paths.
+## Rules
 
-## Engineering rules
-
-- Prefer the MoonBit standard library and keep `extern` out of the package.
-- Keep one numeric implementation; do not retain a host fallback.
-- Move work into the kernel only when its data already belongs in kernel memory and same-round benchmarks show a worthwhile gain.
-- Preserve operation order when PGHI or short-window RTISI is involved; tiny floating-point changes may select a different valid phase solution.
-- Compare exact paths bitwise. Compare phase reconstruction over a distribution of inputs.
-- Add or change exports only with their host binding, ABI version, English doc comment, and boundary test.
+- Keep the source on the MoonBit standard library alone: no `extern`, no host fallback, one numeric implementation.
+- Preserve operation order around PGHI and short-window RTISI; tiny floating-point changes may select a different valid phase solution. Compare exact paths bitwise, and phase reconstruction over a distribution of inputs.
+- Add or change exports only together with an ABI bump, a doc comment, and a boundary test.
 
 ## Build and verify
 
@@ -68,5 +55,3 @@ moon check --deny-warn --target js
 moon check --deny-warn --target native
 moon fmt --check
 ```
-
-Production build and tests target wasm; the js and native checks keep the source limited to the standard library. End-to-end quality and performance commands are documented in [bench/README.md](../bench/README.md).
