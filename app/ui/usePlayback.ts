@@ -86,18 +86,19 @@ export function usePlayback(
   const start = useCallback(
     async (at: number) => {
       playingRef.current = true;
+      const wake = ctxRef.current?.resume().catch(() => {});
       let ctx: AudioContext | null = null;
       try {
         ctx = await ensure();
+        await wake;
       } catch (e) {
         console.error(e);
       }
-      if (!ctx) {
+      if (!ctx || ctx.state !== "running") {
         playingRef.current = false;
         return;
       }
       halt();
-      void ctx.resume();
 
       const node = ctx.createBufferSource();
       node.buffer = bufRef.current;

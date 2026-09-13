@@ -110,7 +110,12 @@ export function scope(name: string): Scope {
         progress,
         scope: name,
       });
-      live.worker.postMessage({ id, ...job });
+      try {
+        live.worker.postMessage({ id, ...job });
+      } catch (error) {
+        live.pending.delete(id);
+        reject(error);
+      }
     });
   };
 
