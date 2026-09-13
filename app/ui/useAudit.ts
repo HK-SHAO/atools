@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import type { Spectrum } from "../lib/spectrum";
+import { Aborted } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
 interface Finding {
@@ -9,33 +10,51 @@ interface Finding {
   rows: LossRow[] | null;
 }
 
-export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string) {
+export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string, busy: boolean) {
   const [found, setFound] = useState<Finding | null>(null);
-  const [running, setRunning] = useState<Spectrum | null>(null);
+  const [run, setRun] = useState(0);
+  const [progress, setProgress] = useState(0);
   const genRef = useRef(0);
   const io = scope("audit");
 
-  const check = useCallback(async () => {
+  const stop = useCallback(() => {
+    genRef.current += 1;
     io.cancel();
+  }, [io]);
+
+  const check = useCallback(async () => {
+    stop();
     const my = ++genRef.current;
     const alive = () => genRef.current === my;
-    setRunning(spec);
+    setProgress(0);
+    setRun(my);
     try {
-      const rows = await io.audit(pcm, spec, png, name);
+      const rows = await io.audit(pcm, spec, png, name, p => {
+        if (alive()) setProgress(p);
+      });
       if (alive()) setFound({ spec, rows });
     } catch (e) {
-      console.error(e);
-      if (alive()) setFound(null);
+      if (!(e instanceof Aborted)) {
+        console.error(e);
+        if (alive()) setFound(null);
+      }
     } finally {
-      if (alive()) setRunning(null);
+      setRun(prev => (prev === my ? 0 : prev));
     }
-  }, [io, name, pcm, png, spec]);
+  }, [io, name, pcm, png, spec, stop]);
+
+  useEffect(() => {
+    if (busy) stop();
+  }, [busy, stop]);
+
+  useEffect(() => stop, [stop]);
 
   const loss = found && found.spec === spec ? found.rows : null;
 
   return {
     loss,
-    checking: running === spec,
+    checking: run !== 0,
+    progress,
     check,
   };
 }

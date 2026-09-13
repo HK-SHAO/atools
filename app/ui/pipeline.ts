@@ -39,7 +39,7 @@ export interface Scope {
   png(spec: Spectrum): Promise<Blob>;
   compare(ref: Samples, got: Samples): Promise<Metrics>;
   readImage(file: Blob, name: string): Promise<Decoded>;
-  audit(ref: Samples, spec: Spectrum, png: Blob, name: string): Promise<LossRow[]>;
+  audit(ref: Samples, spec: Spectrum, png: Blob, name: string, onProgress?: (value: number) => void): Promise<LossRow[]>;
   cancel(): void;
 }
 
@@ -129,8 +129,8 @@ export function scope(name: string): Scope {
     png: spec => send<Blob>({ kind: "png", spec }),
     compare: (ref, got) => send<Metrics>({ kind: "compare", ref, got }),
     readImage: (file, fileName) => send<Decoded>({ kind: "readImage", file, name: fileName }),
-    audit: (ref, spec, png, fileName) =>
-      send<LossRow[]>({ kind: "audit", ref, spec, png, name: fileName }),
+    audit: (ref, spec, png, fileName, onProgress) =>
+      send<LossRow[]>({ kind: "audit", ref, spec, png, name: fileName }, onProgress),
     cancel: () => {
       const live = wire;
       if (!live) return;

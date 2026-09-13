@@ -26,5 +26,5 @@
     "erasableSyntaxOnly": true
   },
   "include": ["app"],
-  "exclude": ["app/**/*.test.ts", "app/**/*.test.tsx"]
+  "exclude": ["app/index.ts", "app/**/*.test.ts", "app/**/*.test.tsx"]
 }

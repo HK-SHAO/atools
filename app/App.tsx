@@ -51,14 +51,15 @@ export function App() {
         {!live && <StatusNote stage={studio.stage} hint={studio.hint} error={studio.error} />}
 
         <footer className="foot">
-          {source && (
+          {source ? (
             <button type="button" className="act" onClick={studio.clear}>
               清空
             </button>
+          ) : (
+            <button type="button" className="act" onClick={studio.demo}>
+              演示
+            </button>
           )}
-          <button type="button" className="act" onClick={studio.demo}>
-            演示
-          </button>
           <span className="credit">
             {CREDIT_NAME} created by{" "}
             <a href={CREDIT_AUTHOR.url} target="_blank" rel="noreferrer">

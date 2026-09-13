@@ -93,7 +93,7 @@ export function Workbench({
     duration,
     onListen,
   );
-  const { loss, checking, check } = useAudit(ref, spec, png, name);
+  const { loss, checking, check, progress } = useAudit(ref, spec, png, name, busy);
 
   const savePng = useCallback(() => save(png, downloadName(name, meta)), [meta, name, png]);
 
@@ -162,7 +162,7 @@ export function Workbench({
           存音频
         </button>
         <button type="button" className="act" onClick={check} disabled={checking || busy}>
-          {checking ? "质检中" : "质检"}
+          {checking ? `质检 ${Math.round(progress * 100)}%` : "质检"}
         </button>
         {canRefine && (
           <button type="button" className="act" onClick={onRefine} disabled={busy}>

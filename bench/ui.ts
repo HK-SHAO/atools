@@ -23,6 +23,7 @@ const INSTRUMENT = `
   }
   const live = new Set();
   window.__synth = { posted: 0, inflight: 0 };
+  window.__jobs = { posted: {}, cancelled: {}, aborted: {}, done: {}, encodes: 0 };
   const NativeWorker = window.Worker;
   window.Worker = class extends NativeWorker {
     constructor(...args) {
@@ -34,6 +35,10 @@ const INSTRUMENT = `
           window.__synth.inflight += 1;
           live.add(message.id);
         }
+        if (message && message.kind === "audit") window.__jobs.posted[message.id] = 1;
+        if (message && message.kind === "encode") window.__jobs.encodes += 1;
+        if (message && message.kind === "cancel" && Array.isArray(message.ids))
+          for (const id of message.ids) window.__jobs.cancelled[id] = 1;
         post(message, ...rest);
       };
       this.addEventListener("message", (event) => {
@@ -41,6 +46,10 @@ const INSTRUMENT = `
         if (data && live.has(data.id) && data.kind !== "progress") {
           live.delete(data.id);
           window.__synth.inflight -= 1;
+        }
+        if (data && window.__jobs.posted[data.id]) {
+          if (data.kind === "aborted") window.__jobs.aborted[data.id] = 1;
+          if (data.kind === "done") window.__jobs.done[data.id] = 1;
         }
       });
     }
@@ -150,6 +159,14 @@ async function chain(
     }
   }
 
+  await ev(`
+    window.__auditBtn = [];
+    const mo = new MutationObserver(() => {
+      const b = [...document.querySelectorAll('button.act')].find(v => v.textContent.startsWith('质检'));
+      if (b) window.__auditBtn.push(b.textContent.trim());
+    });
+    mo.observe(document.querySelector('.acts'), { subtree: true, childList: true, characterData: true });
+  `);
   await ev(press("button.act", "质检"));
   const compact = await waitFor(
     "紧凑档质检",
@@ -160,6 +177,16 @@ async function chain(
     60000,
   );
   mark(`紧凑档质检  ${compact}`);
+
+  const pcts = [
+    ...new Set(
+      ((await ev<string[]>("return window.__auditBtn")) ?? [])
+        .map(t => /^质检 (\d+)%$/.exec(t)?.[1])
+        .filter(Boolean),
+    ),
+  ];
+  if (!pcts.length) failures.push("质检进行中按钮没出现「质检 N%」进度：worker 的 progress 没接到 UI");
+  else if (pcts.length < 2) failures.push(`质检进度只出现一个档位（${pcts.join(",")}）：看不到推进`);
 
   await ev(press("button.act", "重建相位"));
   await waitFor(
@@ -191,6 +218,40 @@ async function chain(
     60000,
   );
   mark(`可逆档质检  ${exact}`);
+
+  await ev(`
+    const audit = [...document.querySelectorAll('button.act')].find(v => v.textContent.trim() === '质检');
+    const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === '紧凑');
+    if (!audit || audit.disabled) throw new Error("质检按钮不可用");
+    if (!chip || chip.disabled) throw new Error("紧凑档按钮不可用");
+    audit.click();
+    chip.click();
+    return 1;
+  `);
+  const jobs = await waitFor(
+    "质检在改参数后被收回",
+    async () => {
+      const j = await ev<{
+        posted: Record<string, number>;
+        cancelled: Record<string, number>;
+        aborted: Record<string, number>;
+        encodes: number;
+      }>("return window.__jobs");
+      return Object.keys(j.posted).length >= 3 &&
+        Object.keys(j.cancelled).length >= 1 &&
+        Object.keys(j.aborted).length >= 1 &&
+        j.encodes >= 1
+        ? j
+        : null;
+    },
+    60000,
+  ).catch(() => null);
+  if (!jobs)
+    failures.push(
+      "质检进行中改参数：在跑的质检没被取消而是烧到结束（堵住 worker，新编码只能排队等它）",
+    );
+  else mark(`质检改参数即收回（收到 cancel 的作业 ${Object.keys(jobs.cancelled).length} 个）`);
+
   return [compact, exact];
 }
 

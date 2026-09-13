@@ -1,9 +1,9 @@
 # `dsp` MoonBit kernel
 
-This package is the numeric kernel for atools. Bun compiles it to `moon/_build/wasm/release/build/dsp.wasm`; the pipeline Worker is its only browser consumer. There is no JavaScript fallback or WASI dependency.
+This package is the numeric kernel for atools. The MoonBit toolchain compiles it to `moon/_build/wasm/release/build/dsp.wasm`; the pipeline Worker is its only browser consumer. There is no JavaScript fallback or WASI dependency.
 
-- Live demo: https://atools.shao.fun/
-- Source: https://github.com/HK-SHAO/atools
+- Live demo: <https://atools.shao.fun/>
+- Source: <https://github.com/HK-SHAO/atools>
 
 ## Responsibilities
 
@@ -58,12 +58,15 @@ Hot loops use unchecked array access only where Plan, Slot, or Arena capacity pr
 
 ## Build and verify
 
+In this directory:
+
 ```sh
-bun run build:wasm
-bun run test:kernel
-bun run bench:kernel
-bun run moon:ports
+moon build --release --deny-warn --target wasm
+moon test --release --deny-warn --target wasm
+moon bench --release --deny-warn --target wasm
+moon check --deny-warn --target js
+moon check --deny-warn --target native
 moon fmt --check
 ```
 
-`test:kernel` and the production build use `--release --deny-warn --target wasm`. `moon:ports` checks JavaScript and native targets to keep the source limited to the standard library. End-to-end quality and performance commands are documented in [bench/README.md](../bench/README.md).
+Production build and tests target wasm; the js and native checks keep the source limited to the standard library. End-to-end quality and performance commands are documented in [bench/README.md](../bench/README.md).

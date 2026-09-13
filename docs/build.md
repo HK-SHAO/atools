@@ -12,10 +12,9 @@ bun run lint
 bun run test
 bun run test:kernel
 bun run build:web
-bun start
 ```
 
-服务默认监听 `http://127.0.0.1:3000`，`PORT` 可改端口。MoonBit 从 `MOON`、`PATH` 或 `~/.moon/bin` 定位。`bun start` 只读取 `dist/`。
+服务默认监听 `http://127.0.0.1:3000`，`PORT` 可改端口。MoonBit 从 `MOON`、`PATH` 或 `~/.moon/bin` 定位。`dist/` 产物由各门禁脚本（`bun run offline`、`bun run ui`）自起服务验证，部署直接走 `bun run deploy`。
 
 ## 生产构建
 
@@ -30,9 +29,7 @@ bun start
 
 ## 开发服务
 
-`scripts/serve.ts` 使用 Bun HTML 路由和 HMR；Worker 的构建与路由由 `scripts/worker-plugin.ts` 提供（bunfig `[serve.static]` 注册），请求 Worker 入口时按源码重新构建，修改 `moon/` 时重编内核（`scripts/moon.ts` 的 `watchKernel`）。开发环境不注册 Service Worker。
-
-静态模式提供 `dist/`，未知路径回落到 `index.html`，用于验证生产产物、子路径和离线行为。Cloudflare 配置位于 `cloudflare/wrangler.jsonc`。
+`app/index.ts` 是开发服务器入口，`bun dev` 直接运行它（Bun HTML 路由 + HMR）；Worker 的构建与路由由 `scripts/worker-plugin.ts` 提供（bunfig `[serve.static]` 注册），请求 Worker 入口时按源码重新构建，修改 `moon/` 时重编内核（`scripts/moon.ts` 的 `watchKernel`）。开发环境不注册 Service Worker。
 
 ## 离线与更新
 

@@ -1,6 +1,6 @@
 {
   "name": "atools",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "author": {
     "name": "烧风 HK-SHAO",
@@ -12,17 +12,16 @@
     "bun": ">=1.4"
   },
   "scripts": {
-    "dev": "bun scripts/serve.ts",
-    "start": "bun scripts/serve.ts --dist",
+    "dev": "bun --hot app/index.ts",
     "build:web": "bun scripts/build.ts",
-    "build:wasm": "bun scripts/moon.ts --force",
+    "build:wasm": "cd moon && moon build --release --deny-warn --target wasm",
     "deploy": "bun scripts/build.ts && bunx wrangler deploy --config cloudflare/wrangler.jsonc",
     "typecheck": "tsc -b",
     "test": "bun test",
-    "test:kernel": "bun scripts/moon.ts --test",
-    "moon:ports": "bun scripts/moon.ts --ports",
-    "bench:kernel": "bun scripts/moon.ts --bench",
-    "bench:kernel:build": "bun scripts/moon.ts --bench --build-only",
+    "test:kernel": "cd moon && moon test --release --deny-warn --target wasm",
+    "moon:ports": "cd moon && moon check --deny-warn --target js && moon check --deny-warn --target native",
+    "bench:kernel": "cd moon && moon bench --release --deny-warn --target wasm",
+    "bench:kernel:build": "cd moon && moon bench --release --deny-warn --target wasm --build-only",
     "bench:moonebench": "bun bench/moonebench.ts",
     "quality": "bun bench/quality.ts",
     "kernel": "bun bench/kernel.ts",

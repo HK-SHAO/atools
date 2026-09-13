@@ -41,10 +41,11 @@ async function one(
   blob: Blob,
   fileName: string,
   alive?: () => boolean,
+  report?: (p: number) => void,
 ): Promise<LossRow> {
   const back = (await imageToSpectrum(blob, fileName)).spec;
   if (alive && !alive()) throw new Aborted();
-  const y = await synthesise(back, alive, undefined, "fast");
+  const y = await synthesise(back, alive, report, "fast");
   if (alive && !alive()) throw new Aborted();
   const m = compare(ref, y);
   return {
@@ -63,19 +64,28 @@ export async function audit(
   png: Blob,
   name: string,
   alive?: () => boolean,
+  onProgress?: (p: number) => void,
 ): Promise<LossRow[]> {
   const own = downloadName(name, spec.meta);
-  const out: LossRow[] = [];
-  out.push(await one("原图", ref, spec, png, own, alive));
-
+  const cases: [string, Blob, string][] = [["原图", png, own]];
   for (const [label, mode] of [
     ["有损", "jpeg"],
     ["半尺寸", "half"],
   ] as const) {
     const blob = await recode(png, mode);
     if (alive && !alive()) throw new Aborted();
-    const fileName = mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own;
-    out.push(await one(label, ref, spec, blob, fileName, alive));
+    cases.push([label, blob, mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own]);
   }
+
+  const out: LossRow[] = [];
+  for (const [i, [label, blob, fileName]] of cases.entries()) {
+    onProgress?.(i / cases.length);
+    out.push(
+      await one(label, ref, spec, blob, fileName, alive, p =>
+        onProgress?.((i + p) / cases.length),
+      ),
+    );
+  }
+  onProgress?.(1);
   return out;
 }

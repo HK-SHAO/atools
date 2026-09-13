@@ -58,7 +58,7 @@ async function run(request: JobRequest): Promise<void> {
       return;
     }
     if (request.kind === "audit") {
-      const rows = await audit(request.ref, request.spec, request.png, request.name, alive);
+      const rows = await audit(request.ref, request.spec, request.png, request.name, alive, report);
       worker.postMessage({ id, kind: "done", value: rows });
       return;
     }

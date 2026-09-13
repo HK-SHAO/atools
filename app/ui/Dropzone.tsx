@@ -7,8 +7,8 @@ export function Dropzone({ onFile, dragging }: Props) {
   return (
     <section className="card">
       <div className={dragging ? "drop is-hot" : "drop"}>
-        <span className="drop-lead">拖进一段音频，或者一张图</span>
-        <span className="drop-sub">mp3, wav, flac, m4a, ogg, amr ↔ png, jpg, webp</span>
+        <span className="drop-lead">声音转换成频谱，还能转换回去</span>
+        <span className="drop-sub">mp3, wav, flac, m4a, ogg, amr ↔ png, jpg, webp<br/>纯客户端，无服务器，不上传数据</span>
         <div className="drop-acts">
           <label className="drop-act">
             选文件
