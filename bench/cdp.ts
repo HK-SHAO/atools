@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
@@ -51,9 +51,10 @@ interface Options {
 
 export async function open({ port, size, url, args = [] }: Options): Promise<Session> {
   const [w, h] = size;
-  const proc = spawn(
-    chromium(),
+  const profile = join(tmpdir(), `cdp-${port}-${Date.now()}`);
+  const proc = Bun.spawn(
     [
+      chromium(),
       "--headless=new",
       `--remote-debugging-port=${port}`,
       "--no-first-run",
@@ -62,15 +63,20 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       "--mute-audio",
       ...args,
       `--window-size=${w},${h}`,
-      `--user-data-dir=${join(tmpdir(), `cdp-${port}-${Date.now()}`)}`,
+      `--user-data-dir=${profile}`,
       url,
     ],
-    { stdio: "ignore" },
+    { stdout: "ignore", stderr: "ignore" },
   );
 
   const stop = async (): Promise<void> => {
-    proc.kill();
-    await sleep(200);
+    if (proc.exitCode === null) proc.kill();
+    await Promise.race([proc.exited, sleep(2000)]);
+    if (proc.exitCode === null) {
+      proc.kill("SIGKILL");
+      await proc.exited;
+    }
+    await rm(profile, { recursive: true, force: true });
   };
 
   try {
@@ -88,18 +94,32 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
     });
 
     let seq = 0;
-    const pending = new Map<number, (v: unknown) => void>();
+    const pending = new Map<
+      number,
+      { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
+    >();
     const listeners: ((msg: any) => void)[] = [];
     ws.onmessage = e => {
-      const m = JSON.parse(String(e.data)) as { id?: number; result?: unknown };
-      if (m.id !== undefined) pending.get(m.id)?.(m.result);
-      else for (const f of listeners) f(m);
+      const m = JSON.parse(String(e.data)) as {
+        id?: number;
+        result?: unknown;
+        error?: { message?: string };
+      };
+      if (m.id === undefined) {
+        for (const f of listeners) f(m);
+        return;
+      }
+      const call = pending.get(m.id);
+      if (!call) return;
+      pending.delete(m.id);
+      if (m.error) call.reject(new Error(m.error.message ?? "CDP 请求失败"));
+      else call.resolve(m.result);
     };
 
     const send = (method: string, params: Record<string, unknown> = {}): Promise<any> =>
-      new Promise(res => {
+      new Promise((accept, reject) => {
         const id = ++seq;
-        pending.set(id, res);
+        pending.set(id, { resolve: accept, reject });
         ws.send(JSON.stringify({ id, method, params }));
       });
 
@@ -129,8 +149,10 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
         throw new Error(`导航超时：${target}`);
       },
       stop: async () => {
-        ws.close();
+        if (ws.readyState === WebSocket.OPEN)
+          ws.send(JSON.stringify({ id: ++seq, method: "Browser.close", params: {} }));
         await stop();
+        ws.close();
       },
     };
   } catch (e) {

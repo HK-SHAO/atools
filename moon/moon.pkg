@@ -1,4 +1,3 @@
-// Foreign library used by the pipeline Worker. It has no externs or Wasm imports.
 pkgtype(kind: "foreign_library")
 
 import {

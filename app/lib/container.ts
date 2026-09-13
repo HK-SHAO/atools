@@ -1,14 +1,5 @@
 import type { Meta } from "./spectrum.ts";
 
-/**
- * 读图这条链上**主线程自己要用的**那几件：容器嗅探、结果档位、下载文件名。
- *
- * 其余部分（像素 → 谱、谱 → 像素、PNG 字节层）整个在 worker 里跑，连同它拖着的 png / stub /
- * 内核加载器一起不进主包。单列出来是因为它们非留在主线程不可：`sniff` 要在**送进 worker 之前**
- * 判断拖进来的是图还是音频（决定走哪条路），`downloadName` 要交给浏览器的下载动作。
- * 像素与谱的处理没有这个约束 —— 它们搬得动，就搬走了。
- */
-
 export type Container = "png" | "bmp" | "webp-lossless" | "jpeg" | "webp" | "gif" | "avif" | "?";
 
 export type ReadMode = "exact" | "compact" | "degraded" | "foreign";

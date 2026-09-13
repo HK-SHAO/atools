@@ -165,8 +165,6 @@ export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
   );
 }
 
-// 离屏画布（不是 `document.createElement("canvas")`）：这一段整个跑在 worker 里。
-// 实测主线程 `toBlob` 与这里 `convertToBlob` 编出的 PNG / JPEG 逐字节相同。
 function surface(width: number, height: number) {
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
