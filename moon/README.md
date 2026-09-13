@@ -1,156 +1,66 @@
-# `dsp` — the numeric kernel of atools
+# `dsp` MoonBit kernel
 
-MoonBit source for the single numeric implementation behind the audio ↔ spectrogram tool.
-It is compiled to `moon/_build/wasm/release/build/dsp.wasm`; `app/lib/dsp.ts` imports that file as
-an asset (Bun's `.wasm` loader hands back a **path string**, not a URL) and both threads of the web
-app load it (worker + main).
-There is **no JavaScript fallback**: if a host cannot load this module, it must fail loudly
-rather than silently switch to a second implementation nobody maintains.
+This package is the numeric kernel for atools. Bun compiles it to `moon/_build/wasm/release/build/dsp.wasm`; the pipeline Worker is its only browser consumer. There is no JavaScript fallback or WASI dependency.
 
-```
-moon/            source (this directory)   →  scripts/moon.ts  →  moon/_build/…/dsp.wasm
-app/lib/dsp.ts   host loader: kernelUrl() folds the asset path to an absolute URL, then fetch,
-                 handshake, typed-view slicing
-```
-
-## Why a kernel at all
-
-1. **One implementation.** The host keeps only the glue: it moves bytes across the boundary.
-   Every numeric loop that used to exist twice (once in TS, once here) is gone.
-2. **Hot loops are written with `unsafe_get` / `unsafe_set`.** `arr[i]` compiles to two
-   non-inlined calls (`check_range` + `array_length`); in a butterfly with 8 accesses that
-   made the same algorithm **7× slower** than the JS version. After switching to the unsafe
-   accessors it is **1.5× faster** (see `docs/algorithms.md`).
-3. **No imports, no `extern`.** `moon.pkg` allows only the standard library, so the same
-   source type-checks for `wasm`, `js` and `native` (`bun run moon:ports`).
-
-## Standard library first
-
-A hand-rolled helper looks harmless at this size, which is exactly why the rule is written down:
-**if the standard library has it, call it.** `log2` replaced doubling loops in `rtisi_open` and
-`plan_of`; `clamp` / `min` / `max` come from `Double` / `Int` through the prelude.
-`rtisi_wbtest.mbt` pins `@math.log2` as the exact step count on every reachable window length —
-that equality is what makes the swap sound, and it deliberately does *not* hold off the ladder
-(3000 → 11.55 against 12).
-
-Two helpers stay hand-written, each with its measurement in `docs/algorithms.md`: the counting sort
-in `pghi.mbt` (`Array::sort` is documented **unstable**, and the visit order *is* the result) and
-`sqrt(re² + im²)` in `rtisi.mbt` (`@math.hypot` differs by 1 ulp on about a third of the plane, and
-this feeds the phase estimate).
-
-`using @math {…}` imports **functions only**. A `pub const` cannot come along — `using @math
-{log2, PI}` is a hard `Error 0002` under `--deny-warn` — so `@math.PI` stays qualified everywhere;
-that is a compiler fact, not a style choice. An imported name also **loses to a local of the same
-name**, so `plan.mbt` (which declares `let cos`) could not import `cos` even if it wanted to. Today
-only `rtisi.mbt` qualifies: its whole `@math` surface is importable and collision-free.
-
-## Three kinds of memory
-
-| Layer | Lifetime | Where | Notes |
-| --- | --- | --- | --- |
-| **Plan tables** | process, per window size | `plan.mbt` | read-only: bit-reversal, twiddles, Hann window. Cached by `win`, never moved. |
-| **Session slots** | one long computation | `session.mbt` | fixed-size workspace + the plan tables it binds to. Pool of `max_slots` (6) — you must return it. |
-| **Job arenas** | one job | `arena.mbt` | a job owns its arrays: one `Double` buffer + one `Byte` segment, addressed by a handle. |
-
-A job arena exists because `memory.grow` **detaches every typed view** the host previously
-sliced. Views therefore must never be held: `dsp_job_d` / `dsp_job_b` / `dsp_slot_mem` /
-`dsp_plan_*` hand out the array *now*, and the host re-slices after every `await`.
-
-## Layout
+## Responsibilities
 
 | File | Role |
 | --- | --- |
-| `engine.mbt` | ABI version + the boot-time probe that proves the host/guest addressing convention |
-| `plan.mbt` | per-window tables: bit reversal, twiddles, Hann window |
-| `session.mbt` | session slot pool |
-| `pair.mbt` | two real transforms packed into one complex transform (halves the FFT count of RTISI) |
-| `fft.mbt` | complex FFT (`dsp_fft`, plus `inverse` for tests) and `real_ifft` — the one-sided → conjugate-symmetric inverse that the host's exact path and RTISI's inner loop both call |
-| `arena.mbt` | job arenas (variable-size, one per job) |
-| `rtisi.mbt` | RTISI-LA phase reconstruction (the whole iterative loop) |
-| `pghi.mbt` | PGHI phase initialisation: the magnitude spectrum in, a phase guess out |
-| `stub.mbt` | the barcode "stub" at the bottom of a spectrogram: pure integer encode/decode |
+| `engine.mbt` | ABI version and host-memory handshake |
+| `plan.mbt` | Cached FFT tables |
+| `session.mbt` | Fixed FFT workspace pool |
+| `pair.mbt` | Two real transforms in one complex transform |
+| `fft.mbt` | Complex FFT and one-sided real inverse |
+| `arena.mbt` | Variable-size job memory |
+| `pghi.mbt` | PGHI phase initialization |
+| `rtisi.mbt` | RTISI-LA phase reconstruction |
+| `stub.mbt` | Image metadata strip codec |
 
-Tests live next to the sources: `*_wbtest.mbt` are white-box tests (`bun run test:kernel`),
-`*_bench_wbtest.mbt` are kernels-side benchmarks (`bun run bench:kernel`).
+White-box tests live in `*_wbtest.mbt`; kernel benchmarks live in `*_bench_wbtest.mbt`.
 
-## Host boundary
+## Host ABI
 
-Exactly one convention crosses the language boundary, and it is not documented behaviour of
-the toolchain:
+`app/lib/dsp.ts` is the only host binding. Every `#export_name` function has a concise English doc comment and a stable `dsp_*` name. Change `dsp_abi` whenever an export or its semantics changes.
 
-> When an exported function returns a `FixedArray`, the integer the host receives **is the
-> address of its data area.** The reverse does not hold — a `Float64Array` passed in from the
-> host arrives as a bare `i32` and will read out of bounds.
+An exported `FixedArray` reaches JavaScript as the address of its data. The startup probe verifies this toolchain convention in both directions before useful work begins. The guest returns element offsets; the host converts them to byte addresses in one place.
 
-`loadDsp` therefore performs a two-way handshake at boot (`dsp_probe_*`): the kernel writes a
-pattern and the host reads it back through two views, then the host writes and the kernel reads
-back. If the toolchain ever changes the layout, this fails at startup instead of producing
-plausible-but-wrong numbers later. The guest reports **element offsets**, never addresses; the
-host adds the base in exactly one place (`app/lib/dsp.ts`'s `jobSlice` / `jobBytes`).
+Failures use values across the boundary:
 
-Failure is expressed in return values, never by throwing across the boundary:
+- `0` from open, fit, paint, or decode rejects the request.
+- `-1` from an offset accessor means an invalid handle.
+- Boolean operations return `1` or `0`.
 
-- `0` from an `*_open` / `*_fits` / `*_paint` / `*_decode` call = the request was rejected
-  (pool full, size illegal, table too short). The host must not proceed.
-- `-1` from an offset accessor = invalid slot / handle.
-- `dsp_real_ifft` returns `1` when it ran, `0` when it refused.
+The host compares `WebAssembly.Module.exports` with its `Kernel` interface at startup, so an incomplete or stale module fails before processing user data.
 
-Exports are grouped by layer: `dsp_abi` · `dsp_probe_*` · `dsp_plan_*` · `dsp_slot_*` ·
-`dsp_pair_*` · `dsp_fft` · `dsp_real_ifft` · `dsp_job_*` · `dsp_pghi_*` · `dsp_rtisi_*` ·
-`dsp_stub_*`. That list is the whole surface, and it is checkable rather than remembered:
-`WebAssembly.Module.exports` on the built module and the `Kernel` interface in `app/lib/dsp.ts`
-agree one for one. `dsp_*` names are the ABI (fixed) while the MoonBit identifier may be named
-differently (e.g. `dsp_job_words` ↔ `job_words_of`).
+## Memory
 
-The surface is the ABI: `dsp_abi` is `7`. Anything the host never calls stays unexported —
-`inverse`, `pair_forward` and `pair_inverse` are `pub` only within the package and carry no
-`#export_name`, so that attribute is what separates "ABI" from "entry point for our own tests":
-`inverse` is the oracle `real_ifft` is compared against, and RTISI calls the `pair_*` pair.
-A grep for `dsp_` in `app/` and `bench/` is therefore the list.
+| Storage | Lifetime | Rule |
+| --- | --- | --- |
+| Plan | Process, per window size | Read-only and cached |
+| Slot | One transform session | Pool of six; always release |
+| Arena | One PGHI, RTISI, or stub job | Owns one double and one byte segment |
+
+Opening any of these may grow linear memory and detach existing typed arrays. Host views are therefore temporary: obtain them after allocation and obtain them again after every `await`.
+
+Hot loops use unchecked array access only where Plan, Slot, or Arena capacity proves the index range. White-box tests cover FFT round trips, Parseval, supported shapes, handle reuse, and rejection paths.
+
+## Engineering rules
+
+- Prefer the MoonBit standard library and keep `extern` out of the package.
+- Keep one numeric implementation; do not retain a host fallback.
+- Move work into the kernel only when its data already belongs in kernel memory and same-round benchmarks show a worthwhile gain.
+- Preserve operation order when PGHI or short-window RTISI is involved; tiny floating-point changes may select a different valid phase solution.
+- Compare exact paths bitwise. Compare phase reconstruction over a distribution of inputs.
+- Add or change exports only with their host binding, ABI version, English doc comment, and boundary test.
 
 ## Build and verify
 
-```bash
-bun run build:wasm       # compile this directory → moon/_build/…/dsp.wasm (--force = full rebuild)
-bun run test:kernel      # white-box tests:      moon test  --release --deny-warn --target wasm
-bun run bench:kernel     # kernel benchmarks:    moon bench --release --deny-warn --target wasm
-bun run moon:ports       # moon check --target js / native  (proves "standard library only")
+```sh
+bun run build:wasm
+bun run test:kernel
+bun run bench:kernel
+bun run moon:ports
+moon fmt --check
 ```
 
-`--deny-warn` is part of the contract: a warning is a piece of code nobody understood. Nothing is
-tolerated today, so `moon.pkg` carries no `warn_list`; if something ever has to be, it goes there
-as a decision somebody took rather than a silent debt.
-
-`moon fmt` is the formatter of record, the same way it is in `~/.moon/lib/core`: blocks are
-separated by `///|`, the order of blocks does not matter, and a formatting pass is therefore
-safe to run at any point.
-
-It does strip redundant parentheses, so "this association order matches the reference" cannot be
-said with brackets — and this directory carries **no comments at all** (`///|` is `moon fmt`'s
-block separator, not prose), so it cannot be said that way either. A constraint that has to
-survive a reformat has to be expressed as code or pinned by a test. Note that
-the tables are **not** bit-identical to a JS recomputation anyway: `@math.cos` and V8's
-`Math.cos` disagree in the last bit on roughly 4% of the points, which is measured in
-`docs/algorithms.md` and is far below the precision the encoders store.
-
-## Adding a module
-
-The migration recipe, in this order:
-
-0. **Measure the case, then A/B it in the same round.** Keep the retired implementation in a
-   scratch directory (never in the repo), drive both with the same input in the same process, and
-   compare **bits before times**. A number rescaled from another measurement is not an A/B: two
-   entries in `docs/algorithms.md` were first written that way and both were wrong (PGHI recorded
-   as "twice as slow as the JS"; `resample`'s blocker recorded as its phase table).
-1. Move the implementation here; the host keeps a single "move the data" call (one `set`).
-2. Move the behaviour tests into `<module>_wbtest.mbt`, and keep the *property* they assert
-   rather than the numbers of the day (a memo table is bit-identical to computing inline; a
-   table is not bit-identical to a JS recomputation — that one belongs in a measurement, not
-   in an assertion).
-3. Leave the host with nothing numeric — no reference implementation, no fallback branch.
-4. Re-export through `dsp_*`, and bump `dsp_abi` if the export surface or its semantics changed.
-5. Before moving anything, check its domain against the segment caps (`max_job_words`,
-   `max_job_bytes`). Those are sized for **pixels**; a module that works in the **sample**
-   domain (`resample` wants `src + dst` in one segment, and a 96 kHz source reaches that cap at
-   ~650 s) turns a large input into a hard failure. An arena is only a good home when the data
-   already has to be there.
+`test:kernel` and the production build use `--release --deny-warn --target wasm`. `moon:ports` checks JavaScript and native targets to keep the source limited to the standard library. End-to-end quality and performance commands are documented in [bench/README.md](../bench/README.md).

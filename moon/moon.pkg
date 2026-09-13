@@ -1,11 +1,4 @@
-// A numeric library called directly from JS: no _start, zero imports, the export surface is the
-// entire interface. Memory contracts, buffer caps and degradation paths are documented at the
-// top of session.mbt and arena.mbt.
-//
-// The package uses the standard library and nothing else: `extern` appears nowhere. The single
-// addressing convention is "an exported function returning an array hands the host the address of
-// its data area" (see engine.mbt), so the same source type-checks for wasm, js and native —
-// `bun run moon:ports` guards that.
+// Foreign library used by the pipeline Worker. It has no externs or Wasm imports.
 pkgtype(kind: "foreign_library")
 
 import {
@@ -15,8 +8,6 @@ import {
 import {
   "moonbitlang/core/bench",
 } for "wbtest"
-
-// Exports are marked per function with #export_name, next to the implementation.
 
 options(
   link: { "wasm": { "export-memory-name": "memory" } },
