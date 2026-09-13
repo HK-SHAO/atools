@@ -1,2 +1,5 @@
 [test]
 preload = ["./scripts/moon.ts"]
+
+[serve.static]
+plugins = ["./scripts/worker-plugin.ts"]

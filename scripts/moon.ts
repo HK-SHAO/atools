@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,22 @@ export function compileWasm(opts: { force?: boolean } = {}): Uint8Array<ArrayBuf
 
 export const ensureWasm = (opts: { force?: boolean } = {}): Uint8Array<ArrayBuffer> =>
   compileWasm(opts);
+
+export function watchKernel(): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  watch(moonDir, { recursive: true }, (_event, file) => {
+    if (!file || file.startsWith("_build") || !/\.(mbt|pkg|mod)$/.test(file)) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      try {
+        compileWasm();
+      } catch (error) {
+        console.error(error);
+      }
+    }, 80);
+  });
+}
 
 if (import.meta.main) {
   const flags = process.argv.slice(2);

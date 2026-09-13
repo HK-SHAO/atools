@@ -4,13 +4,9 @@ import type { Decoded } from "../lib/image";
 import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
-
-declare const WORKER_ENTRY_URL: string;
+import workerUrl from "./pipeline.worker.ts?worker&url";
 
 export type { Metrics };
-
-const WORKER_URL =
-  typeof WORKER_ENTRY_URL === "string" ? WORKER_ENTRY_URL : "./pipeline.worker.js";
 
 export type Job =
   | { kind: "resample"; pcm: Samples; from: number; to: number; fmax: number }
@@ -65,7 +61,7 @@ const scopes = new Map<string, Scope>();
 
 function connect(): Wire {
   if (wire) return wire;
-  const worker = new Worker(WORKER_URL, { type: "module" });
+  const worker = new Worker(workerUrl, { type: "module" });
   const live: Wire = { worker, nextId: 1, pending: new Map() };
 
   const fail = (reason: string): void => {

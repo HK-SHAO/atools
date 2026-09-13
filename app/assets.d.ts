@@ -12,3 +12,8 @@ declare module "*.css" {
   const path: string;
   export default path;
 }
+
+declare module "*?worker&url" {
+  const url: string;
+  export default url;
+}

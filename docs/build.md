@@ -19,21 +19,18 @@ bun start
 
 ## 生产构建
 
-`scripts/build.ts` 按依赖顺序执行三次 Bun 构建：
+`scripts/build.ts` 按依赖顺序执行两次 Bun 构建：
 
-1. `pipeline.worker.ts` → 带内容哈希的 Worker 和 Wasm。
-2. `index.html` → 应用、CSS 与按需音频解码器。
-3. `sw.ts` → 注入应用壳清单和内容指纹的 `sw.js`。
+1. `index.html` → 应用、CSS 与按需音频解码器；`scripts/worker-plugin.ts` 在构建内响应 `./pipeline.worker.ts?worker&url` 导入，把 Worker 连同 Wasm 以内容哈希产出到 `dist/` 根目录。
+2. `sw.ts` → 注入应用壳清单和内容指纹的 `sw.js`。
 
-Bun 不会从 `new Worker()` 或 `serviceWorker.register()` 的运行期字符串发现入口，因此 Worker 和 Service Worker 必须单独构建。构建把 Worker 的哈希 URL 注入应用入口，避免更新期间的新应用误取旧 Worker。Service Worker 依赖前两步的完整产物计算缓存版本，所以最后构建。
-
-产物保持在 `dist/` 根目录：Worker 相对页面解析，Wasm 相对 Worker 模块解析，manifest 也以自身位置解析图标。构建会拒绝缺失的壳文件、嵌套产物、未注入的 Service Worker 清单，以及意外进入主线程入口的 Wasm 内核。
+应用代码用 `import workerUrl from "./pipeline.worker.ts?worker&url"` 声明 Worker，URL 由插件注入，dev 与 build 同一写法。构建会拒绝缺失的壳文件、未被入口按相对 URL 引用的 Worker、未注入的 Service Worker 清单，以及任何进入应用产物的 Wasm 内核握手（主线程不含数值，见 docs/architecture.md）。
 
 音频解码器和演示音频按需下载并进入运行时缓存，不计入首次离线应用壳。完整职责与门禁见 [architecture.md](architecture.md)。
 
 ## 开发服务
 
-`scripts/serve.ts` 使用 Bun HTML 路由和 HMR。Worker 独立构建；请求 Worker 入口时刷新其产物，修改 `moon/` 时重编内核。开发环境不注册 Service Worker。
+`scripts/serve.ts` 使用 Bun HTML 路由和 HMR；Worker 的构建与路由由 `scripts/worker-plugin.ts` 提供（bunfig `[serve.static]` 注册），请求 Worker 入口时按源码重新构建，修改 `moon/` 时重编内核（`scripts/moon.ts` 的 `watchKernel`）。开发环境不注册 Service Worker。
 
 静态模式提供 `dist/`，未知路径回落到 `index.html`，用于验证生产产物、子路径和离线行为。Cloudflare 配置位于 `cloudflare/wrangler.jsonc`。
 
