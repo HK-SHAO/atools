@@ -117,6 +117,7 @@ async function decodeWasm(engine: Engine, bytes: Uint8Array): Promise<Decoded> {
 }
 
 async function decodeNative(data: ArrayBuffer, rate: number | null): Promise<Decoded | null> {
+  if (typeof OfflineAudioContext === "undefined") return null;
   try {
     const ctx = new OfflineAudioContext(1, 1, rate ?? DECODE_RATE);
     const buffer = await decodeRaw(ctx, data.slice(0));

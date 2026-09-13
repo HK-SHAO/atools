@@ -38,12 +38,10 @@ const INSPECT = `
 `;
 
 const CACHED = `
-  const out = [];
-  for (const key of await caches.keys()) {
-    const cache = await caches.open(key);
-    out.push(...(await cache.keys()).map((r) => new URL(r.url).pathname));
-  }
-  return out;
+  const prefix = 'atools:' + new URL('./sw.js', location.href).pathname + ':';
+  const key = (await caches.keys()).find((name) => name.startsWith(prefix));
+  if (!key) return [];
+  return (await (await caches.open(key)).keys()).map((r) => new URL(r.url).pathname);
 `;
 
 const server = serve(PORT, {
