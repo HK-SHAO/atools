@@ -15,7 +15,7 @@ export function App() {
     <div className="app" {...handlers}>
       <div className="shell">
         <header className="head">
-          <h1>频谱 SPECTRUM</h1>
+          <h1>留声 SPECTRUM</h1>
           <p>声音 ↔ 图像</p>
           <a
             className="head-link"

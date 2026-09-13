@@ -1,4 +1,4 @@
-# atools · 频谱 Spectrum
+# 留声 / 频谱 Spectrum
 
 **[▶ 在线试用 / Try online](https://atools.shao.fun)**
 
