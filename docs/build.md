@@ -21,11 +21,11 @@ bun start
 
 `scripts/build.ts` 按依赖顺序执行三次 Bun 构建：
 
-1. `pipeline.worker.ts` → 固定名称的 `pipeline.worker.js` 和 Wasm。
+1. `pipeline.worker.ts` → 带内容哈希的 Worker 和 Wasm。
 2. `index.html` → 应用、CSS 与按需音频解码器。
 3. `sw.ts` → 注入应用壳清单和内容指纹的 `sw.js`。
 
-Bun 不会从 `new Worker()` 或 `serviceWorker.register()` 的运行期字符串发现入口，因此 Worker 和 Service Worker 必须单独构建。Service Worker 依赖前两步的完整产物计算缓存版本，所以最后构建。
+Bun 不会从 `new Worker()` 或 `serviceWorker.register()` 的运行期字符串发现入口，因此 Worker 和 Service Worker 必须单独构建。构建把 Worker 的哈希 URL 注入应用入口，避免更新期间的新应用误取旧 Worker。Service Worker 依赖前两步的完整产物计算缓存版本，所以最后构建。
 
 产物保持在 `dist/` 根目录：Worker 相对页面解析，Wasm 相对 Worker 模块解析，manifest 也以自身位置解析图标。构建会拒绝缺失的壳文件、嵌套产物、未注入的 Service Worker 清单，以及意外进入主线程入口的 Wasm 内核。
 

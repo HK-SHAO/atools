@@ -29,15 +29,21 @@ await rm(outdir, { recursive: true, force: true });
 
 const worker = await build({
   entrypoints: [workerSource],
-  naming: "[name].js",
+  naming: "[name]-[hash].js",
 });
+const workerEntry = worker.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
+if (!workerEntry) fail("Worker 构建没有产出入口脚本");
+const workerName = rel(workerEntry);
 
 const app = await build({
   entrypoints: [path.join(project, "app/index.html")],
   splitting: true,
   reactCompiler: true,
   naming: { chunk: "[name]-[hash].[ext]" },
-  define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  define: {
+    "process.env.NODE_ENV": JSON.stringify("production"),
+    WORKER_ENTRY_URL: JSON.stringify(`./${workerName}`),
+  },
 });
 
 const entry = app.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
@@ -45,6 +51,12 @@ if (!entry) fail("应用产物里没有入口脚本：index.html 的 <script typ
 
 if ((await Bun.file(entry.path).text()).includes("dsp_abi"))
   fail(`${rel(entry)} 里出现了内核握手：主线程不该挂内核（数值全在 worker，见 docs/build.md）`);
+
+const appCode = await Promise.all(
+  app.outputs.filter(output => output.path.endsWith(".js")).map(output => output.text()),
+);
+if (!appCode.some(code => code.includes(workerName)))
+  fail(`应用产物没有引用 Worker ${workerName}`);
 
 for (const output of [...app.outputs, ...worker.outputs])
   if (path.posix.dirname(rel(output)) !== ".")
