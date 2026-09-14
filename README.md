@@ -19,9 +19,8 @@ Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop
 | | 紧凑 Compact（默认 default） | 可逆 Exact |
 | -- | -- | -- |
 | 存什么 / Stored | 2 / 4 / 8 bit 幅度 / magnitude | 8 bit 幅度 + 相位 / magnitude + phase |
-| 大小 / Size | 更小 / smaller | 更大 / larger |
 | 还原 / Restored | 相位重建，近似音频 / approximate | 原始 PNG 近乎无损 / near-lossless from the original PNG |
-| 编辑后 / After edits | 可继续读取，质量取决于保留的像素 | 相位受损时自动降级 |
+| 编辑后 / After edits | 可继续读取，质量取决于像素 | 相位受损时自动降级 |
 
 紧凑模式不存相位。常见的转发、压缩和缩放后通常仍可读取，但编辑越重，声音损失越大。
 
@@ -40,7 +39,6 @@ bun install
 bun dev              # 源码直出 + HMR → http://localhost:3000
 bun run test         # 算法与格式测试 / tests（bun test）
 bun run build:web    # 生产构建 → dist/ / build
-bun start            # 静态服务 dist/，本地就能验证 PWA 与离线
 ```
 
 ## 深入 / Going deeper
