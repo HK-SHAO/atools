@@ -18,8 +18,8 @@ const SHEET_ROWS = 360;
 const MODE_NOTE: Record<ReadMode, string | null> = {
   exact: "相位已载入。无损图片的音质更好",
   compact: null,
-  degraded: "此图被压缩或缩放过，音质会失真",
-  foreign: "这不是本工具生成的，建议采用专用图片",
+  degraded: "此图片有损，音质会失真",
+  foreign: "不建议加载非专用图片",
 };
 
 const kb = (n: number): string =>

@@ -32,6 +32,12 @@ Compact images omit phase. They usually remain readable after common sharing, co
 
 Decoding adapts to the available information: intact phase is inverted directly, damaged phase is reconstructed, and an unfamiliar image is treated as a magnitude spectrum for synthesis.
 
+## MoonBit
+
+内核是纯 MoonBit 包（[HK-SHAO/dsp](https://mooncakes.io/docs/HK-SHAO/dsp)）：FFT（256~4096）、STFT 编解码、量化与相位重建，编译为 WASM 供浏览器直接调用，不依赖 JS 运行时与服务器。宿主 ABI、内存布局与设计取舍见 [moon/README.md](moon/README.md)。
+
+The DSP kernel is a pure MoonBit package ([HK-SHAO/dsp](https://mooncakes.io/docs/HK-SHAO/dsp)): FFT (256–4096), STFT codec, quantization, and phase reconstruction, compiled to WASM and consumed directly in the browser with no JS runtime or server dependency. See [moon/README.md](moon/README.md) for the host ABI, memory layout, and design notes.
+
 ## 开发 / Development
 
 ```bash
