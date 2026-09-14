@@ -213,7 +213,7 @@ async function chain(
     "可逆档质检",
     async () => {
       const t = await ev<string>(FACTS);
-      return (t.includes("还原度") || t.includes("自检")) && t !== rendered ? t : null;
+      return (t.includes("相关度，信噪比") || t.includes("自检")) && t !== rendered ? t : null;
     },
     60000,
   );
@@ -251,6 +251,98 @@ async function chain(
       "质检进行中改参数：在跑的质检没被取消而是烧到结束（堵住 worker，新编码只能排队等它）",
     );
   else mark(`质检改参数即收回（收到 cancel 的作业 ${Object.keys(jobs.cancelled).length} 个）`);
+
+  // —— 图片往返：读回存出的可逆 PNG，相位提示与「重建相位」按钮必须一致 ——
+  // （回归防护：曾出现「提示说可重建、按钮却消失」——载入后重编码换了谱，提示却按旧图留着）
+  await ev(press("button.chip", "可逆"));
+  await waitFor(
+    "可逆档出图（往返用）",
+    async () => {
+      const t = await ev<string>(FACTS);
+      return t.includes("可逆模式") && (await ev<number>(enabled("质检"))) ? t : null;
+    },
+    120000,
+  );
+
+  await ev(`
+    window.__capBlob = null;
+    window.__capName = null;
+    const origURL = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = b => { if (b instanceof Blob) window.__capBlob = b; return origURL(b); };
+    const proto = HTMLElement.prototype;
+    const origClick = proto.click;
+    proto.click = function () {
+      if (this.tagName === 'A' && this.download) { window.__capName = this.download; return 1; }
+      return origClick.call(this);
+    };
+    return 1;
+  `);
+  await ev(press("button.act", "存频谱图"));
+  const roundtrip = await ev<{ size: number; label: string; encodes: number; name: string }>(`
+    if (!window.__capBlob || !window.__capName) throw new Error("存频谱图没有产生可截获的 PNG");
+    const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
+    const drop = async (blob, name) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], name, { type: name.endsWith(".jpg") ? "image/jpeg" : "image/png" }));
+      const target = document.querySelector('.app');
+      if (!target) throw new Error("界面上没有拖放目标");
+      target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    };
+    window.__dropPng = () => drop(window.__capBlob, window.__capName);
+    window.__dropJpeg = async q => {
+      const bmp = await createImageBitmap(window.__capBlob);
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * 0.7);
+      c.height = Math.round(bmp.height * 0.7);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      const jpeg = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+      await drop(jpeg, window.__capName.replace(/\\.png$/i, '.jpg'));
+      return jpeg.size;
+    };
+    return { size: window.__capBlob.size, label: "PNG " + kb(window.__capBlob.size), encodes: window.__jobs.encodes, name: window.__capName };
+  `);
+  mark(`截获 ${roundtrip.name}（${roundtrip.size} 字节）`);
+
+  await ev("return window.__dropPng()");
+  await waitFor(
+    "无损 PNG 读回",
+    async () => ((await ev<string>(FACTS)).includes("相位已载入") ? true : null),
+    60000,
+  );
+  const pngLine = await ev<string>(FACTS);
+  if (!pngLine.includes(roundtrip.label))
+    failures.push(`无损 PNG 读回后显示的尺寸与原文件不符（${pngLine.match(/PNG [^；]+/)?.[0]}，应为 ${roundtrip.label}）：作业应直接用读回的文件`);
+  if (await ev<number>(enabled("重建相位")))
+    failures.push("无损可逆 PNG 读回：出现了「重建相位」按钮（相位完整，无需重建）");
+  if ((await ev<string>(FACTS)).includes("点「重建相位」"))
+    failures.push("无损可逆 PNG 读回：出现了相位重建提示");
+  if ((await ev<number>("return window.__jobs.encodes")) !== roundtrip.encodes)
+    failures.push(`无损 PNG 读回发生了重编码（${roundtrip.encodes}→）：读回的谱应直接作为作业，参考相位不应被扔掉`);
+
+  await ev("return window.__dropJpeg(0.08)");
+  const damaged = await waitFor(
+    "读回受损伤的 JPEG",
+    async () => {
+      const t = await ev<string>(FACTS);
+      if (t.includes("点「重建相位」")) return { line: t, err: "" };
+      const err = await ev<string>(
+        "return document.querySelector('.note.is-error')?.textContent ?? ''",
+      );
+      return err ? { line: t, err } : null;
+    },
+    60000,
+  ).catch(() => null);
+  if (!damaged || damaged.err) {
+    const factsNow = await ev<string>(FACTS);
+    failures.push(
+      `读回受损 JPEG 未完成：${damaged?.err || "超时；相位参考既未判弱也未报错（伤害可能没被识别）"}；当前 facts：${factsNow}`,
+    );
+  } else {
+    const weakBtn = await ev<number>(enabled("重建相位"));
+    if (!weakBtn)
+      failures.push(`受损图读回：有重建提示却没有「重建相位」按钮——${damaged.line}`);
+    else mark("受损图读回：重建提示与按钮一致，参考相位可借");
+  }
 
   return [compact, exact];
 }

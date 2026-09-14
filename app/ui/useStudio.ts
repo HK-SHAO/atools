@@ -5,7 +5,7 @@ import type { Samples } from "../lib/arrays";
 import { sniff, type Container, type ReadMode } from "../lib/container";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
-import { Aborted, cutoffOf, fitEncode, hasStrongPhase, type Meta, type Spectrum } from "../lib/spectrum";
+import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
 interface Source {
@@ -63,6 +63,8 @@ export function useStudio() {
   const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
   const readyRef = useRef<Promise<void>>(Promise.resolve());
   const wantedRef = useRef(false);
+  // 图片加载自带作业（读回的谱），下一轮编码 effect 直接放行
+  const skipEncodeRef = useRef(false);
 
   const putJob = useCallback((next: Job | null) => {
     jobRef.current = next;
@@ -87,6 +89,11 @@ export function useStudio() {
     };
 
     if (!source) {
+      release();
+      return release;
+    }
+    if (skipEncodeRef.current) {
+      skipEncodeRef.current = false;
       release();
       return release;
     }
@@ -232,7 +239,7 @@ export function useStudio() {
         if (looksImage) {
           setStage({ label: "读图", value: 0 });
           await nextFrame();
-          const { spec, mode: readMode, guessed, phaseReliability } = await io.readImage(
+          const { spec, mode: readMode, guessed } = await io.readImage(
             new Blob([bytes]),
             file.name,
           );
@@ -249,16 +256,24 @@ export function useStudio() {
           setMode(readMode);
           setEnc(() => adoptMeta(spec.meta));
           setSource({ pcm, sr: spec.meta.sr, name: file.name });
+          // 直接以读回的谱为作业：相位参考（含弱参考）得以保留，「重建相位」才有东西可借；
+          // 重编码会现场重算相位，把参考扔掉。用户一改参数即回到常规重编码路径。
+          skipEncodeRef.current = true;
+          putJob({
+            spec,
+            png: new Blob([bytes], { type: file.type || "image/png" }),
+            ref: pcm,
+            audio: pcm,
+            audioFine: false,
+          });
           if (guessed)
             setHint(
               "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
             );
-          else if (phaseReliability !== null && phaseReliability < 0.5 && !hasStrongPhase(spec))
-            setHint(
-              spec.phaseCos
-                ? "图中相位参考置信度较低，点「重建相位」可借它还原出更高音质"
-                : "图里的相位没能读回来，点「重建相位」可重新生成",
-            );
+          else if (spec.meta.exact && spec.phaseWeak)
+            setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
+          else if (spec.meta.exact && !spec.phaseCos)
+            setHint("图里的相位没能读回来，点「重建相位」可重新生成");
           return;
         }
 
@@ -271,7 +286,7 @@ export function useStudio() {
         if (alive()) setStage(null);
       }
     },
-    [generation, io, loadAudio, setEnc],
+    [generation, io, loadAudio, putJob, setEnc],
   );
 
   const refine = useCallback(async () => {
