@@ -64,6 +64,10 @@ export interface Spectrum {
   meta: Meta;
 }
 
+// 可逆且相位数据完整可信：合成可直读相位，无需重建（「重建相位」按钮的显示条件与此一致）。
+export const hasStrongPhase = (s: Spectrum): boolean =>
+  !!(s.meta.exact && s.phaseCos && s.phaseSin && !s.phaseWeak);
+
 interface Shape {
   win: number;
   hop: number;

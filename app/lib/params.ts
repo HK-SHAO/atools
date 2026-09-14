@@ -4,16 +4,21 @@ export interface Encode {
   mode: Mode;
   sr: number;
   bits: number;
-  fineness: 0 | 1 | 2;
+  fineness: 0 | 1 | 2 | 3 | 4;
   fmax: number;
   start: number;
   end: number;
 }
 
+// 窗长档位：内核 FFT 计划表支持 256~4096（moon/plan.mbt），菜单给满五档。
+// 窗长越长频率分辨率越细（每格 sr/win Hz），时间分辨率越粗（瞬态更糊）；
+// 像素总量与窗长基本无关（帧数 ∝ 1/win，bin 数 ∝ win）。
 export const FINENESS = [
-  { label: "省", win: 256 },
-  { label: "中", win: 512 },
-  { label: "细", win: 1024 },
+  { label: "256", win: 256 },
+  { label: "512", win: 512 },
+  { label: "1024", win: 1024 },
+  { label: "2048", win: 2048 },
+  { label: "4096", win: 4096 },
 ] as const;
 
 export const SR_OPTIONS = [8000, 16000, 24000, 32000, 0] as const;
@@ -25,7 +30,8 @@ export const VOICE: Encode = {
   mode: "compact",
   sr: 8000,
   bits: 8,
-  fineness: 1,
+  // 默认 1024：8k 采样率下每格 7.8 Hz 已近收益顶点；2048 时间分辨率代价大，留给用户选。
+  fineness: 2,
   fmax: 0,
   start: 0,
   end: 0,

@@ -2,11 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DEMO_URL from "../assets/demo.ogg";
 import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
-import { bandwidthOf, srForBandwidth } from "../lib/bandwidth";
 import { sniff, type Container, type ReadMode } from "../lib/container";
-import { FINENESS, SR_OPTIONS, VOICE, reopen, srLabel, type Encode } from "../lib/params";
+import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
-import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
+import { Aborted, cutoffOf, fitEncode, hasStrongPhase, type Meta, type Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
 
 interface Source {
@@ -20,6 +19,7 @@ interface Job {
   png: Blob;
   ref: Samples;
   audio: Samples | null;
+  audioFine: boolean; // audio 是否为精修档产物（质检只在精修档时复用缓存）
 }
 
 export type Stage = { label: string; value: number } | null;
@@ -27,17 +27,6 @@ export type Stage = { label: string; value: number } | null;
 const IMAGE_EXT = /\.(png|jpe?g|jpe|webp|gif|bmp|avif)$/i;
 
 const nextFrame = () => new Promise<void>(done => setTimeout(done, 0));
-
-// 名义采样率高但内容带宽低时（Opus 恒为 48k 是典型），自动选能覆盖带宽的最低档，
-// 消除频谱图上方/下方的空黑场，画面更满、还原更快。
-const autoSrPick = (
-  pcm: Samples,
-  sr: number,
-): { sr: number; note: string | null } => {
-  const bw = bandwidthOf(pcm, sr);
-  const sr2 = srForBandwidth(bw, sr);
-  return { sr: sr2, note: sr2 > 0 && sr2 < sr ? `内容带宽约 ${srLabel(bw)}，采样率自动选 ${srLabel(sr2)}` : null };
-};
 
 function adoptMeta(meta: Meta): Encode {
   const at = FINENESS.findIndex(f => f.win >= meta.win);
@@ -128,7 +117,7 @@ export function useStudio() {
         const png = await io.png(spec);
         if (cancelled) return;
 
-        putJob({ spec, png, ref: tuned, audio: null });
+        putJob({ spec, png, ref: tuned, audio: null, audioFine: false });
         setError(null);
       } catch (e) {
         if (cancelled || e instanceof Aborted) return;
@@ -162,7 +151,7 @@ export function useStudio() {
         if (!alive()) return null;
         const cur = jobRef.current;
         if (!cur || cur.spec !== spec) return null;
-        putJob({ ...cur, audio });
+        putJob({ ...cur, audio, audioFine: fine });
         return audio;
       } catch (e) {
         if (e instanceof Aborted) return null;
@@ -214,6 +203,21 @@ export function useStudio() {
     if (job && !job.audio) void bake(job.spec, false);
   }, [job, bake]);
 
+  // demo 与文件加载共用：解码 → 紧凑模式 → 区间 → 源。
+  const loadAudio = useCallback(
+    async (bytes: ArrayBuffer, name: string, alive: () => boolean): Promise<void> => {
+      setStage({ label: "解码", value: 0 });
+      await nextFrame();
+      const { pcm: mono, sr } = await decodeAudioFile(bytes);
+      if (!alive()) return;
+
+      setMode("compact");
+      setPick(p => ({ enc: { ...reopen(p.enc), ...trimRange(mono, sr) }, note: null }));
+      setSource({ pcm: mono, sr, name });
+    },
+    [],
+  );
+
   const open = useCallback(
     async (file: File) => {
       const alive = generation();
@@ -249,25 +253,16 @@ export function useStudio() {
             setHint(
               "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
             );
-          else if (phaseReliability !== null && phaseReliability < 0.5)
-            setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
+          else if (phaseReliability !== null && phaseReliability < 0.5 && !hasStrongPhase(spec))
+            setHint(
+              spec.phaseCos
+                ? "图中相位参考置信度较低，点「重建相位」可借它还原出更高音质"
+                : "图里的相位没能读回来，点「重建相位」可重新生成",
+            );
           return;
         }
 
-        setStage({ label: "解码", value: 0 });
-        await nextFrame();
-        const { pcm: mono, sr } = await decodeAudioFile(bytes);
-        if (!alive()) return;
-
-        setMode("compact");
-        const range = trimRange(mono, sr);
-        // 只在用户当前选「原」时自动选档；用户明确选了档位就尊重他的选择。
-        setPick(p => {
-          if (p.enc.sr !== 0) return { enc: { ...reopen(p.enc), ...range }, note: null };
-          const auto = autoSrPick(mono, sr);
-          return { enc: { ...reopen(p.enc), sr: auto.sr, ...range }, note: auto.note };
-        });
-        setSource({ pcm: mono, sr, name: file.name });
+        await loadAudio(bytes, file.name, alive);
       } catch (e) {
         if (!alive() || e instanceof Aborted) return;
         console.error(e);
@@ -276,7 +271,7 @@ export function useStudio() {
         if (alive()) setStage(null);
       }
     },
-    [generation, io, setEnc],
+    [generation, io, loadAudio, setEnc],
   );
 
   const refine = useCallback(async () => {
@@ -288,20 +283,19 @@ export function useStudio() {
 
   const demo = useCallback(async () => {
     const alive = generation();
+    setError(null);
+    setStage({ label: "读取", value: 0 });
     try {
-      const buf = await (await fetch(DEMO_URL)).arrayBuffer();
-      const { pcm, sr } = await decodeAudioFile(buf);
-      if (!alive()) return;
-      setMode("compact");
-      const auto = autoSrPick(pcm, sr);
-      setPick(p => ({ enc: { ...reopen(p.enc), sr: auto.sr, ...trimRange(pcm, sr) }, note: auto.note }));
-      setSource({ pcm, sr, name: "demo" });
+      const bytes = await (await fetch(DEMO_URL)).arrayBuffer();
+      await loadAudio(bytes, "demo", alive);
     } catch (e) {
       if (!alive() || e instanceof Aborted) return;
       console.error(e);
       setError(e instanceof Error ? e.message : "示例加载失败");
+    } finally {
+      if (alive()) setStage(null);
     }
-  }, [generation]);
+  }, [generation, loadAudio]);
 
   const clear = useCallback(() => {
     generation();

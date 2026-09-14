@@ -10,7 +10,14 @@ interface Finding {
   rows: LossRow[] | null;
 }
 
-export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string, busy: boolean) {
+export function useAudit(
+  pcm: Samples,
+  spec: Spectrum,
+  png: Blob,
+  name: string,
+  busy: boolean,
+  cached?: Samples | null,
+) {
   const [found, setFound] = useState<Finding | null>(null);
   const [run, setRun] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -29,9 +36,16 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string, 
     setProgress(0);
     setRun(my);
     try {
-      const rows = await io.audit(pcm, spec, png, name, p => {
-        if (alive()) setProgress(p);
-      });
+      const rows = await io.audit(
+        pcm,
+        spec,
+        png,
+        name,
+        p => {
+          if (alive()) setProgress(p);
+        },
+        cached,
+      );
       if (alive()) setFound({ spec, rows });
     } catch (e) {
       if (!(e instanceof Aborted)) {
@@ -41,7 +55,7 @@ export function useAudit(pcm: Samples, spec: Spectrum, png: Blob, name: string, 
     } finally {
       setRun(prev => (prev === my ? 0 : prev));
     }
-  }, [io, name, pcm, png, spec, stop]);
+  }, [cached, io, name, pcm, png, spec, stop]);
 
   useEffect(() => {
     if (busy) stop();

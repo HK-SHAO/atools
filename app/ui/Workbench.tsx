@@ -3,7 +3,7 @@ import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import { downloadName, type ReadMode } from "../lib/container";
 import { srLabel, type Encode } from "../lib/params";
-import type { Spectrum } from "../lib/spectrum";
+import { hasStrongPhase, type Spectrum } from "../lib/spectrum";
 import { wavFile } from "../lib/wav";
 import { ParamPanel } from "./ParamPanel";
 import { buildSheet } from "./raster";
@@ -29,12 +29,18 @@ const kb = (n: number): string =>
       ? `${Math.round(n / 1024)} KB`
       : `${(n / 1048576).toFixed(1)} MB`;
 
-function lossLine(rows: LossRow[], exact: boolean): string {
+function lossLine(rows: LossRow[], compact: boolean): string {
   const own = rows[0]!;
-  if (exact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
+  if (!compact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
+  // 紧凑模式不存相位，波形域指标（相关度/信噪比）度量的是它天生给不了的东西，
+  // 与听感脱节；谱距离才贴近听感，故紧凑模式只展示谱距离。
   const cell = (r: LossRow): string =>
-    `${r.label} ${Math.round(r.corr * 100)}%, ${r.snr.toFixed(1)}dB, ${r.lsd.toFixed(1)}`;
-  return `相关度，信噪比，谱距离：${rows.map(cell).join("；")}`;
+    compact
+      ? `${r.label} ${r.lsd.toFixed(1)}`
+      : `${r.label} ${Math.round(r.corr * 100)}%, ${r.snr.toFixed(1)}dB, ${r.lsd.toFixed(1)}`;
+  return compact
+    ? `谱距离：${rows.map(cell).join("；")}`
+    : `还原度（相关度，信噪比，谱距离）：${rows.map(cell).join("；")}`;
 }
 
 function save(blob: Blob, filename: string): void {
@@ -55,6 +61,7 @@ interface Props {
   spec: Spectrum;
   ref: Samples;
   audio: Samples | null;
+  audioFine: boolean;
   png: Blob;
   name: string;
   srcSr: number;
@@ -73,6 +80,7 @@ export function Workbench({
   spec,
   ref,
   audio,
+  audioFine,
   png,
   name,
   srcSr,
@@ -96,7 +104,7 @@ export function Workbench({
     duration,
     onListen,
   );
-  const { loss, checking, check, progress } = useAudit(ref, spec, png, name, busy);
+  const { loss, checking, check, progress } = useAudit(ref, spec, png, name, busy, audioFine ? audio : null);
 
   const savePng = useCallback(() => save(png, downloadName(name, meta)), [meta, name, png]);
 
@@ -111,7 +119,7 @@ export function Workbench({
 
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
-  const canRefine = !(spec.meta.exact && spec.phaseCos && spec.phaseSin && !spec.phaseWeak);
+  const canRefine = !hasStrongPhase(spec);
 
   return (
     <section className="card">
@@ -150,7 +158,7 @@ export function Workbench({
       <p className="facts">
         采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
         {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
-        {loss ? `${lossLine(loss, meta.exact)}；` : ""}
+        {loss ? `${lossLine(loss, compact)}；` : ""}
         {note ? `${note}；` : ""}
         {hint ? `${hint}；` : ""}
       </p>

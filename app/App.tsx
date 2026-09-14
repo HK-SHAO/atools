@@ -32,6 +32,7 @@ export function App() {
             spec={job.spec}
             ref={job.ref}
             audio={job.audio}
+            audioFine={job.audioFine}
             png={job.png}
             name={source.name}
             srcSr={source.sr}

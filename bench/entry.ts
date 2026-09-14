@@ -14,7 +14,7 @@ await startKernel({ fft: true });
 interface Case {
   sr: number;
   bits: number;
-  fineness: 0 | 1 | 2;
+  fineness: 0 | 1 | 2 | 3 | 4;
   fmax: number;
   mode: Mode;
   via:

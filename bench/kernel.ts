@@ -29,7 +29,7 @@ function material(samples: number, sr: number): Float32Array<ArrayBuffer> {
   return x;
 }
 
-const mk = (mode: Encode["mode"], fineness: 0 | 1 | 2, sr = 8000): Encode => ({
+const mk = (mode: Encode["mode"], fineness: 0 | 1 | 2 | 3 | 4, sr = 8000): Encode => ({
   mode,
   sr,
   bits: 8,
@@ -40,10 +40,12 @@ const mk = (mode: Encode["mode"], fineness: 0 | 1 | 2, sr = 8000): Encode => ({
 });
 
 const TIERS: { label: string; enc: Encode }[] = [
-  { label: "省 win256", enc: mk("compact", 0) },
-  { label: "中 win512", enc: mk("compact", 1) },
-  { label: "细 win1024", enc: mk("compact", 2) },
-  { label: "细 精确档", enc: mk("exact", 2) },
+  { label: "win256", enc: mk("compact", 0) },
+  { label: "win512", enc: mk("compact", 1) },
+  { label: "win1024", enc: mk("compact", 2) },
+  { label: "win2048", enc: mk("compact", 3) },
+  { label: "win4096", enc: mk("compact", 4) },
+  { label: "win1024 精确档", enc: mk("exact", 2) },
 ];
 
 interface Run {

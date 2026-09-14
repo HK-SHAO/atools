@@ -172,7 +172,7 @@ async function chain(
     "紧凑档质检",
     async () => {
       const t = await ev<string>(FACTS);
-      return t.includes("还原度") ? t : null;
+      return t.includes("谱距离") ? t : null;
     },
     60000,
   );
@@ -213,7 +213,7 @@ async function chain(
     "可逆档质检",
     async () => {
       const t = await ev<string>(FACTS);
-      return t.includes("还原度") && t !== rendered ? t : null;
+      return (t.includes("还原度") || t.includes("自检")) && t !== rendered ? t : null;
     },
     60000,
   );
@@ -312,7 +312,7 @@ try {
     ["可逆", exact],
   ] as const;
   for (const [mode, line] of pairs) {
-    if (line.includes("还原度")) {
+    if (line.includes("还原度") || line.includes("谱距离")) {
       for (const label of ["原图", "有损", "半尺寸"])
         if (!line.includes(`${label} `)) failures.push(`${mode}档质检里缺「${label}」那一项：${line}`);
     } else if (!line.includes("完全一致")) failures.push(`${mode}档质检没给出结论：${line}`);

@@ -15,7 +15,7 @@ export type Job =
   | { kind: "png"; spec: Spectrum }
   | { kind: "compare"; ref: Samples; got: Samples }
   | { kind: "readImage"; file: Blob; name: string }
-  | { kind: "audit"; ref: Samples; spec: Spectrum; png: Blob; name: string };
+  | { kind: "audit"; ref: Samples; spec: Spectrum; png: Blob; name: string; cached?: Samples | null };
 
 export type JobRequest = { id: number } & Job;
 
@@ -39,7 +39,14 @@ export interface Scope {
   png(spec: Spectrum): Promise<Blob>;
   compare(ref: Samples, got: Samples): Promise<Metrics>;
   readImage(file: Blob, name: string): Promise<Decoded>;
-  audit(ref: Samples, spec: Spectrum, png: Blob, name: string, onProgress?: (value: number) => void): Promise<LossRow[]>;
+  audit(
+    ref: Samples,
+    spec: Spectrum,
+    png: Blob,
+    name: string,
+    onProgress?: (value: number) => void,
+    cachedAudio?: Samples | null,
+  ): Promise<LossRow[]>;
   cancel(): void;
 }
 
@@ -129,8 +136,8 @@ export function scope(name: string): Scope {
     png: spec => send<Blob>({ kind: "png", spec }),
     compare: (ref, got) => send<Metrics>({ kind: "compare", ref, got }),
     readImage: (file, fileName) => send<Decoded>({ kind: "readImage", file, name: fileName }),
-    audit: (ref, spec, png, fileName, onProgress) =>
-      send<LossRow[]>({ kind: "audit", ref, spec, png, name: fileName }, onProgress),
+    audit: (ref, spec, png, fileName, onProgress, cachedAudio) =>
+      send<LossRow[]>({ kind: "audit", ref, spec, png, name: fileName, cached: cachedAudio }, onProgress),
     cancel: () => {
       const live = wire;
       if (!live) return;

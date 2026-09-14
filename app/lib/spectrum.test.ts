@@ -71,14 +71,16 @@ describe("params", () => {
       mode: "compact",
       sr: 8000,
       bits: 8,
-      fineness: 1,
+      fineness: 2, // 默认最长窗：分辨率优先
       fmax: 0,
       start: 0,
       end: 0,
     });
-    expect(winOf(VOICE)).toBe(512);
-    expect(hopOf(VOICE)).toBe(128);
-    for (const fineness of [0, 1, 2] as const)
+    expect(winOf(VOICE)).toBe(1024);
+    expect(hopOf(VOICE)).toBe(256);
+    expect(winOf({ ...VOICE, fineness: 3 })).toBe(2048); // 菜单最大档
+    expect(winOf({ ...VOICE, fineness: 4 })).toBe(4096); // 内核计划表上限
+    for (const fineness of [0, 1, 2, 3, 4] as const)
       expect(hopOf({ ...VOICE, fineness }) * OVERLAP).toBe(winOf({ ...VOICE, fineness }));
     expect(stepsOf(8)).toBe(255);
     expect(dbSpanOf(8)).toBe(96);
@@ -478,7 +480,7 @@ describe("exact (2-band) mode", () => {
   test("exact phase bytes equal the atan2 definition they replace", async () => {
     const sr = 32000;
     const pcm = signal(sr, sr);
-    for (const fineness of [0, 1, 2] as const) {
+    for (const fineness of [0, 1, 2, 3, 4] as const) {
       const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr, fineness });
       const ref = exactPhaseInline(pcm, spec.meta.win, spec.meta.hop, spec.meta.bins);
       let differ = 0;
@@ -494,7 +496,7 @@ describe("exact (2-band) mode", () => {
   test("exact encodes always fill the whole upper half", async () => {
     const sr = 44100;
     const pcm = signal(sr, sr);
-    for (const fineness of [0, 1, 2] as const) {
+    for (const fineness of [0, 1, 2, 3, 4] as const) {
       const spec = await encode(pcm, sr, { ...VOICE, mode: "exact", sr, fineness });
       expect([fineness, spec.meta.bins]).toEqual([fineness, spec.meta.win / 2 + 1]);
       expect([fineness, rowsFor(spec.meta.win, sr, 0)]).toEqual([fineness, spec.meta.win / 2 + 1]);
@@ -520,7 +522,7 @@ describe("shape", () => {
 
   test("the duration ceiling sits exactly on the tighter of the two walls", () => {
     for (const sr of [8000, 16000, 24000, 32000])
-      for (const fineness of [0, 1, 2] as const) {
+      for (const fineness of [0, 1, 2, 3, 4] as const) {
         const e: Encode = { ...VOICE, fineness, sr };
         const hop = hopOf(e);
         const bins = rowsFor(winOf(e), sr, 0);
@@ -533,10 +535,12 @@ describe("shape", () => {
   });
 
   test("the small window hits the column wall, the long ones the pixel budget", () => {
-    const framesOf = (fineness: 0 | 1 | 2): number =>
+    const framesOf = (fineness: 0 | 1 | 2 | 3 | 4): number =>
       maxFramesFor(rowsFor(winOf({ ...VOICE, fineness }), 8000, 0), 1);
     expect(framesOf(0)).toBe(MAX_FRAMES);
     expect(framesOf(2)).toBeLessThan(MAX_FRAMES);
+    expect(framesOf(3)).toBeLessThan(framesOf(2)); // 窗越长，列墙越早到
+    expect(framesOf(4)).toBeLessThan(framesOf(3));
   });
 
   test("a 166 s file fits 32k now that both the budget and the frame count are honest", () => {
@@ -555,7 +559,7 @@ describe("shape", () => {
   });
 
   test("a request that exactly fits is never degraded", () => {
-    for (const fineness of [0, 1, 2] as const) {
+    for (const fineness of [0, 1, 2, 3, 4] as const) {
       const e: Encode = { ...VOICE, fineness };
       const cap = maxFramesFor(rowsFor(winOf(e), 8000, 0), 1);
       const n = (cap - 1) * hopOf(e);
@@ -1006,7 +1010,7 @@ describe("image footprint", () => {
   const SAMPLES = 8000 * 10;
 
   test("image area is set by the overlap factor, not the window", () => {
-    const px = ([0, 1, 2] as const).map(f => {
+    const px = ([0, 1, 2, 3, 4] as const).map(f => {
       const s = shapeFor({ ...VOICE, fineness: f }, 8000, SAMPLES);
       return s.frames * s.bins;
     });
