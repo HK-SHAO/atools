@@ -27,6 +27,8 @@ bun run build:web
 
 音频解码器和演示音频按需下载并进入运行时缓存，不计入首次离线应用壳。完整职责与门禁见 [architecture.md](architecture.md)。
 
+`app/public/_headers` 原样复制为 `dist/_headers`（Cloudflare 静态资源的响应头），只设 Referrer-Policy、X-Content-Type-Options、Permissions-Policy。**不设 CSP**：Google Analytics 的 gtag 与 Cloudflare Web Analytics 注入的 beacon（外链加载器加内联引导脚本）都不在 `'self'` 之内，硬设就只能退化成 `'unsafe-inline'` 加域名白名单，约束不到任何东西。
+
 ## 开发服务
 
 `app/index.ts` 是开发服务器入口，`bun dev` 直接运行它（Bun HTML 路由 + HMR）；Worker 的构建与路由由 `scripts/worker-plugin.ts` 提供（bunfig `[serve.static]` 注册），请求 Worker 入口时按源码重新构建，修改 `moon/` 时重编内核（`scripts/moon.ts` 的 `watchKernel`）。开发环境不注册 Service Worker。
