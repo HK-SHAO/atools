@@ -4,7 +4,7 @@
 
 **[▶ Try online](https://atools.shao.fun)**
 
-![Screenshot](docs/screenshot.png)
+![Screenshot](docs/screenshot.webp)
 
 Turn audio into a shareable spectrogram; turn a spectrogram, or any picture, back into playable audio. The picture *is* the sound.
 
