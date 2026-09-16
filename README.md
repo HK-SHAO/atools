@@ -54,5 +54,6 @@ bun run build:web    # 生产构建 → dist/ / build
 - [docs/architecture.md](docs/architecture.md)：工程架构与门禁 / architecture and the gates
 - [docs/algorithms.md](docs/algorithms.md)：算法原理与实测 / algorithm notes and benchmarks
 - [docs/format-spec.md](docs/format-spec.md)：图片格式契约 / image format contract
+- [docs/metrics.md](docs/metrics.md)：容量、误差、质量与性能 / measured limits and performance
 - [docs/build.md](docs/build.md)：构建、部署与离线 / build, deploy, offline
 - [AGENTS.md](AGENTS.md)：工程守则 / engineering rules

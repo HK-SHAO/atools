@@ -1,113 +1,275 @@
-# 频谱图格式规范（spectrum image format）
+# Spectrum Image Format v4
 
-> 本文件是**契约**：v4 为首个公开发布的版本，自发布起字段文法冻结。
-> 只增不改、永不重排，用户今天创建的图片，在未来任何版本里仍能读出。
+本规范定义 atools 生成和读取的频谱图。实现者只需 PNG 编解码、FFT 和 JSON 支持。票根用于图片经过平台转码后的参数恢复，标准 PNG 往返不依赖票根。
 
-## 总览
+## 1. 数据模型
 
-一张频谱图 = 一个普通图片容器 + 两处元数据。任何一处理论上丢了，另一处还能兜底：
+编码器把单声道 PCM 转成 `frames × bins` 个 STFT 单元。数组采用帧优先顺序：
 
-| 载体 | 内容 | 丢失后果 |
-| --- | --- | --- |
-| PNG tEXt（keyword `spectrum`） | 完整参数数组（权威来源） | 退回文件名 |
-| 文件名文法 | 参数的压缩版 | 退回通用读取（整图当幅度） |
-| 像素本身 | 幅度谱（+ 相位段，若可逆） | — |
-
-紧凑图使用 8 位索引色 PNG；可逆图使用 RGBA PNG。JPEG/WebP 重编码或缩放会损失信息，读取端按剩余像素选择直接逆变换、相位重建或通用合成。
-
-紧凑模式的最高档为 8 bit，对应 256 个幅度层级和 96 dB 动态范围。
-
-## 元数据数组（tEXt / 文件名兜底）
-
-JSON 数组，**第 1 个元素是版本号**：
-
-```
-[版本, sr, win, hop, frames, bins, samples, bits, ref, exact]
+```text
+i = frame * bins + bin
+frame = 0 .. frames - 1
+bin   = 0 .. bins - 1       # 0 为 DC，频率为 bin * sr / win
 ```
 
-| # | 字段 | 含义 | 约束 |
+| 模式 | 元数据 | 图像 | 音频还原 |
 | --- | --- | --- | --- |
-| 0 | 版本 | 整数，当前 4 | 见兼容规则 |
-| 1 | sr | 采样率 Hz | > 0 |
-| 2 | win | FFT 窗长，2 的幂 | 256..4096 |
-| 3 | hop | 帧跳距 | 1..win |
-| 4 | frames | 帧数（图宽） | > 0，≤ 65535（canvas 单边硬墙；另一道墙是 16M 像素预算，见 `algorithms.md`） |
-| 5 | bins | 行数 = 频点数 | ≤ win/2+1 |
-| 6 | samples | 原始样本数 | 0 ≤ samples ≤ min(8,000,000, (frames − 1) × hop + win) |
-| 7 | bits | 幅度位深；0 = 可逆链路 | 0/2/4/8 |
-| 8 | ref | 0 dB 参考电平（dBFS），保留 1 位小数 | 有限数 |
-| 9 | exact | 1 = 携带相位（两段布局） | 0/1 |
+| Compact | `exact=0`，`bits=2/4/8` | 单幅量化幅度谱 | 相位不唯一，解码器负责估计 |
+| Exact | `exact=1`，`bits=0` | 幅度谱和相位谱 | 原 PNG 可直接逆 STFT |
 
-### 兼容规则（实现必须遵守）
+规范中的整数舍入使用 `round(x) = floor(x + 0.5)`。字节写入前限制到 `0..255`。
 
-1. **版本严格匹配**：读端只认 `版本 == 4`，其余版本明确拒绝，走通用读取路径。
-2. **未来加字段只能追加到末尾**；发布后若追加字段，读端按前缀解析、忽略扩展；
-   改动已有字段语义必须升版本号，且新版本读端须显式处理旧版本。
-3. **文件名文法同样冻结**：`_SR{sr}_N{win}_H{hop}_F{frames}_L{samples}_B{bits}.png`
-   （B0 = 可逆）。tEXt 丢失时按此文法兜底。
+## 2. STFT 约定
 
-## 像素布局
+设输入为 `pcm[0..samples-1]`，窗长为 `N=win`，帧移为 `H=hop`。
 
-### 紧凑（bits > 0，单段）
+1. 在 PCM 两端各补 `N/2` 个零，得到 `xpad`。
+2. 取周期 Hann 窗：
 
-图就是频谱图本身：一像素 = 一帧 × 一频点，只有幅度，颜色为暖色 ramp 的索引色。
+   ```text
+   w[m] = 0.5 - 0.5*cos(2*pi*m/N), m = 0..N-1
+   ```
 
-### 可逆（bits = 0，两段，图高 = 2 × bins）
+3. 帧数为 `floor(max(1, samples)/H)+1`。
+4. 第 `f` 帧的 DFT 为：
 
-```
-┌──────────────┐ 0..bins      幅度谱：G 通道 = 层级（0..255，暖色 ramp 便于观看）
-│   幅度谱      │              刻度：-120 dB .. 0 dB 线性映射到 0..255
-├──────────────┤ bins..2bins  相位：R = cos(φ)、G = sin(φ)（0..255，(·*0.5+0.5)*255）
-│   相位        │
-└──────────────┘
-```
+   ```text
+   X[f,k] = sum(xpad[f*H+m] * w[m] * exp(-j*2*pi*k*m/N), m=0..N-1)
+   ```
 
-相位存 cos/sin 而非折叠角：在 2π 处连续，有损重编码只平滑漂移、不爆尖刺。
+5. 图中保存 `k=0..bins-1`。完整单边谱使用 `bins=N/2+1`；裁掉高频时可取更小的 `bins`。
 
-## 条码票根（stub barcode）
+参考幅度为 `scale=N/4`。dB 值按 `20*log10(abs(X)/scale)` 计算。
 
-导出图底部最多 8px 高的黑白游程码保存采样率、窗长、原始宽度和布局。解码器用前导游程估算缩放比例。
+## 3. PNG 与元数据
 
-位流（可变长，MSB first）：
+编码器写标准 PNG，并加入一个 `tEXt` chunk：
 
-```
-前导 4bit (1010) · magic 4bit (1011) · 宽度前缀 2bit (0/1/2 = 8/12/16bit)
-· 原始宽度 8/12/16bit · 采样率表索引 4bit · 窗长档 2bit (256/512/1024/2048)
-· 可逆布局 1bit · CRC8 8bit（初值 0xFF，多项式 0x07，覆盖 magic..exact）
+```text
+keyword: spectrum
+text:    [4,sr,win,hop,frames,bins,samples,bits,ref,exact]
 ```
 
-- 物理编码：每 bit 占 4px（宽 ≥160px）/ 2px（≥70px）/ 1px 竖条（1=浅 230、0=深 20），
-  连续同值合并为游程；左侧 2px 深色锚；条底色深；图够宽（≥2×span+6）时写两遍。
-- 采样率表：8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
-  64000, 88200, 96000, 176400, 192000（索引 14/15 保留）。
-- 解码：底部行带从 8 行起逐级递减取平均亮度剖面 → 游程分解 → 找连续 4 个均匀
-  交替游程（前导 1010）估单位宽 → 收位 → 校 magic/CRC。
-- 图宽写不下票根时导出端不画，读端回退几何猜测。
+keyword 和 JSON 只含 ASCII 字节。PNG chunk 使用标准 CRC-32。读端校验 PNG 签名、chunk 边界、CRC、IHDR 和 IEND。
 
-票根命中后剔除票根行。元数据缺失或当前宽度小于票根宽度的 95% 时，以票根参数为准；若 tEXt 仍在，只继承其中的 `ref`。
+| 位置 | 字段 | 约束 |
+| ---: | --- | --- |
+| 0 | version | 必须为 `4` |
+| 1 | sr | 整数，`1..96000` Hz |
+| 2 | win | `256/512/1024/2048/4096` |
+| 3 | hop | 整数，`1..win`；本项目写 `win/4` |
+| 4 | frames | 整数，`1..min(65535, floor(16000000/(bins*bands)))` |
+| 5 | bins | 整数，`2..win/2+1` |
+| 6 | samples | 整数，`0..min(8000000, (frames-1)*hop+win)` |
+| 7 | bits | `0/2/4/8`；规范写端按模式选择 |
+| 8 | ref | 有限 dB 值；写入 JSON 时舍入到 0.1 dB |
+| 9 | exact | `0/1` |
 
-## 无元数据识别
+`bands` 在 Compact 模式取 1，在 Exact 模式取 2。实现者可在数组末尾追加字段；v4 读端忽略第 10 项之后的值。修改现有字段、像素坐标或数值映射需要新版本号。
 
-tEXt 与文件名都不可用时，读端按以下顺序识别：
+文件名可保存一份降级参数：
 
-1. **索引色 PNG 调色板签名** → PLTE 与暖色 ramp 逐项一致（G 通道 = 层级）才认，任意照片不撞签名。
-2. **条码票根** → 见上节；命中即获权威参数，不再猜测。
-3. **像素签名（可逆图）** → 以下两项采样命中率都须 ≥55%：
-   上半段电平像素满足 `(R,G,B) ≈ (RAMP[3G], G, RAMP[3G+2])`（逐通道容差 32）；
-   下半段相位像素满足 B≤48 且 (R,G) 落在以 (127.5,127.5) 为圆心的圆环（半径 **96..160**）上。
-   判定允许 JPEG 扰动和奇数高度；半径上限排除纯黑图误判。
+```text
+{stem}_SR{sr}_N{win}_H{hop}_F{frames}_L{samples}_B{bits}.png
+```
 
-认出后按几何反推：`win = 2 × (bins - 1)` 并收敛到不超过 4096 的 2 次幂，`hop = win / 4`。无法恢复采样率时使用 8 kHz，并在界面标为推断。
+文件名不保存 `bins` 和 `ref`。atools 在缺少有效 `tEXt` 时使用 `bins=win/2+1`、`ref=0`、`exact=(bits==0)`。
 
-## 相位可靠性
+## 4. 颜色表
 
-相位段以平均矢量长度比衡量可靠性：
+幅度像素使用 256 级 RGB ramp。G 通道等于级别。编码器在相邻控制点间逐通道线性插值并舍入：
 
-- 未缩放：可靠度 ≥0.3 时直接使用。
-- 已缩放：可靠度 ≥0.5 时直接使用。
-- 已缩放但宽度仍 ≥原宽 60%：可靠度 ≥0.15 时保留为弱锚。
-- 其余情况丢弃相位，按幅度重建。
+```text
+(level, R, B)
+(0,     0,   0)
+(24,    34,  6)
+(64,    110, 22)
+(112,   190, 52)
+(168,   232, 120)
+(216,   250, 190)
+(255,   255, 255)
+```
 
-## 元数据校验
+对控制点 `(la,ra,ba)` 和 `(lb,rb,bb)`，`la <= level <= lb`：
 
-tEXt 字段除 `ref` 外必须是整数，并满足上表的形状、容量和值域。任何字段不合法都拒绝整组元数据，进入图片识别路径。
+```text
+t = (level-la)/(lb-la)
+R = round(ra + (rb-ra)*t)
+G = level
+B = round(ba + (bb-ba)*t)
+```
+
+读取经过 RGB 转码的幅度像素时，atools 先算：
+
+```text
+Y = round(0.299*R + 0.587*G + 0.114*B)
+level = max(l in 0..255 where luma(ramp[l]) <= Y)
+```
+
+标准 ramp 像素可取回原级别。
+
+## 5. Compact 图
+
+### 5.1 幅度量化
+
+设 `steps=2^bits-1`，动态范围 `span=12*bits` dB。参考编码器令 `stride=max(1,floor(frames/240))`，检查 `f=0,stride,2*stride...` 的帧，并取：
+
+```text
+ref = peak > 0 ? 20*log10(peak/scale)+1 : 0
+floorDb = ref-span
+q = clamp(round((db-floorDb)/span*steps), 0, steps)
+level = round(q*255/steps)
+```
+
+第三方编码器可以从全部帧求峰值。`ref` 和像素采用同一基准即可互通。
+
+### 5.2 PNG 布局
+
+Compact 图使用索引色 PNG，宽度为 `frames`，有效高度为 `bins`。bit depth 等于 `bits`。调色板有 `2^bits` 项，第 `q` 项使用 `ramp[round(q*255/steps)]`。
+
+```text
+x = frame
+y = bins - 1 - bin
+palette_index = q
+```
+
+图顶对应最高频点，图底对应 DC。编码器可在有效图像下方追加 8 行票根；IHDR 高度随之增加。
+
+### 5.3 解码
+
+从像素得到 `level` 后：
+
+```text
+q = round(level*steps/255)
+db = ref-span + q/steps*span
+magnitude = exp(db*ln(10)/20) * (win/4)
+```
+
+Compact 图没有相位。零相位加逆 STFT 可以生成合法输出；PGHI、Griffin-Lim 或 RTISI 能改善听感。不同算法产生不同波形，不影响格式兼容性。
+
+## 6. Exact 图
+
+Exact 图使用 RGBA PNG。宽度为 `frames`，有效高度为 `2*bins`。前 `bins` 行存幅度，后 `bins` 行存相位。
+
+### 6.1 幅度段
+
+```text
+db = 20*log10(abs(X)/(win/4))
+level = clamp(round((db+120)/120*255), 0, 255)
+x = frame
+y = bins - 1 - bin
+RGBA = (ramp[level].R, level, ramp[level].B, 255)
+```
+
+零幅度写 `level=0`。
+
+### 6.2 相位段
+
+对 `X = re+j*im`，`mag=abs(X)`：
+
+```text
+if mag > 0:
+    C = round((re/mag*0.5+0.5)*255)
+    S = round((im/mag*0.5+0.5)*255)
+else:
+    C = 255
+    S = 128
+
+x = frame
+y = bins + (bins - 1 - bin)
+RGBA = (C, S, 0, 255)
+```
+
+编码器可在相位段下方追加 8 行票根。
+
+### 6.3 直接逆变换
+
+读出 `level/C/S` 后：
+
+```text
+db = -120 + level/255*120
+mag = exp(db*ln(10)/20) * (win/4)
+cr = (C-127.5)/127.5
+cs = (S-127.5)/127.5
+h = sqrt(cr*cr+cs*cs)
+phase_vector = h > 0.1 ? (cr/h, cs/h) : previous_vector_for_this_bin
+X = mag * phase_vector
+```
+
+初始 previous vector 为 `(1,0)`。把未保存的高频 bins 设为零，执行标准实数 IFFT。每帧乘同一 Hann 窗后按 `f*hop` overlap-add。逐样点除以重叠处的 `sum(w²)`，从偏移 `win/2` 取 `samples` 个样本。该流程匹配 atools 的直接还原路径。
+
+## 7. 参数票根
+
+票根用于 tEXt 和文件名被平台移除后的恢复。编码器可以省略票根；带有效 tEXt 的原 PNG 不依赖它。
+
+atools 票根支持宽度 `2..65535`、窗长 `256/512/1024/2048`，以及下表采样率：
+
+```text
+index: 0     1      2      3      4      5      6      7      8
+sr:    8000  11025  12000  16000  22050  24000  32000  44100  48000
+
+index: 9      10     11     12      13
+sr:    64000  88200  96000  176400  192000
+```
+
+窗长索引为 `0:256, 1:512, 2:1024, 3:2048`。宽度字段按数值选择 8、12 或 16 bit；对应前缀为 `00`、`01`、`10`。
+
+位流使用 MSB first：
+
+```text
+sync 4          1010
+magic 4         1011
+width prefix 2  00/01/10
+width           8/12/16 bit
+sr index 4
+win index 2
+exact 1
+crc 8
+```
+
+CRC 覆盖 `magic` 起至 `exact` 止，不覆盖 `sync`。算法逐 bit 执行下列步骤；不要先把位流打包成字节：
+
+```text
+crc = 0xFF
+for bit in covered_bits:
+    crc = crc XOR (bit << 7)
+    repeat 8 times:
+        crc = ((crc << 1) XOR 0x07) & 0xFF  if crc & 0x80
+              (crc << 1) & 0xFF             otherwise
+```
+
+票根占图底 8 行，每列写同一值。Exact 图用灰度 RGBA：暗值 20，亮值 230，alpha 255。Compact 图用调色板首项和末项。每 bit 的列宽取：
+
+```text
+image width >= 160: 4 px
+image width >= 70:  2 px
+otherwise:          1 px
+```
+
+`bit_count=25+width_bits`，单份跨度为 `span=2+bit_count*bit_width`。左侧副本的基点为 `base=2`；`base..base+1` 是暗锚，位 `j` 写入 `base+2+j*bit_width` 起的列。其余列保持暗色。图宽满足 `width >= 2*span+6` 时，编码器在 `base=width-span` 再写一份。图宽不足 `span+2` 或小于 46 时省略票根。
+
+解码器把底部 2 至 8 行取列均值，用 `(min+max)/2` 二值化。它从 `1010` 的四个等宽交替游程估算缩放单位，展开后校验 magic、字段长度和 CRC。
+
+## 8. atools 读取顺序
+
+1. 读取并校验 PNG `spectrum` tEXt。
+2. tEXt 无效时解析文件名。
+3. 参数仍缺失时检查索引色调色板和票根。
+4. 检查 Exact 像素特征；无法识别时把整张图作为幅度谱。
+
+图片经过缩放时，atools 对每个目标单元覆盖的像素求平均。它用相位向量平均长度判断相位是否还能使用：原尺寸 JPEG 阈值为 0.3，缩放图阈值为 0.5；宽度保留至少 60% 且可靠度达到 0.15 时，相位只作为重建锚点。
+
+Exact 像素识别分别抽样上下两段。上段至少 55% 的像素需在每个通道 32 的容差内匹配 ramp；下段至少 55% 的像素需满足 `B<=48`，且 `(R-127.5, G-127.5)` 的半径位于 `96..160`。读端还要求至少 12 个相位样本命中。
+
+识别成功后，读端令 `raw=2*(rows-1)`，选择不大于 `min(raw,4096)` 的最大 2 的幂，最低取 256；`hop=win/4`，采样率取 8 kHz。普通图片使用相同的几何规则，采样率取 44.1 kHz，帧数最多 6000，频点数最多 1025。
+
+## 9. 最小互操作实现
+
+生成可由 atools 直接还原的图片时，优先实现 Exact：
+
+1. 按第 2 节计算 STFT。
+2. 按第 6 节写 `frames × 2*bins` RGBA 像素。
+3. 写第 3 节的 tEXt。票根可省略。
+4. 文件名使用第 3 节文法，作为 tEXt 的备份。
+
+还原 atools Exact PNG 时，读取 tEXt、两段像素，并执行第 6.3 节。还原 Compact PNG 时，按第 5.3 节取得幅度，再选择一种相位估计算法。
