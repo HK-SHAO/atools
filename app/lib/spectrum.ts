@@ -11,6 +11,7 @@ const MIN_WIN = 256;
 const MAX_WIN = 4096;
 
 export const MAX_PIXELS = 16_000_000;
+export const MAX_SAMPLES = MAX_PIXELS / 2;
 
 export const MAX_FRAMES = 65535;
 
@@ -123,19 +124,20 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const { win, hop, bins, bands } = planOf(enc, sr);
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
 
-  if (frames > maxFramesFor(bins, bands)) throw new Error("音频太长，图放不下：调低采样率，或剪短一点");
+  if (samples > MAX_SAMPLES || frames > maxFramesFor(bins, bands))
+    throw new Error("音频太长，图放不下：调低采样率，或剪短一点");
 
   return { win, hop, frames, bins, samples };
 }
 
 function fits(enc: Encode, sr: number, samples: number): boolean {
   const { hop, bins, bands } = planOf(enc, sr);
-  return Math.floor(Math.max(1, samples) / hop) + 1 <= maxFramesFor(bins, bands);
+  return samples <= MAX_SAMPLES && Math.floor(Math.max(1, samples) / hop) + 1 <= maxFramesFor(bins, bands);
 }
 
 function ceilingOf(enc: Encode, sr: number): number {
   const { hop, bins, bands } = planOf(enc, sr);
-  return Math.floor(((maxFramesFor(bins, bands) - 1) * hop) / sr);
+  return Math.floor(Math.min(MAX_SAMPLES, (maxFramesFor(bins, bands) - 1) * hop) / sr);
 }
 
 export function fitEncode(

@@ -3,7 +3,7 @@ import { sniff, type Container, type ReadMode } from "./container";
 import { kernelReady } from "./dsp";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
-import { BANDS, DEFAULT_SR, MAX_FRAMES, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
+import { BANDS, DEFAULT_SR, MAX_FRAMES, MAX_SAMPLES, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
 import { hopOfWin, stepsOf } from "./params";
 import { decodeStub, drawStub, stubFits, stubLuma, stubRows, type StubInfo } from "./stub";
 
@@ -46,7 +46,7 @@ function sanitize(m: {
   if (hop < 1 || hop > win) return null;
   if (bins < 2 || bins > win / 2 + 1) return null;
   if (frames < 1 || frames > maxFramesFor(bins, exact ? BANDS : 1)) return null;
-  if (samples < 0) return null;
+  if (samples < 0 || samples > MAX_SAMPLES || samples > (frames - 1) * hop + win) return null;
   if (!LEVEL_BITS.includes(bits as (typeof LEVEL_BITS)[number])) return null;
   return { sr, win, hop, frames, bins, samples, bits, ref, exact };
 }
@@ -98,6 +98,7 @@ export function metaFromName(name: string): Meta | null {
 }
 
 const MAX_SOURCE_PIXELS = 24_000_000;
+const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
 const FOREIGN_FRAMES = 6000;
 
 function winFromBins(bins: number): number {
@@ -313,6 +314,7 @@ function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
   await kernelReady();
+  if (file.size > MAX_SOURCE_BYTES) throw new Error("图片文件不能超过 64 MiB");
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
   let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);

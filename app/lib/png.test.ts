@@ -64,6 +64,25 @@ describe("png metadata chunk", () => {
     expect(readMeta(plain)).toBeNull();
     expect(readMeta(Uint8Array.from([1, 2, 3]))).toBeNull();
   });
+
+  test("rejects corrupt metadata CRC and malformed PNG structure", () => {
+    const good = withMeta(plain, "trusted");
+    const corrupt = good.slice();
+    const corruptAt = corrupt.length - IEND.length - 1;
+    corrupt[corruptAt] = corrupt[corruptAt]! ^ 1;
+    expect(readMeta(corrupt)).toBeNull();
+
+    const duplicate = Uint8Array.from([...SIGNATURE, ...IHDR, ...IHDR, ...IEND]);
+    expect(readMeta(duplicate)).toBeNull();
+    const shortHeader = Uint8Array.from([...SIGNATURE, ...chunk("IHDR", [0, 0, 0, 1]), ...IEND]);
+    expect(readMeta(shortHeader)).toBeNull();
+    const zeroWidth = Uint8Array.from([
+      ...SIGNATURE,
+      ...chunk("IHDR", [0, 0, 0, 0, 0, 0, 0, 12, 8, 6, 0, 0, 0]),
+      ...IEND,
+    ]);
+    expect(readMeta(zeroWidth)).toBeNull();
+  });
 });
 
 describe("indexed ramp", () => {
@@ -93,4 +112,39 @@ describe("indexed ramp", () => {
       }
     });
   }
+
+  test("rejects corrupt chunks, decompression excess, and truncated files", async () => {
+    const palette = Uint8Array.from([...RAMP.subarray(0, 3), ...RAMP.subarray(255 * 3, 256 * 3)]);
+    const bytes = await indexedPng(new Uint8Array(16), 4, 4, 1, palette, "x");
+
+    const badCrc = bytes.slice();
+    const badCrcAt = badCrc.length - IEND.length - 1;
+    badCrc[badCrcAt] = badCrc[badCrcAt]! ^ 1;
+    expect(await readIndexedRamp(badCrc)).toBeNull();
+    expect(await readIndexedRamp(bytes.subarray(0, bytes.length - 3))).toBeNull();
+
+    const bomb = bytes.slice();
+    const view = new DataView(bomb.buffer);
+    view.setUint32(20, 1);
+    const headerCrc = chunk("IHDR", [...bomb.subarray(16, 29)]).slice(-4);
+    bomb.set(headerCrc, 29);
+    expect(await readIndexedRamp(bomb)).toBeNull();
+  });
+
+  test("deterministic malformed PNG mutations never throw", async () => {
+    const palette = Uint8Array.from([...RAMP.subarray(0, 3), ...RAMP.subarray(255 * 3, 256 * 3)]);
+    const source = await indexedPng(new Uint8Array(64), 8, 8, 1, palette, "x");
+    let seed = 0x9e3779b9;
+    for (let i = 0; i < 200; i++) {
+      seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad) | 0;
+      const cut = Math.abs(seed) % (source.length + 1);
+      const mutated = source.slice(0, cut);
+      if (mutated.length) {
+        const at = Math.abs(seed >>> 8) % mutated.length;
+        mutated[at] = mutated[at]! ^ (1 << (i % 8));
+      }
+      expect(() => readMeta(mutated)).not.toThrow();
+      await expect(readIndexedRamp(mutated)).resolves.toBeDefined();
+    }
+  });
 });

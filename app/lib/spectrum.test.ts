@@ -5,7 +5,7 @@ import { attachKernel, loadDsp } from "./dsp";
 import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact, sampleLevels, samplePhase, textToMeta } from "./image";
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
-import { BANDS, MAX_FRAMES, MAX_PIXELS, encode, fitEncode, maxFramesFor, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
+import { BANDS, MAX_FRAMES, MAX_PIXELS, MAX_SAMPLES, encode, fitEncode, maxFramesFor, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
 import { OVERLAP, SR_OPTIONS, FMAX_OPTIONS, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
 import { stubFits, stubRows } from "./stub";
 import { Frames } from "./stft";
@@ -790,6 +790,34 @@ describe("metadata", () => {
     const bad = JSON.parse(metaToText(meta)) as number[];
     bad[4] = 300.5;
     expect(textToMeta(JSON.stringify(bad))).toBeNull();
+  });
+
+  test("rejects sample counts that can exceed the declared frame workspace", () => {
+    const max = (meta.frames - 1) * meta.hop + meta.win;
+    expect(textToMeta(metaToText({ ...meta, samples: max }))).not.toBeNull();
+    expect(textToMeta(metaToText({ ...meta, samples: max + 1 }))).toBeNull();
+    expect(metaFromName(`x_SR8000_N256_H128_F300_L${max + 1}_B4.png`)).toBeNull();
+    expect(metaFromName("x_SR8000_N256_H128_F300_L500000000_B4.png")).toBeNull();
+
+    const hostile = {
+      ...meta,
+      win: 4096,
+      hop: 4096,
+      frames: 65_535,
+      bins: 2,
+      samples: MAX_SAMPLES + 1,
+    };
+    expect(hostile.samples).toBeLessThan((hostile.frames - 1) * hostile.hop + hostile.win);
+    expect(textToMeta(metaToText(hostile))).toBeNull();
+  });
+
+  test("rejects deterministic hostile metadata without throwing", () => {
+    let seed = 0x6d2b79f5;
+    for (let i = 0; i < 500; i++) {
+      seed = (Math.imul(seed ^ (seed >>> 15), 1 | seed) + i) | 0;
+      const fields = Array.from({ length: 9 }, (_, k) => ((seed >>> (k % 16)) * (k + 1)) | 0);
+      expect(() => textToMeta(JSON.stringify([4, ...fields]))).not.toThrow();
+    }
   });
 
   test("both entries reject the same out-of-range fields", () => {

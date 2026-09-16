@@ -33,7 +33,7 @@ JSON 数组，**第 1 个元素是版本号**：
 | 3 | hop | 帧跳距 | 1..win |
 | 4 | frames | 帧数（图宽） | > 0，≤ 65535（canvas 单边硬墙；另一道墙是 16M 像素预算，见 `algorithms.md`） |
 | 5 | bins | 行数 = 频点数 | ≤ win/2+1 |
-| 6 | samples | 原始样本数 | ≥ 0 |
+| 6 | samples | 原始样本数 | 0 ≤ samples ≤ min(8,000,000, (frames − 1) × hop + win) |
 | 7 | bits | 幅度位深；0 = 可逆链路 | 0/2/4/8 |
 | 8 | ref | 0 dB 参考电平（dBFS），保留 1 位小数 | 有限数 |
 | 9 | exact | 1 = 携带相位（两段布局） | 0/1 |

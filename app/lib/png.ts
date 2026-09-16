@@ -3,6 +3,9 @@ import { RAMP } from "./palette";
 
 const SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const KEYWORD = "spectrum";
+const MAX_SIDE = 65_535;
+const MAX_PIXELS = 24_000_000;
+const MAX_PNG_BYTES = 64 * 1024 * 1024;
 
 let crcCache: Uint32Array | null = null;
 
@@ -84,22 +87,37 @@ export function withMeta(png: Uint8Array, meta: string): Bytes {
 }
 
 export function readMeta(png: Uint8Array): string | null {
-  if (!isPng(png)) return null;
+  if (!isPng(png) || png.length > MAX_PNG_BYTES) return null;
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   let at = 8;
+  let first = true;
+  let sawHeader = false;
+  let meta: string | null = null;
   while (at + 12 <= png.length) {
     const len = view.getUint32(at);
     if (at + 12 + len > png.length) return null;
     const type = ascii(png.subarray(at + 4, at + 8));
+    if (view.getUint32(at + 8 + len) !== crc32(png, at + 4, at + 8 + len)) return null;
+    if (first && (type !== "IHDR" || len !== 13)) return null;
+    if (type === "IHDR") {
+      if (sawHeader || !first || len !== 13) return null;
+      const width = view.getUint32(at + 8);
+      const height = view.getUint32(at + 12);
+      if (!validSize(width, height)) return null;
+      sawHeader = true;
+    }
     if (type === "tEXt") {
       const start = at + 8;
       let split = start;
       while (split < start + len && png[split] !== 0) split++;
-      if (ascii(png.subarray(start, split)) === KEYWORD)
-        return ascii(png.subarray(Math.min(split + 1, start + len), start + len));
+      if (ascii(png.subarray(start, split)) === KEYWORD) {
+        if (meta !== null) return null;
+        meta = ascii(png.subarray(Math.min(split + 1, start + len), start + len));
+      }
     }
-    if (type === "IEND") return null;
+    if (type === "IEND") return sawHeader && len === 0 ? meta : null;
     at += 12 + len;
+    first = false;
   }
   return null;
 }
@@ -188,19 +206,35 @@ interface PngInfo {
   idat: Uint8Array[];
 }
 
+const validSize = (width: number, height: number): boolean =>
+  width > 0 && height > 0 && width <= MAX_SIDE && height <= MAX_SIDE && width * height <= MAX_PIXELS;
+
+const validCrc = (bytes: Uint8Array, view: DataView, at: number, len: number): boolean =>
+  view.getUint32(at + 8 + len) === crc32(bytes, at + 4, at + 8 + len);
+
 function parsePng(bytes: Uint8Array): PngInfo | null {
-  if (!isPng(bytes)) return null;
+  if (!isPng(bytes) || bytes.length > MAX_PNG_BYTES) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let at = 8;
   let info: PngInfo | null = null;
+  let first = true;
+  let ended = false;
+  let idatEnded = false;
   while (at + 12 <= bytes.length) {
     const len = view.getUint32(at);
     if (at + 12 + len > bytes.length) return null;
     const type = ascii(bytes.subarray(at + 4, at + 8));
+    if (!validCrc(bytes, view, at, len)) return null;
+    if (first && (type !== "IHDR" || len !== 13)) return null;
     if (type === "IHDR") {
+      if (info || !first || len !== 13) return null;
+      const width = view.getUint32(at + 8);
+      const height = view.getUint32(at + 12);
+      if (!validSize(width, height)) return null;
+      if (bytes[at + 18] !== 0 || bytes[at + 19] !== 0 || bytes[at + 20]! > 1) return null;
       info = {
-        width: view.getUint32(at + 8),
-        height: view.getUint32(at + 12),
+        width,
+        height,
         bitDepth: bytes[at + 16]!,
         colorType: bytes[at + 17]!,
         interlace: bytes[at + 20]!,
@@ -208,18 +242,25 @@ function parsePng(bytes: Uint8Array): PngInfo | null {
         idat: [],
       };
     } else if (type === "PLTE" && info) {
+      if (info.plte || info.idat.length || len < 3 || len > 768 || len % 3 !== 0) return null;
       info.plte = bytes.subarray(at + 8, at + 8 + len);
     } else if (type === "IDAT" && info) {
+      if (idatEnded) return null;
       info.idat.push(bytes.subarray(at + 8, at + 8 + len));
     } else if (type === "IEND") {
+      if (!info || len !== 0 || info.idat.length === 0) return null;
+      ended = true;
       break;
+    } else if (info?.idat.length) {
+      idatEnded = true;
     }
     at += 12 + len;
+    first = false;
   }
-  return info;
+  return ended ? info : null;
 }
 
-async function inflate(idat: Uint8Array[]): Promise<Uint8Array | null> {
+async function inflate(idat: Uint8Array[], expected: number): Promise<Uint8Array | null> {
   let total = 0;
   for (const c of idat) total += c.length;
   if (total === 0) return null;
@@ -229,10 +270,27 @@ async function inflate(idat: Uint8Array[]): Promise<Uint8Array | null> {
     concat.set(c, o);
     o += c.length;
   }
-  const stream = new Blob([concat as BlobPart]).stream().pipeThrough(
+  const reader = new Blob([concat as BlobPart]).stream().pipeThrough(
     new DecompressionStream("deflate"),
-  );
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  ).getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > expected) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  if (size !== expected) return null;
+  return assemble(chunks);
 }
 
 function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): Uint8Array | null {
@@ -241,6 +299,7 @@ function unfilter(raw: Uint8Array, width: number, height: number, bpp: number): 
   const out = new Uint8Array(height * stride);
   for (let y = 0; y < height; y++) {
     const ft = raw[y * (stride + 1)]!;
+    if (ft > 4) return null;
     const src = y * (stride + 1) + 1;
     const dst = y * stride;
     for (let i = 0; i < stride; i++) {
@@ -288,11 +347,11 @@ export async function readIndexedRamp(bytes: Uint8Array): Promise<IndexedRamp | 
     if (plte[q * 3 + 1] !== level) return null;
     if (plte[q * 3 + 2] !== RAMP[level * 3 + 2]) return null;
   }
-  const raw = await inflate(info.idat);
-  if (!raw) return null;
   const { width, height } = info;
   const depth = info.bitDepth;
   const rowBytes = rowBytesOf(width, depth);
+  const raw = await inflate(info.idat, (rowBytes + 1) * height);
+  if (!raw) return null;
   const flat = unfilter(raw, rowBytes, height, 1);
   if (!flat) return null;
 

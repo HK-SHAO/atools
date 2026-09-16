@@ -1,5 +1,7 @@
 # 留声 / 频谱 Spectrum
 
+[![CI](https://github.com/HK-SHAO/atools/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-SHAO/atools/actions/workflows/ci.yml)
+
 **[▶ 在线试用 / Try online](https://atools.shao.fun)**
 
 ![频谱 · 界面截图 / Screenshot](docs/screenshot.png)

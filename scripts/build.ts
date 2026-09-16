@@ -64,6 +64,7 @@ const html = await Bun.file(at("index.html")).text();
 const pwa = (await Bun.file(path.join(publicDir, "manifest.webmanifest")).json()) as {
   icons: { src: string }[];
 };
+await Bun.write(at("_headers"), Bun.file(path.join(publicDir, "_headers")));
 for (const { src } of pwa.icons) await Bun.write(at(src), Bun.file(path.join(publicDir, src)));
 
 const shell = [

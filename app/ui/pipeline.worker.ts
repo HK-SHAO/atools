@@ -16,6 +16,7 @@ const worker = self as unknown as WorkerGlobal;
 const ready = startKernel({ fft: true });
 
 const cancelled = new Set<number>();
+let queue = Promise.resolve();
 
 const strip = (buffers: (ArrayBufferLike | undefined)[]): Transferable[] =>
   buffers.filter((buffer): buffer is ArrayBufferLike => buffer !== undefined) as Transferable[];
@@ -30,6 +31,7 @@ async function run(request: JobRequest): Promise<void> {
 
   try {
     await ready;
+    if (!alive()) throw new Aborted();
     if (request.kind === "resample") {
       const pcm = resample(request.pcm, request.from, request.to, request.fmax);
       worker.postMessage({ id, kind: "done", value: pcm }, strip([pcm.buffer]));
@@ -90,5 +92,5 @@ worker.onmessage = (event: MessageEvent<ToWorker>) => {
     for (const id of request.ids) cancelled.add(id);
     return;
   }
-  void run(request);
+  queue = queue.then(() => run(request));
 };
