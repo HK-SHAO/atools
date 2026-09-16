@@ -1,4 +1,5 @@
-import { author, name, version } from "../package.json";
+import { author, version } from "../package.json";
 
-export const CREDIT_NAME = `${name.toUpperCase()} v${version}`;
+// The product name, not the package name: the repository is the tool suite, the app is Spectrum.
+export const CREDIT_NAME = `SPECTRUM v${version}`;
 export const CREDIT_AUTHOR = author;

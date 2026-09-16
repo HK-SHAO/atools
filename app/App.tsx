@@ -58,7 +58,7 @@ export function App() {
             </button>
           )}
           <span className="credit">
-            {CREDIT_NAME} created by{" "}
+            {t("credit", { name: CREDIT_NAME })}{" "}
             <a href={CREDIT_AUTHOR.url} target="_blank" rel="noreferrer">
               {CREDIT_AUTHOR.name}
             </a>

@@ -27,6 +27,7 @@ const en = {
   aboutSpeed: "Encoding and restoring 30 seconds of audio takes 172 ms, about 170× real time.",
   aboutError:
     "Worst-case STFT error against librosa 0.11.0 is 6.1e-16; the FFT stays within 1e-12 of a naive DFT.",
+  credit: "{name} created by",
   source: "Source",
   close: "Close",
 
@@ -134,6 +135,7 @@ const zh: Record<Key, string> = {
   aboutMeasured: "实测",
   aboutSpeed: "30 秒音频的编码与还原 172 ms，约 170 倍实时。",
   aboutError: "STFT 与 librosa 0.11.0 的最差相对误差 6.1e-16，FFT 与朴素 DFT 在 1e-12 以内。",
+  credit: "{name} 作者",
   source: "源代码",
   close: "关闭",
 
@@ -216,8 +218,8 @@ const DICT: Record<Lang, Record<Key, string>> = { en, zh };
 
 export const strings = (lang: Lang): Record<Key, string> => DICT[lang];
 
-export const pickLang = (tags: readonly string[]): Lang =>
-  tags.some(tag => /^zh\b/i.test(tag)) ? "zh" : "en";
+export const pickLang = (tags: readonly string[] = []): Lang =>
+  tags.some(tag => /^zh(?:[-_]|$)/i.test(tag)) ? "zh" : "en";
 
 export const LANG: Lang = pickLang(
   typeof navigator === "undefined" ? [] : (navigator.languages ?? [navigator.language]),
@@ -228,7 +230,7 @@ export const t = (key: Key, vars?: Record<string, string>): string => {
   return vars ? text.replace(/\{(\w+)\}/g, (whole, name: string) => vars[name] ?? whole) : text;
 };
 
-export const applyHead = (): void => {
-  document.documentElement.lang = LANG;
-  document.title = t("title");
+export const applyHead = (lang: Lang = LANG): void => {
+  document.documentElement.lang = lang;
+  document.title = strings(lang).title;
 };
