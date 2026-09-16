@@ -2,10 +2,17 @@
   "name": "atools",
   "version": "1.0.1",
   "private": true,
+  "description": "Turn audio into a spectrogram and back: a browser-only sound ↔ image converter with a MoonBit DSP kernel",
+  "license": "GPL-3.0-only",
   "author": {
     "name": "烧风 HK-SHAO",
     "email": "hk-shao@outlook.com",
     "url": "https://space.bilibili.com/24046148"
+  },
+  "homepage": "https://atools.shao.fun",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HK-SHAO/atools.git"
   },
   "type": "module",
   "engines": {
@@ -25,6 +32,7 @@
     "compare:librosa:phase": "bun bench/librosa_phase.ts",
     "compare:librosa:phase-perf": "${PYTHON:-python3} bench/librosa_phase_perf.py",
     "moon:ports": "cd moon && moon check --deny-warn --target js && moon check --deny-warn --target native",
+    "moon:fmt": "cd moon && moon fmt --check",
     "bench:kernel": "cd moon && moon bench --release --deny-warn --target wasm",
     "bench:kernel:native": "cd moon && moon bench --release --deny-warn --target native",
     "bench:kernel:build": "cd moon && moon bench --release --deny-warn --target wasm --build-only",

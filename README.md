@@ -20,11 +20,11 @@ Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop
 | Restored | phase reconstruction, approximate | near-lossless from the original PNG |
 | After edits | still readable, quality depends on the pixels | degrades automatically when phase is damaged |
 
-Compact images omit phase. They usually remain readable after common sharing, compression, and resizing, with quality determined by the pixels that survive.
+Compact images omit phase. They usually survive common sharing, compression, and resizing; the pixels that remain set the quality.
 
 ## Any image can play
 
-Decoding adapts to the available information: intact phase is inverted directly, damaged phase is reconstructed, and an unfamiliar image is treated as a magnitude spectrum for synthesis.
+The decoder adapts to what the image carries: it inverts intact phase directly, rebuilds damaged phase, and synthesises from an unfamiliar image as if it were a magnitude spectrum.
 
 ## MoonBit
 
@@ -49,3 +49,7 @@ bun run build:web    # production build → dist/
 - [docs/metrics.md](docs/metrics.md): measured limits and performance
 - [docs/build.md](docs/build.md): build, deploy, offline
 - [AGENTS.md](AGENTS.md): engineering rules
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).

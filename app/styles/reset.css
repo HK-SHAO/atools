@@ -24,3 +24,9 @@ body,
   overflow: hidden;
   overscroll-behavior: none;
 }
+
+#root > noscript {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
