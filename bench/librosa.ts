@@ -61,7 +61,7 @@ const run = Bun.spawn([python, new URL("./librosa_ref.py", import.meta.url).path
 });
 run.stdin.write(JSON.stringify({ samples, cases }));
 run.stdin.end();
-if ((await run.exited) !== 0) throw new Error((await new Response(run.stderr).text()) || `无法运行 ${python}`);
+if ((await run.exited) !== 0) throw new Error((await new Response(run.stderr).text()) || `Could not run ${python}`);
 
 interface Comparison {
   win: number;
@@ -88,6 +88,6 @@ const failures = result.rows.filter(
   row => row.stft_peak > 1e-12 || row.stft_rms > 1e-12 || row.inverse_cross > 1e-6,
 );
 if (failures.length) {
-  console.error(`超出门限：${failures.map(row => row.win).join(", ")}`);
+  console.error(`over the gate: ${failures.map(row => row.win).join(", ")}`);
   process.exit(1);
 }

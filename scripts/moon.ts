@@ -18,7 +18,9 @@ const moonBin = (): string => {
 let cache: Uint8Array<ArrayBuffer> | null = null;
 
 const missingToolchain = (message?: string): Error =>
-  new Error(`找不到 moon 工具链：装好 MoonBit（本机在 ~/.moon/bin）或用 MOON 指路径。\n${message ?? ""}`);
+  new Error(
+    `Cannot find the moon toolchain: install MoonBit (usually in ~/.moon/bin) or point MOON at it.\n${message ?? ""}`,
+  );
 
 export function compileWasm(): Uint8Array<ArrayBuffer> {
   if (cache) return cache;
@@ -40,7 +42,7 @@ export function compileWasm(): Uint8Array<ArrayBuffer> {
       Bun.spawnSync([moonBin(), "clean"], { cwd: moonDir });
     } catch {}
     const retry = build();
-    if (!retry.success) throw new Error(`moon 编译失败：\n${retry.stdout}\n${retry.stderr}`);
+    if (!retry.success) throw new Error(`moon build failed:\n${retry.stdout}\n${retry.stderr}`);
   }
   return (cache = new Uint8Array(readFileSync(artifact)));
 }
@@ -55,7 +57,7 @@ export function watchKernel(): void {
       cache = null;
       try {
         compileWasm();
-        console.log("[moon] 内核已重编");
+        console.log("[moon] kernel rebuilt");
       } catch (error) {
         console.error(error);
       }

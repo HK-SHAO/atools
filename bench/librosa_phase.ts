@@ -16,9 +16,9 @@ const iters = 8;
 const far = 32;
 
 const CLIPS: [string, string, number][] = [
-  ["演示", `${import.meta.dirname}/../app/assets/demo.ogg`, 4],
-  ["语音", `${import.meta.dirname}/../fixtures/speech-nb.amr`, 6],
-  ["音乐", `${import.meta.dirname}/../docs/audio-examples/love-story.m4a`, 30],
+  ["demo", `${import.meta.dirname}/../app/assets/demo.ogg`, 4],
+  ["speech", `${import.meta.dirname}/../fixtures/speech-nb.amr`, 6],
+  ["music", `${import.meta.dirname}/../docs/audio-examples/love-story.m4a`, 30],
 ];
 
 interface Arm {
@@ -64,7 +64,7 @@ const arms: Arm[] = [];
 for (const [name, path, start] of CLIPS) {
   const file = Bun.file(path);
   if (!(await file.exists()))
-    throw new Error(`缺素材 ${path}：相位重建对标读取本地音频，见 bench/README.md`);
+    throw new Error(`Missing clip ${path}: the phase comparison reads local audio, see bench/README.md`);
   const { pcm, sr: rate } = await decodeAudioFile(await file.arrayBuffer());
   const from = Math.min(Math.round(start * rate), pcm.length - 1);
   const ref = resample(pcm.subarray(from, from + Math.round(seconds * rate)) as Samples, rate, sr);
@@ -89,7 +89,7 @@ for (const [name, path, start] of CLIPS) {
       Float32Array.from(await rtisiLa(magnitude, frames, bins, win, hop, ref.length, { iters, warm: initial })),
     ],
     [
-      "RTISI-LA 零相位初值",
+      "RTISI-LA zero init",
       Float32Array.from(await rtisiLa(magnitude, frames, bins, win, hop, ref.length, { iters, warm: null })),
     ],
   ];
@@ -128,41 +128,41 @@ child.stdin.write(
 );
 child.stdin.end();
 if ((await child.exited) !== 0)
-  throw new Error((await new Response(child.stderr).text()) || `无法运行 ${python}`);
+  throw new Error((await new Response(child.stderr).text()) || `Could not run ${python}`);
 const other = JSON.parse(await new Response(child.stdout).text()) as {
   librosa: string;
   rows: { name: string; drift: number; runs: { iters: number; random: number[]; warm: number[] }[] }[];
 };
 
-console.log(`${seconds}s @ ${sr} Hz · win ${win} · hop ${hop} · ${iters} 次迭代 · librosa ${other.librosa}\n`);
+console.log(`${seconds}s @ ${sr} Hz · win ${win} · hop ${hop} · ${iters} iterations · librosa ${other.librosa}\n`);
 console.log(
-  "素材  方法".padEnd(27) +
-    "增益 dB".padStart(8) +
-    "相关".padStart(8) +
+  "clip  method".padEnd(27) +
+    "gain dB".padStart(8) +
+    "corr".padStart(8) +
     "SNR dB".padStart(9) +
     "LSD dB".padStart(8) +
-    "收敛 dB".padStart(9) +
-    "包络".padStart(8),
+    "conv dB".padStart(9) +
+    "env".padStart(8),
 );
 
 for (const a of arms) {
   const peer = other.rows.find(row => row.name === a.name)!;
   const head = score(a.ref, a.ceiling);
   if (head.corr < 0.999 || head.lsd > 0.05 || Math.abs(head.gain) > 0.05)
-    throw new Error(`${a.name} 的真实相位上限不成立：相关 ${head.corr} LSD ${head.lsd} 增益 ${head.gain}`);
+    throw new Error(`${a.name}: the true phase ceiling does not hold: corr ${head.corr} LSD ${head.lsd} gain ${head.gain}`);
   const eight = peer.runs.find(run => run.iters === iters)!;
   const peers: [string, number[]][] = [
-    ["Griffin-Lim 随机初值", eight.random],
-    ["Griffin-Lim PGHI 初值", eight.warm],
+    ["Griffin-Lim random init", eight.random],
+    ["Griffin-Lim PGHI init", eight.warm],
   ];
   for (const [method, got] of [...a.local, ...peers.map(([tag, x]) => [tag, Float32Array.from(x)] as [string, Samples])])
     console.log(line(a.name, method, score(a.ref, got)));
-  console.log(line(a.name, "真实相位（上限）", head));
+  console.log(line(a.name, "true phase (ceiling)", head));
   console.log("");
 }
 
-console.log(`谱收敛随迭代预算的变化（dB，越低越好）；Griffin-Lim 复现漂移 ${other.rows[0]!.drift.toExponential(1)}`);
-console.log("素材   本项目 8 次   GL·PGHI 8 次   GL·随机 8 次   GL·随机 32 次");
+console.log(`spectral convergence against the iteration budget (dB, lower is better); Griffin-Lim reproduction drift ${other.rows[0]!.drift.toExponential(1)}`);
+console.log("clip   ours 8   GL·PGHI 8   GL·random 8   GL·random 32");
 for (const a of arms) {
   const peer = other.rows.find(row => row.name === a.name)!;
   const near = peer.runs.find(run => run.iters === iters)!;

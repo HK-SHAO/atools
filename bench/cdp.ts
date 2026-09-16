@@ -19,7 +19,7 @@ function chromium(): string {
     if (executable) return executable;
     if (isAbsolute(candidate) && existsSync(candidate)) return candidate;
   }
-  throw new Error("找不到 Chromium / Chrome：安装浏览器，或设置 CHROME 为浏览器可执行文件路径。");
+  throw new Error("Chromium / Chrome not found: install a browser, or set CHROME to the browser executable path");
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
@@ -37,7 +37,7 @@ export async function waitFor<T>(label: string, fn: () => Promise<T | null>, ms 
   for (;;) {
     const v = await fn().catch(() => null);
     if (v) return v;
-    if (Date.now() > end) throw new Error("超时：" + label);
+    if (Date.now() > end) throw new Error("Timed out: " + label);
     await sleep(250);
   }
 }
@@ -80,7 +80,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
   };
 
   try {
-    const wsUrl = await waitFor("CDP 目标", async () => {
+    const wsUrl = await waitFor("CDP target", async () => {
       const list = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
         type: string;
         webSocketDebuggerUrl?: string;
@@ -103,8 +103,8 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       for (const call of pending.values()) call.reject(new Error(message));
       pending.clear();
     };
-    ws.onerror = () => rejectPending("CDP 连接出错");
-    ws.onclose = () => rejectPending("CDP 连接已关闭");
+    ws.onerror = () => rejectPending("CDP connection failed");
+    ws.onclose = () => rejectPending("CDP connection closed");
     ws.onmessage = e => {
       const m = JSON.parse(String(e.data)) as {
         id?: number;
@@ -118,7 +118,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
       const call = pending.get(m.id);
       if (!call) return;
       pending.delete(m.id);
-      if (m.error) call.reject(new Error(m.error.message ?? "CDP 请求失败"));
+      if (m.error) call.reject(new Error(m.error.message ?? "CDP request failed"));
       else call.resolve(m.result);
     };
 
@@ -135,7 +135,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
         awaitPromise: true,
         returnByValue: true,
       })) as { result?: { value?: R }; exceptionDetails?: { exception?: { description?: string } } };
-      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "求值失败");
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "Evaluation failed");
       return r.result?.value as R;
     };
 
@@ -152,7 +152,7 @@ export async function open({ port, size, url, args = [] }: Options): Promise<Ses
           await sleep(100);
           if (await ev<boolean>(`return !!document.querySelector(${JSON.stringify(ready)})`)) return;
         }
-        throw new Error(`导航超时：${target}`);
+        throw new Error(`Navigation timed out: ${target}`);
       },
       stop: async () => {
         if (ws.readyState === WebSocket.OPEN)

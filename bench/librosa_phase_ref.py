@@ -54,7 +54,7 @@ for case in payload["cases"]:
     drift = np.abs(fast_gl(magnitude, seed * magnitude, case, case["iters"][0]) - official)
     drift = float(drift.max() / np.abs(official).max())
     if drift > 1e-6:
-        raise SystemExit(f"{case['name']} 复现的 Griffin-Lim 与 librosa 不一致：{drift}")
+        raise SystemExit(f"{case['name']}: reproduced Griffin-Lim disagrees with librosa: {drift}")
 
     runs = []
     for n_iter in case["iters"]:

@@ -44,10 +44,10 @@ const buildWorker = async (
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  if (code !== 0) throw new Error(`Worker 构建失败：\n${stderr}`);
+  if (code !== 0) throw new Error(`Worker build failed:\n${stderr}`);
   const outputs = JSON.parse(stdout) as { kind: string; file: string }[];
   const entry = outputs.find(output => output.kind === "entry-point")?.file;
-  if (!entry) throw new Error(`Worker ${source} 没有产出入口脚本`);
+  if (!entry) throw new Error(`Worker ${source} produced no entry script`);
   return { entry, files: outputs.map(output => output.file) };
 };
 

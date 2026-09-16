@@ -50,8 +50,8 @@ const ms = (run: () => unknown, rounds = 3): number => {
 };
 
 const pcm = signal(SR * SECS, SR);
-console.log(`重采样相位表（${SECS}s @${SR / 1000}k，${(pcm.length / 1e6).toFixed(1)}M 样点）`);
-console.log("  目标     相位表      逐样点现算     倍数");
+console.log(`resample phase table (${SECS}s @${SR / 1000}k, ${(pcm.length / 1e6).toFixed(1)}M samples)`);
+console.log("  target   table      plain          ratio");
 for (const to of [8000, 16000, 48000]) {
   const table = ms(() => resample(pcm, SR, to));
   const plain = ms(() => naive(pcm, SR, to));
@@ -59,11 +59,11 @@ for (const to of [8000, 16000, 48000]) {
   console.log(
     `  ${String(to / 1000).padEnd(8)} ${table.toFixed(1).padStart(7)} ms ${plain.toFixed(1).padStart(11)} ms ${ratio.toFixed(1).padStart(8)}×`,
   );
-  if (ratio < 3) failures.push(`→${to} 相位表只快 ${ratio.toFixed(1)}×，缓存没生效或又被绕过了`);
+  if (ratio < 3) failures.push(`→${to}: the phase table is only ${ratio.toFixed(1)}× faster; the cache did not take effect or was bypassed again`);
 }
 
-console.log("\n相位种类最多的几个组合（相位表最容易退化的地方）");
-console.log("  组合              样点      相位表      逐样点现算     倍数");
+console.log("\ncombinations with the most distinct phases (where the phase table degrades most)");
+console.log("  pair             samples       table         plain    ratio");
 for (const [from, to] of [
   [11025, 16000],
   [11025, 32000],
@@ -82,13 +82,13 @@ for (const [from, to] of [
       `${ratio.toFixed(2)}×`.padStart(9),
   );
   if (ratio < 1.05)
-    failures.push(`${from}→${to} 相位表 ${ratio.toFixed(2)}× —— 相位种类超过预算时退化得比逐样点还慢`);
+    failures.push(`${from}→${to}: the phase table is ${ratio.toFixed(2)}×, slower than per-sample computation once the phase count passes the budget`);
 }
 
 void sink;
 if (failures.length) {
-  console.error(`\n不合格 ${failures.length} 项：`);
+  console.error(`\nfailed ${failures.length} checks:`);
   for (const why of failures) console.error(`  - ${why}`);
   process.exit(1);
 }
-console.log("\n性能体检通过");
+console.log("\nperformance check passed");

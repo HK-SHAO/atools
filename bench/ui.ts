@@ -1,11 +1,17 @@
 import { cp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { strings } from "../app/lib/i18n.ts";
 import { open, serve, sleep, waitFor } from "./cdp.ts";
 
 const PORT = Number(process.env.UI_PORT ?? 4399);
 const project = `${import.meta.dirname}/..`;
 const SUBPATH = process.env.SUBPATH ?? "";
 const BASELINE = process.env.UI_BASELINE ?? "";
+
+// The gate drives the English UI (headless Chrome defaults to en-US). Labels come from the
+// dictionary rather than being retyped, so a copy change cannot silently desync the gate.
+const L = strings("en");
+const VERIFY_PCT = new RegExp(`^${L.verifying.replace("{pct}", String.raw`(\d+)`)}$`);
 
 type Ev = <R = unknown>(expression: string) => Promise<R>;
 
@@ -58,18 +64,20 @@ const INSTRUMENT = `
 
 const PLAY = `(() => {
    const b = document.querySelector('button.icon-btn');
-   if (!b) throw new Error("界面上没有播放按钮");
+   if (!b) throw new Error("no play button on the page");
    b.click();
    return 1;
  })()`;
 
-const PLAYING = `return document.querySelector('button.icon-btn')?.getAttribute('aria-label') === "暂停" ? 1 : 0`;
+const PLAYING = `
+  return document.querySelector('button.icon-btn')?.getAttribute('aria-label') === ${JSON.stringify(L.pause)} ? 1 : 0`;
+
 
 const press = (sel: string, label: string): string =>
   `(() => {
      const b = [...document.querySelectorAll(${JSON.stringify(sel)})].find(v => (v.textContent ?? '').trim() === ${JSON.stringify(label)});
-     if (!b) throw new Error(${JSON.stringify("界面上没有这个按钮：")} + ${JSON.stringify(label)});
-     if (b.disabled) throw new Error(${JSON.stringify("按钮此刻不可点：")} + ${JSON.stringify(label)});
+     if (!b) throw new Error(${JSON.stringify("no such button on the page: ")} + ${JSON.stringify(label)});
+     if (b.disabled) throw new Error(${JSON.stringify("button is not clickable right now: ")} + ${JSON.stringify(label)});
      b.click();
      return 1;
    })()`;
@@ -82,7 +90,7 @@ const enabled = (label: string): string =>
      return b && !b.disabled ? 1 : 0;
    })()`;
 
-const pngOf = (line: string): string => line.match(/PNG [^；]+/)?.[0] ?? "";
+const pngOf = (line: string): string => line.match(/PNG [^;]+/)?.[0] ?? "";
 
 async function chain(
   ev: Ev,
@@ -91,30 +99,31 @@ async function chain(
   probe = false,
   chrome = false,
 ): Promise<readonly [string, string]> {
-  await waitFor("应用载入", async () =>
+  await waitFor("app loaded", async () =>
     (await ev<number>("return document.querySelector('.drop') ? 1 : 0")) ? 1 : null,
   );
   await onReady?.();
 
-  await ev(press("button.act", "演示"));
+  await ev(press("button.act", L.demo));
   await waitFor(
-    "演示就绪（解码 + 编码 + 出图）",
+    "demo ready (decode + encode + image)",
     async () => ((await ev<number>("return document.querySelector('.spec') ? 1 : 0")) ? 1 : null),
     120000,
   );
-  mark("演示就绪");
+  mark("demo ready");
 
   const contexts = await ev<number>("return window.__ac ?? -1");
   if (contexts === 0)
     failures.push(
-      "演示就绪时还没有构造过 AudioContext：那一百多毫秒的一次性开销会落在第一次点播放那一刻",
+      "no AudioContext had been constructed when the demo was ready: that one-off hundred-odd\n      milliseconds lands on the first play click",
     );
-  if (contexts > 0) mark(`播放前 AudioContext ${contexts} 个`);
+  if (contexts > 0) mark(`${contexts} AudioContexts before playback`);
 
   if (chrome) await chromeChecks(ev, mark);
 
-  // 参数收在「进阶」卡片里，先展开它，后面按 chip 才打在真界面上。
-  // 主构建那一遍的存在性由上面的 chromeChecks 钉住，所以这里的容错不会盖掉漏洞。
+  // The parameters live inside the Advanced card, so open it first; chips pressed later then hit
+  // the real UI. chromeChecks above pins down its existence in the main build, so tolerating
+  // failure here cannot hide the problem.
   await ev(`
     const d = document.querySelector('details.more');
     if (d && !d.open) d.querySelector('summary')?.click();
@@ -123,7 +132,7 @@ async function chain(
 
   if (probe) {
     const posted = await waitFor(
-      "后台预载开始",
+      "background bake started",
       async () => {
         const s = await ev<{ posted: number; inflight: number }>("return window.__synth");
         return s.posted >= 1 ? s.posted : null;
@@ -132,7 +141,7 @@ async function chain(
     ).catch(() => 0);
     const baked = posted
       ? await waitFor(
-          "后台预载完成",
+          "background bake finished",
           async () => {
             const s = await ev<{ posted: number; inflight: number }>("return window.__synth");
             return s.inflight === 0 ? s : null;
@@ -141,14 +150,16 @@ async function chain(
         ).catch(() => null)
       : null;
     if (!baked)
-      failures.push("演示就绪后 worker 没把「还原」算完：点播放仍然要现算，那段等待会落在用户身上");
+      failures.push(
+        "the worker had not finished restoring when the demo was ready: clicking play still computes it\n        on the spot, and that wait lands on the user",
+      );
     else {
       const ms = await ev<number>(`
         return await new Promise((done) => {
           const b = document.querySelector('button.icon-btn');
           const t0 = performance.now();
           const mo = new MutationObserver(() => {
-            if (b.getAttribute('aria-label') === '暂停') {
+            if (b.getAttribute('aria-label') === ${JSON.stringify(L.pause)}) {
               mo.disconnect();
               done(Math.round(performance.now() - t0));
             }
@@ -159,13 +170,13 @@ async function chain(
         });
       `);
       await ev(PLAY);
-      await waitFor("停下", async () => ((await ev<number>(PLAYING)) ? null : 1));
+      await waitFor("stopped", async () => ((await ev<number>(PLAYING)) ? null : 1));
       const after = await ev<{ posted: number; inflight: number }>("return window.__synth");
-      mark(`点播放到出声 ${ms} ms（材料就绪时已算 ${baked.posted} 次）`);
-      if (ms < 0) failures.push("点了播放但一直没有出声");
+      mark(`click to sound ${ms} ms (baked ${baked.posted}× while the material loaded)`);
+      if (ms < 0) failures.push("play was clicked but no sound ever came out");
       else if (after.posted !== baked.posted)
         failures.push(
-          `点播放又让 worker 现算了一遍「还原」（${baked.posted} → ${after.posted}）：材料就绪时没有把它算掉`,
+          `clicking play made the worker recompute the restore (${baked.posted} → ${after.posted}): it was not\n          baked while the material was loading`,
         );
     }
   }
@@ -173,74 +184,76 @@ async function chain(
   await ev(`
     window.__auditBtn = [];
     const mo = new MutationObserver(() => {
-      const b = [...document.querySelectorAll('button.act')].find(v => v.textContent.startsWith('质检'));
+      const b = [...document.querySelectorAll('button.act')].find(v => v.textContent.startsWith(${JSON.stringify(L.verify)}));
       if (b) window.__auditBtn.push(b.textContent.trim());
     });
     mo.observe(document.querySelector('.acts'), { subtree: true, childList: true, characterData: true });
   `);
-  await ev(press("button.act", "质检"));
+  await ev(press("button.act", L.verify));
   const compact = await waitFor(
-    "紧凑档质检",
+    "compact verify",
     async () => {
       const t = await ev<string>(FACTS);
-      return t.includes("谱距离") ? t : null;
+      return t.includes(L.lossLsd) ? t : null;
     },
     60000,
   );
-  mark(`紧凑档质检  ${compact}`);
+  mark(`compact verify  ${compact}`);
 
   const pcts = [
     ...new Set(
       ((await ev<string[]>("return window.__auditBtn")) ?? [])
-        .map(t => /^质检 (\d+)%$/.exec(t)?.[1])
+        .map(t => VERIFY_PCT.exec(t)?.[1])
         .filter(Boolean),
     ),
   ];
-  if (!pcts.length) failures.push("质检进行中按钮没出现「质检 N%」进度：worker 的 progress 没接到 UI");
-  else if (pcts.length < 2) failures.push(`质检进度只出现一个档位（${pcts.join(",")}）：看不到推进`);
+  if (!pcts.length)
+    failures.push(`the button never showed a "${L.verifying.replace("{pct}", "N")}" progress: worker progress is not\n      wired to the UI`);
+  else if (pcts.length < 2)
+    failures.push(`verify progress showed a single step (${pcts.join(",")}): no visible advance`);
 
-  await ev(press("button.act", "重建相位"));
+  await ev(press("button.act", L.rebuildPhase));
   await waitFor(
-    "精修完成",
-    async () => ((await ev<string>(FACTS)).includes("相位已重建") ? true : null),
+    "fine render done",
+    async () => ((await ev<string>(FACTS)).includes(L.hintRefined) ? true : null),
     120000,
   );
-  mark("相位已重建");
+  mark("phase rebuilt");
 
-  await ev(press("button.chip", "可逆"));
+  await ev(press("button.chip", L.exact));
   const rendered = await waitFor(
-    "可逆档出图",
+    "exact image",
     async () => {
       const t = await ev<string>(FACTS);
-      if (!t.includes("可逆模式") || pngOf(t) === "" || pngOf(t) === pngOf(compact)) return null;
-      return (await ev<number>(enabled("质检"))) ? t : null;
+      if (!t.includes(L.storeExact) || pngOf(t) === "" || pngOf(t) === pngOf(compact)) return null;
+      return (await ev<number>(enabled(L.verify))) ? t : null;
     },
     120000,
   );
-  mark("可逆档出图");
+  mark("exact image");
 
-  await ev(press("button.act", "质检"));
+  await ev(press("button.act", L.verify));
   const exact = await waitFor(
-    "可逆档质检",
+    "exact verify",
     async () => {
       const t = await ev<string>(FACTS);
-      return (t.includes("相关度，信噪比") || t.includes("自检")) && t !== rendered ? t : null;
+      return (t.includes(L.lossAll) || t.includes(L.selfCheck)) && t !== rendered ? t : null;
     },
     60000,
   );
-  mark(`可逆档质检  ${exact}`);
+  mark(`exact verify  ${exact}`);
 
   await ev(`
-    const audit = [...document.querySelectorAll('button.act')].find(v => v.textContent.trim() === '质检');
-    const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === '紧凑');
-    if (!audit || audit.disabled) throw new Error("质检按钮不可用");
-    if (!chip || chip.disabled) throw new Error("紧凑档按钮不可用");
+    const audit = [...document.querySelectorAll('button.act')].find(v => v.textContent.trim() === ${JSON.stringify(L.verify)});
+    const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === ${JSON.stringify(L.compact)});
+    if (!audit || audit.disabled) throw new Error("the Verify button is unavailable");
+    if (!chip || chip.disabled) throw new Error("the Compact chip is unavailable");
     audit.click();
     chip.click();
     return 1;
   `);
   const jobs = await waitFor(
-    "质检在改参数后被收回",
+    "verify withdrawn after a parameter change",
     async () => {
       const j = await ev<{
         posted: Record<string, number>;
@@ -259,18 +272,19 @@ async function chain(
   ).catch(() => null);
   if (!jobs)
     failures.push(
-      "质检进行中改参数：在跑的质检没被取消而是烧到结束（堵住 worker，新编码只能排队等它）",
+      "a parameter changed mid-verify: the running verify was not cancelled and burned to the end\n      (blocking the worker, so the new encode just queues behind it)",
     );
-  else mark(`质检改参数即收回（收到 cancel 的作业 ${Object.keys(jobs.cancelled).length} 个）`);
+  else mark(`verify withdrawn on parameter change (${Object.keys(jobs.cancelled).length} jobs cancelled)`);
 
-  // —— 图片往返：读回存出的可逆 PNG，相位提示与「重建相位」按钮必须一致 ——
-  // （回归防护：曾出现「提示说可重建、按钮却消失」——载入后重编码换了谱，提示却按旧图留着）
-  await ev(press("button.chip", "可逆"));
+  // Image round trip: read the saved exact PNG back and the phase hint and the Rebuild phase
+  // button must agree. (Regression guard: the hint once said "rebuildable" while the button was
+  // gone, because loading re-encoded the spectrum and left the hint from the old image.)
+  await ev(press("button.chip", L.exact));
   await waitFor(
-    "可逆档出图（往返用）",
+    "exact image (for the round trip)",
     async () => {
       const t = await ev<string>(FACTS);
-      return t.includes("可逆模式") && (await ev<number>(enabled("质检"))) ? t : null;
+      return t.includes(L.storeExact) && (await ev<number>(enabled(L.verify))) ? t : null;
     },
     120000,
   );
@@ -288,15 +302,15 @@ async function chain(
     };
     return 1;
   `);
-  await ev(press("button.act", "存频谱图"));
+  await ev(press("button.act", L.saveImage));
   const roundtrip = await ev<{ size: number; label: string; encodes: number; name: string }>(`
-    if (!window.__capBlob || !window.__capName) throw new Error("存频谱图没有产生可截获的 PNG");
+    if (!window.__capBlob || !window.__capName) throw new Error("Save image produced no interceptable PNG");
     const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
     const drop = async (blob, name) => {
       const dt = new DataTransfer();
       dt.items.add(new File([blob], name, { type: name.endsWith(".jpg") ? "image/jpeg" : "image/png" }));
       const target = document.querySelector('.app');
-      if (!target) throw new Error("界面上没有拖放目标");
+      if (!target) throw new Error("no drop target on the page");
       target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
     };
     window.__dropPng = () => drop(window.__capBlob, window.__capName);
@@ -312,30 +326,36 @@ async function chain(
     };
     return { size: window.__capBlob.size, label: "PNG " + kb(window.__capBlob.size), encodes: window.__jobs.encodes, name: window.__capName };
   `);
-  mark(`截获 ${roundtrip.name}（${roundtrip.size} 字节）`);
+  mark(`captured ${roundtrip.name} (${roundtrip.size} bytes)`);
 
   await ev("return window.__dropPng()");
   await waitFor(
-    "无损 PNG 读回",
-    async () => ((await ev<string>(FACTS)).includes("相位已载入") ? true : null),
+    "lossless PNG read back",
+    async () => ((await ev<string>(FACTS)).includes(L.readExact) ? true : null),
     60000,
   );
   const pngLine = await ev<string>(FACTS);
   if (!pngLine.includes(roundtrip.label))
-    failures.push(`无损 PNG 读回后显示的尺寸与原文件不符（${pngLine.match(/PNG [^；]+/)?.[0]}，应为 ${roundtrip.label}）：作业应直接用读回的文件`);
-  if (await ev<number>(enabled("重建相位")))
-    failures.push("无损可逆 PNG 读回：出现了「重建相位」按钮（相位完整，无需重建）");
-  if ((await ev<string>(FACTS)).includes("点「重建相位」"))
-    failures.push("无损可逆 PNG 读回：出现了相位重建提示");
+    failures.push(
+      `the size shown after reading the lossless PNG back does not match the file (${pngLine.match(/PNG [^;]+/)?.[0]}, expected ${roundtrip.label}): the job should use the file read back`,
+    );
+  if (await ev<number>(enabled(L.rebuildPhase)))
+    failures.push(
+      "lossless exact PNG read back: a Rebuild phase button appeared (the phase is complete, there is nothing to rebuild)",
+    );
+  if ((await ev<string>(FACTS)).includes(L.rebuildPhase))
+    failures.push("lossless exact PNG read back: a phase-rebuild hint appeared");
   if ((await ev<number>("return window.__jobs.encodes")) !== roundtrip.encodes)
-    failures.push(`无损 PNG 读回发生了重编码（${roundtrip.encodes}→）：读回的谱应直接作为作业，参考相位不应被扔掉`);
+    failures.push(
+      `reading the lossless PNG back re-encoded it (${roundtrip.encodes}→): the spectrum read back should be the job itself, and the phase reference must not be thrown away`,
+    );
 
   await ev("return window.__dropJpeg(0.08)");
   const damaged = await waitFor(
-    "读回受损伤的 JPEG",
+    "damaged JPEG read back",
     async () => {
       const t = await ev<string>(FACTS);
-      if (t.includes("点「重建相位」")) return { line: t, err: "" };
+      if (t.includes(L.rebuildPhase)) return { line: t, err: "" };
       const err = await ev<string>(
         "return document.querySelector('.note.is-error')?.textContent ?? ''",
       );
@@ -346,13 +366,13 @@ async function chain(
   if (!damaged || damaged.err) {
     const factsNow = await ev<string>(FACTS);
     failures.push(
-      `读回受损 JPEG 未完成：${damaged?.err || "超时；相位参考既未判弱也未报错（伤害可能没被识别）"}；当前 facts：${factsNow}`,
+      `reading the damaged JPEG back never finished: ${damaged?.err || "timed out; the phase reference was neither called weak nor reported as an error (the damage may have gone unnoticed)"}; facts now: ${factsNow}`,
     );
   } else {
-    const weakBtn = await ev<number>(enabled("重建相位"));
+    const weakBtn = await ev<number>(enabled(L.rebuildPhase));
     if (!weakBtn)
-      failures.push(`受损图读回：有重建提示却没有「重建相位」按钮——${damaged.line}`);
-    else mark("受损图读回：重建提示与按钮一致，参考相位可借");
+      failures.push(`damaged image read back: a rebuild hint but no Rebuild phase button, ${damaged.line}`);
+    else mark("damaged image read back: hint and button agree, the phase reference is usable");
   }
 
   return [compact, exact];
@@ -367,7 +387,7 @@ interface MoreState {
 
 const MORE_PROBE = `
   const details = document.querySelector('details.more');
-  const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === '可逆');
+  const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === ${JSON.stringify(L.exact)});
   if (!details || !chip) return null;
   const head = details.querySelector('summary').getBoundingClientRect();
   const cs = getComputedStyle(details);
@@ -391,8 +411,9 @@ interface Narrow {
   acts: number;
 }
 
-// .app 是 overflow-x: hidden，横向溢出不会冒到 document 上（documentElement 的 scrollWidth
-// 恒等于 clientWidth），只会被悄悄裁掉 —— 所以要逐个元素量，不能只看文档宽度。
+// .app is overflow-x: hidden, so horizontal overflow never reaches the document (documentElement's
+// scrollWidth always equals clientWidth); it is silently clipped instead. Measure element by
+// element rather than trusting the document width.
 const SCAN_NARROW = `
   const scan = () => {
     const w = (s) => Math.round(document.querySelector(s)?.getBoundingClientRect().width ?? 0);
@@ -413,42 +434,44 @@ const SCAN_NARROW = `
   };
 `;
 
-// 只在主构建那一遍跑：基线是旧产物，没有「进阶参数」与「关于」这两块界面。
+// Only runs for the main build: the baseline is an older dist without the Advanced and About UI.
 async function chromeChecks(ev: Ev, mark: (label: string) => void): Promise<void> {
-  // 没打开的弹窗必须在页面里不占位：作者的 .about 一旦压过 UA 的
-  // `dialog:not([open]) { display: none }`，它就会以 absolute + margin:auto 叠在页面上。
+  // A closed dialog must occupy nothing: the moment the author's .about beats the UA's
+  // `dialog:not([open]) { display: none }`, it overlays the page at absolute + margin: auto.
   const idle = await ev<{ display: string; shown: boolean } | null>(`
     const d = document.querySelector('dialog.about');
-    if (!d) throw new Error("界面上没有关于弹窗");
+    if (!d) throw new Error("no About dialog on the page");
     return { display: getComputedStyle(d).display, shown: d.checkVisibility() };
   `);
-  if (!idle) failures.push("界面上没有关于弹窗");
+  if (!idle) failures.push("no About dialog on the page");
   else if (idle.shown || idle.display !== "none")
-    failures.push(`没打开的关于弹窗还占着页面（display: ${idle.display}）：样式压过了 dialog:not([open])`);
-  else mark("关于弹窗默认不占页面");
+    failures.push(`the closed About dialog still takes up the page (display: ${idle.display}): a style beat dialog:not([open])`);
+  else mark("closed About dialog occupies nothing");
 
   const shut = await ev<MoreState | null>(MORE_PROBE);
-  if (!shut) failures.push("界面上没有「进阶参数」卡片或参数控件");
+  if (!shut) failures.push("no Advanced card or parameter control on the page");
   else if (shut.open || shut.shown)
-    failures.push("进阶参数一上来就露在界面上：小白默认态不该带着这些参数");
-  // 收起时除摘要行与自身的边框内边距外不该再多出任何高度：details 一旦被摆成 flex 容器，
-  // 隐藏的正文仍会占掉一个 gap（实测 8px），而「展开后变高、参数可见」那两条看不见它。
+    failures.push("the Advanced card is visible on arrival: the default view should not carry those parameters");
+  // Collapsed, the card must be exactly its summary row plus its own border and padding: once
+  // details is laid out as a flex container the hidden body still eats a gap (8px measured), and
+  // the "grows when expanded, parameters visible" checks cannot see that.
   else if (Math.abs(shut.slack) > 1)
-    failures.push(`收起的「进阶参数」仍为隐藏的参数留了 ${shut.slack}px 空隙：卡片不能当弹性容器摆`);
-  else mark(`进阶参数默认收起（卡片 ${shut.height}px）`);
+    failures.push(`collapsed Advanced still leaves ${shut.slack}px for the hidden parameters: the card must not be laid out as a flex container`);
+  else mark(`Advanced collapsed by default (card ${shut.height}px)`);
 
-  // 用 checkVisibility 而不是 getBoundingClientRect：收起的 details 里，后者仍返回旧盒子。
+  // checkVisibility rather than getBoundingClientRect: inside a collapsed details the latter still
+  // returns the old box.
   await ev(`document.querySelector('details.more > summary').click(); return 1`);
   const expanded = await ev<MoreState | null>(MORE_PROBE);
   if (!expanded || !expanded.open || !expanded.shown)
-    failures.push("点开「进阶参数」后参数仍不可见：展开开关坏了");
+    failures.push("parameters are still invisible after opening Advanced: the toggle is broken");
   else if (expanded.height <= (shut?.height ?? 0))
-    failures.push(`展开「进阶参数」后卡片没变高（${shut?.height} → ${expanded.height}）：参数没被放出来`);
-  else mark(`进阶参数展开后 ${expanded.height}px，参数可见`);
+    failures.push(`the card did not grow after expanding Advanced (${shut?.height} → ${expanded.height}): the parameters never came out`);
+  else mark(`Advanced expanded to ${expanded.height}px, parameters visible`);
 
   await ev(`
     const b = document.querySelector('button.head-btn');
-    if (!b) throw new Error("页头没有「关于」按钮");
+    if (!b) throw new Error("no About button in the header");
     b.click();
     return 1;
   `);
@@ -460,7 +483,7 @@ async function chromeChecks(ev: Ev, mark: (label: string) => void): Promise<void
     close: boolean;
   }>(`
     const d = document.querySelector('dialog.about');
-    if (!d) throw new Error("界面上没有关于弹窗");
+    if (!d) throw new Error("no About dialog on the page");
     const r = d.getBoundingClientRect();
     const head = document.querySelector('#about-title').getBoundingClientRect();
     const foot = document.querySelector('.about-foot button').getBoundingClientRect();
@@ -473,16 +496,17 @@ async function chromeChecks(ev: Ev, mark: (label: string) => void): Promise<void
       close: inside(foot),
     };
   `);
-  if (!about.open) failures.push("点「关于」没有弹出弹窗");
-  else if (!about.inView) failures.push(`关于弹窗没完整落在视口里（${about.box.join("×")}）`);
+  if (!about.open) failures.push("clicking About did not open the dialog");
+  else if (!about.inView)
+    failures.push(`the About dialog does not fit in the viewport (${about.box.join("×")})`);
   else if (!about.title || !about.close)
-    failures.push("关于弹窗的标题或「关闭」按钮不在视口里：正文把它们挤出屏幕了");
-  else mark(`关于弹窗 ${about.box.join("×")}，标题与关闭都在视口内`);
+    failures.push("the About title or the Close button is outside the viewport: the body pushed them off screen");
+  else mark(`About dialog ${about.box.join("×")}, title and Close both in view`);
 
   await ev(`document.querySelector('.about-foot button').click(); return 1`);
   if (await ev<boolean>(`return document.querySelector('dialog.about').open`))
-    failures.push("在弹窗里点「关闭」没有关掉它");
-  else mark("关于弹窗可关");
+    failures.push("clicking Close inside the dialog did not close it");
+  else mark("About dialog closes");
 }
 
 const staged = SUBPATH ? `${tmpdir()}/atools-subpath-${process.pid}` : "";
@@ -497,7 +521,7 @@ const failures: string[] = [];
 const errs: string[] = [];
 session.on(m => {
   if (m.method === "Runtime.exceptionThrown")
-    errs.push(m.params?.exceptionDetails?.exception?.description ?? "（未捕获异常）");
+    errs.push(m.params?.exceptionDetails?.exception?.description ?? "(uncaught exception)");
   if (m.method === "Runtime.consoleAPICalled" && m.params?.type === "error")
     errs.push(
       "console.error " +
@@ -532,31 +556,33 @@ try {
         }, 20);
         return true;
       `);
-      console.log("界面链：");
+      console.log("ui chain:");
     },
     true,
     true,
   );
 
   const pairs = [
-    ["紧凑", compact],
-    ["可逆", exact],
+    [L.compact, compact],
+    [L.exact, exact],
   ] as const;
   for (const [mode, line] of pairs) {
-    if (line.includes("还原度") || line.includes("谱距离")) {
-      for (const label of ["原图", "有损", "半尺寸"])
-        if (!line.includes(`${label} `)) failures.push(`${mode}档质检里缺「${label}」那一项：${line}`);
-    } else if (!line.includes("完全一致")) failures.push(`${mode}档质检没给出结论：${line}`);
+    if (line.includes(L.lossLsd) || line.includes(L.lossAll)) {
+      for (const label of [L.case, L.caseLossy, L.caseHalf])
+        if (!line.includes(`${label} `))
+          failures.push(`${mode} verify is missing the "${label}" row: ${line}`);
+    } else if (!line.includes(L.selfCheck))
+      failures.push(`${mode} verify gave no verdict: ${line}`);
   }
 
   const seen = await ev<{ tasks: [number, number][]; notes: [number, string][] }>("return window.__ui");
-  console.log("  阶段（按 p.note 的文案变化还原）：");
-  for (const [at, text] of seen.notes) mark(text || "（静默）", at);
+  console.log("  stages (reconstructed from p.note text changes):");
+  for (const [at, text] of seen.notes) mark(text || "(silent)", at);
   const total = seen.tasks.reduce((sum, [, ms]) => sum + ms, 0);
-  console.log(`  主线程长任务（>50ms）：${seen.tasks.length} 个，合计 ${total}ms`);
-  for (const [at, ms] of seen.tasks) mark(`阻塞 ${ms}ms`, at);
+  console.log(`  long tasks on the main thread (>50 ms): ${seen.tasks.length}, ${total} ms total`);
+  for (const [at, ms] of seen.tasks) mark(`blocked ${ms} ms`, at);
 
-  // —— 窄屏：这是给手机设计的界面，320 宽下不许出现横向溢出 ——
+  // Narrow screens: the UI is designed for phones, so nothing may overflow horizontally at 320 wide.
   await session.send("Emulation.setDeviceMetricsOverride", {
     width: 320,
     height: 640,
@@ -565,8 +591,9 @@ try {
   });
   await sleep(400);
   const narrow = await ev<Narrow>(`${SCAN_NARROW}\nreturn scan();`);
-  // 阳性对照：把谱图临时撑到 900px，同一套扫描必须报出溢出与出处。
-  // 没有它，选择器写错或扫描本身退化会变成「对着什么都报没问题」—— 而那时它照样全绿。
+  // Positive control: stretch the spectrogram to 900px and the same scan must report both the
+  // overflow and where it came from. Without it, a wrong selector or a degraded scan would answer
+  // "all clear" to anything and still pass.
   const forced = await ev<Narrow>(`${SCAN_NARROW}
     const st = document.createElement('style');
     st.textContent = '.spec { min-width: 900px; }';
@@ -575,21 +602,23 @@ try {
     st.remove();
     return out;
   `);
-  // cw 是这次断言的另一道阳性对照：视口没换成功的话，溢出检查会变成对着宽屏说「没问题」。
-  if (narrow.cw !== 320) failures.push(`窄屏那一步没换到 320 宽（拿到 ${narrow.cw}）：检查本身没生效`);
+  // cw is a second positive control for this assertion: if the viewport never changed, the overflow
+  // check would be reporting "fine" about a wide screen.
+  if (narrow.cw !== 320)
+    failures.push(`the narrow step never switched to 320 wide (got ${narrow.cw}): the check itself did not take effect`);
   else if (!(forced.over > 0 && forced.clipped.length))
     failures.push(
-      `窄屏溢出的扫描失效了：把谱图硬撑到 900px 也报不出溢出（外壳多出 ${forced.over}px，元素级读数 ${forced.clipped.length} 条）`,
+      `the overflow scan is broken: stretching the spectrogram to 900px still reports nothing\n      (shell over by ${forced.over}px, ${forced.clipped.length} element-level readings)`,
     );
   else if (narrow.over > 0 || narrow.clipped.length)
     failures.push(
-      `320 宽下有内容横向溢出并被裁掉：外壳多出 ${narrow.over}px；${narrow.clipped.join("，") || "（无元素级读数）"}`,
+      `content overflows horizontally at 320 wide and gets clipped: shell over by ${narrow.over}px;\n      ${narrow.clipped.join(", ") || "(no element-level readings)"}`,
     );
-  else mark(`320 宽无横向裁切（外壳 ${narrow.shell}、谱图 ${narrow.spec}、动作行 ${narrow.acts}）`);
+  else mark(`no horizontal clipping at 320 wide (shell ${narrow.shell}, spectrogram ${narrow.spec}, actions ${narrow.acts})`);
   await session.send("Emulation.clearDeviceMetricsOverride", {});
 } catch (e) {
   failures.push(String(e));
-  console.log("  当前 facts：", await ev<string>(FACTS).catch(() => "(取不到)"));
+  console.log("  facts now:", await ev<string>(FACTS).catch(() => "(unavailable)"));
 } finally {
   await session.stop();
   server.stop();
@@ -597,7 +626,7 @@ try {
 }
 
 if (BASELINE && compact && exact) {
-  console.log(`\n基线对照（${BASELINE}）：`);
+  console.log(`\nbaseline comparison (${BASELINE}):`);
   const port = PORT + 2;
   const theirServer = serve(port, { dir: BASELINE });
   const theirSession = await open({
@@ -609,31 +638,31 @@ if (BASELINE && compact && exact) {
   try {
     theirs = await chain(theirSession.ev, () => {});
   } catch (e) {
-    failures.push(`基线那一遍没走通：${String(e)}`);
+    failures.push(`the baseline run did not complete: ${String(e)}`);
   } finally {
     await theirSession.stop();
     theirServer.stop();
   }
   const compared = [
-    ["紧凑", compact, theirs[0]],
-    ["可逆", exact, theirs[1]],
+    [L.compact, compact, theirs[0]],
+    [L.exact, exact, theirs[1]],
   ] as const;
   for (const [mode, mine, their] of compared) {
     const same = mine === their;
-    console.log(`  ${mode}档：${same ? "与基线逐字符相同" : "*** 与基线有差异 ***"}`);
+    console.log(`  ${mode}: ${same ? "identical to the baseline, character for character" : "*** differs from the baseline ***"}`);
     if (!same)
-      failures.push(`基线对照《${mode}档》不一致：\n      候选 ${mine}\n      基线 ${their}`);
+      failures.push(`baseline mismatch (${mode}):\n      candidate ${mine}\n      baseline ${their}`);
   }
 }
 
 if (errs.length) failures.push(...errs.slice(0, 5));
 if (failures.length) {
-  console.error(`\n不合格 ${failures.length} 项：`);
+  console.error(`\nfailed checks: ${failures.length}`);
   for (const why of failures) console.error(`  - ${why}`);
   process.exit(1);
 }
 console.log(
-  `\n界面链通过：演示 / 质检（紧凑与可逆各一次）/ 重建相位 都到位，页面零异常` +
-    (BASELINE ? "，两行数字与基线逐字符相同" : ""),
+  `\nui chain passed: demo / verify (compact and exact) / rebuild phase all in place, no page exceptions` +
+    (BASELINE ? ", both lines identical to the baseline character for character" : ""),
 );
 process.exit(0);

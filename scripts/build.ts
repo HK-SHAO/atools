@@ -17,7 +17,7 @@ const build = async (options: Bun.BuildConfig): Promise<Bun.BuildOutput> => {
   const done = await Bun.build({ outdir, minify: true, target: "browser", sourcemap: "none", ...options });
   if (!done.success) {
     for (const log of done.logs) console.error(log);
-    fail("打包失败");
+    fail("bundling failed");
   }
   return done;
 };
@@ -40,7 +40,7 @@ const app = await build({
 });
 
 const entry = app.outputs.find(output => output.kind === "entry-point" && output.path.endsWith(".js"));
-if (!entry) fail("应用产物里没有入口脚本：index.html 的 <script type=module> 没被认出来？");
+if (!entry) fail("no entry script in the app output: did <script type=module> in index.html go unrecognised?");
 
 const appCode = await Promise.all(
   app.outputs.filter(output => output.path.endsWith(".js")).map(output => output.text()),
@@ -48,17 +48,17 @@ const appCode = await Promise.all(
 
 for (const code of appCode)
   if (code.includes("dsp_abi"))
-    fail(`应用产物里出现了内核握手：主线程不该挂内核（数值全在 worker，见 docs/build.md）`);
+    fail(`the app output contains a kernel handshake: the main thread must not attach the kernel\n    (all numerics live in the worker, see docs/build.md)`);
 
 const workers = workerFiles();
-if (!workers.length) fail("应用没有引用任何 ?worker&url Worker");
+if (!workers.length) fail("the app references no ?worker&url Worker");
 
 const missingEntry = workerEntries().find(name => !appCode.some(code => code.includes(`"./${name}"`)));
-if (missingEntry) fail(`应用产物没有按相对 URL 引用 Worker ${missingEntry}`);
+if (missingEntry) fail(`the app output does not reference Worker ${missingEntry} by relative URL`);
 
 for (const file of workers)
   if (!(await Bun.file(at(file)).exists()))
-    fail(`Worker 产物 ${file} 不在 dist/ 里`);
+    fail(`the Worker artifact ${file} is not in dist/`);
 
 const html = await Bun.file(at("index.html")).text();
 const pwa = (await Bun.file(path.join(publicDir, "manifest.webmanifest")).json()) as {
@@ -78,7 +78,7 @@ const shell = [
 
 for (const file of shell)
   if (!(await Bun.file(at(file)).exists()))
-    fail(`应用壳里的 ${file} 不在 dist/ 里：壳是推出来的，多半是引用或 manifest 图标路径写错了`);
+    fail(`the shell entry ${file} is not in dist/: the shell is derived, so a reference or a manifest\n    icon path is probably wrong`);
 
 const parts = await Promise.all(shell.map(file => Bun.file(at(file)).arrayBuffer().then(Buffer.from)));
 const cache = `atools-${Bun.hash(
@@ -94,12 +94,12 @@ await build({
   define: { PRECACHE: JSON.stringify({ cache, home: "index.html", files: shell }) },
 });
 const sw = await Bun.file(at("sw.js")).text();
-if (sw.includes("PRECACHE")) fail("dist/sw.js 里还留着 PRECACHE：define 没注入上");
+if (sw.includes("PRECACHE")) fail("dist/sw.js still mentions PRECACHE: the define never landed");
 
 const sizes = new Map<string, number>();
 for (const output of app.outputs) sizes.set(rel(output), output.size);
 for (const file of workers)
   sizes.set(file, (await Bun.file(at(file))).size);
 for (const [file, size] of sizes) console.log(`${file}  ${(size / 1024).toFixed(1)} KB`);
-console.log(`${cache}  sw.js ${(sw.length / 1024).toFixed(1)} KB  预缓存 ${shell.length} 项`);
+console.log(`${cache}  sw.js ${(sw.length / 1024).toFixed(1)} KB  precached ${shell.length} entries`);
 for (const file of shell) console.log(`  ${file}`);

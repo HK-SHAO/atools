@@ -7,8 +7,8 @@ const artifact = path.join(root, "moon/_build/wasm/release/bench/dsp.whitebox_te
 
 if (!existsSync(artifact)) {
   console.error(
-    `找不到 bench 产物：${path.relative(root, artifact)}\n` +
-      `先生成它：bun run bench:kernel:build`,
+    `missing bench artifact: ${path.relative(root, artifact)}\n` +
+      `build it first: bun run bench:kernel:build`,
   );
   process.exit(1);
 }
@@ -48,8 +48,8 @@ function best(rounds: number, iters: number, fn: () => void): number {
 
 const us = (ms: number): string => (ms * 1000).toFixed(2).padStart(9) + " µs";
 
-console.log(`产物 ${path.relative(root, artifact)}  ·  引擎 V8 (${process.versions.bun ? "Bun" : "Node"})`);
-console.log("同一份产物换引擎跑：这一列是 V8，moonrun 那一列读 `moon bench`，两者只比比值");
+console.log(`artifact ${path.relative(root, artifact)}  ·  engine V8 (${process.versions.bun ? "Bun" : "Node"})`);
+console.log("Same artifact on two engines: this column is V8, the moonrun column comes from `moon bench`; only the ratios are comparable");
 console.log("name                       V8");
 
 for (const win of [512, 4096]) {

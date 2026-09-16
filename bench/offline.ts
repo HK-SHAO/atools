@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { strings } from "../app/lib/i18n.ts";
 import { open, serve, sleep, waitFor } from "./cdp.ts";
 
 const project = path.resolve(import.meta.dirname, "..");
@@ -10,6 +11,9 @@ const CONTROL = "./__offline-control__";
 
 const failures: string[] = [];
 const fail = (why: string) => failures.push(why);
+
+// The gate drives the English UI; labels come from the dictionary so they cannot drift from it.
+const L = strings("en");
 
 interface Manifest {
   mime: string | null;
@@ -78,8 +82,9 @@ try {
       new Promise((done) => setTimeout(() => done(false), 10000)),
     ]);
   `);
-  if (!ready) fail("Service Worker 十秒内没就绪：没注册上，或浏览器拒绝了（非安全上下文？）");
-  else console.log("已注册：dist/sw.js");
+  if (!ready)
+    fail("the Service Worker was not ready within ten seconds: not registered, or the browser refused (insecure context?)");
+  else console.log("registered: dist/sw.js");
 
   const controlled = await session.ev<boolean>(`
     if (navigator.serviceWorker.controller) return true;
@@ -90,19 +95,20 @@ try {
     ]);
   `);
   if (!controlled)
-    fail("首次加载后当前页面未受控（clients.claim 没生效：首次访问拿不到离线能力，得再加载一次）");
+    fail("the page is not controlled after the first load (clients.claim did not take effect: the first visit gets no offline ability and would need a reload)");
 
   const cacheNames = await session.ev<string[]>("return await caches.keys();");
   if (!cacheNames.includes("other-app") || !cacheNames.includes("atools:/other/sw.js:old"))
-    fail("激活删除了其他应用或其他部署的缓存");
-  if (cacheNames.includes("atools:/sw.js:old")) fail("激活没有清理当前部署的旧缓存");
+    fail("activation deleted the caches of another app or another deployment");
+  if (cacheNames.includes("atools:/sw.js:old"))
+    fail("activation did not clear the stale cache of the current deployment");
 
   const online = await session.ev<{
     href: Record<string, string | null>;
     hook: string | null;
     controlled: boolean;
   }>(INSPECT);
-  if (!online.controlled) fail("页面不受 Service Worker 控制");
+  if (!online.controlled) fail("the page is not controlled by the Service Worker");
 
   const manifest = await session.ev<Manifest | null>(`
     const url = document.querySelector('link[rel="manifest"]').href;
@@ -122,17 +128,20 @@ try {
     };
   `);
 
-  if (!manifest) fail("index.html 没有 <link rel=manifest>");
+  if (!manifest) fail("index.html has no <link rel=manifest>");
   else {
-    console.log(`manifest：${manifest.name}  ${manifest.mime}  display=${manifest.display}`);
+    console.log(`manifest: ${manifest.name}  ${manifest.mime}  display=${manifest.display}`);
     if (!manifest.mime?.includes("manifest"))
-      fail(`manifest 的 MIME 是 ${manifest.mime}，应为 application/manifest+json`);
-    if (manifest.display !== "standalone") fail(`display=${manifest.display}，装不成独立窗口`);
+      fail(`the manifest MIME is ${manifest.mime}, expected application/manifest+json`);
+    if (manifest.display !== "standalone")
+      fail(`display=${manifest.display}, so it cannot install as a standalone window`);
     if (manifest.scope !== manifest.root || manifest.start !== manifest.root)
-      fail(`scope/start_url 解析成 ${manifest.scope}/${manifest.start}，应用根是 ${manifest.root}`);
+      fail(`scope/start_url resolve to ${manifest.scope}/${manifest.start} while the app root is ${manifest.root}`);
     for (const [src, code] of manifest.icons)
       if (code !== 200)
-        fail(`manifest 图标 ${src} 拿不到（${code}）—— manifest 的内容不经过打包器改写，得按字面路径部署`);
+        fail(
+          `manifest icon ${src} is unreachable (${code}): the manifest is not rewritten by the bundler, so it deploys by literal path`,
+        );
   }
 
   for (const [what, url] of [
@@ -140,51 +149,54 @@ try {
     ["favicon", online.href.icon],
   ] as [string, string | null][]) {
     const code = await status(url);
-    if (code !== 200) fail(`${what} 拿不到（${code}）：iOS 加主屏会退化成截图`);
+    if (code !== 200) fail(`${what} is unreachable (${code}): adding to the iOS home screen would fall back to a screenshot`);
   }
-  if (online.hook !== "yes") fail(`apple-mobile-web-app-capable=${online.hook}，iOS 独立窗口起不来`);
+  if (online.hook !== "yes")
+    fail(`apple-mobile-web-app-capable=${online.hook}, so the iOS standalone window cannot start`);
 
   const wanted: [string, string][] = [
     ["index.html", "/index.html"],
-    ["入口脚本", new URL(online.href.script!).pathname],
-    ["样式", new URL(online.href.style!).pathname],
+    ["entry script", new URL(online.href.script!).pathname],
+    ["styles", new URL(online.href.style!).pathname],
     ["manifest", new URL(online.href.manifest!).pathname],
     ["favicon", new URL(online.href.icon!).pathname],
     ["apple-touch-icon", new URL(online.href.apple!).pathname],
   ];
   for (const [src] of manifest?.icons ?? [])
-    wanted.push([`manifest 图标 ${src}`, new URL(src, online.href.manifest!).pathname]);
+    wanted.push([`manifest icon ${src}`, new URL(src, online.href.manifest!).pathname]);
 
   const shell =
     (await waitFor(
-      "应用壳入缓存",
+      "app shell cached",
       async () => {
         const cached = await session.ev<string[]>(CACHED);
         return cached.length >= wanted.length ? cached : null;
       },
       10000,
     ).catch(() => null)) ?? (await session.ev<string[]>(CACHED));
-  if (!shell.length) fail("Service Worker 一项都没预缓存");
+  if (!shell.length) fail("the Service Worker precached nothing");
 
   const kernel = shell.find(at => at.endsWith(".wasm"));
-  if (!kernel) fail(`应用壳 ${shell.length} 项里没有 .wasm：数值内核掉出了壳，断网后编不了`);
-  else wanted.push(["数值内核", kernel]);
-  for (const [what, at] of wanted) if (!shell.includes(at)) fail(`预缓存里没有${what}（${at}）`);
+  if (!kernel)
+    fail(`none of the ${shell.length} shell entries is a .wasm: the numeric kernel fell out of the shell and cannot encode offline`);
+  else wanted.push(["numeric kernel", kernel]);
+  for (const [what, at] of wanted)
+    if (!shell.includes(at)) fail(`the precache has no ${what} (${at})`);
 
   if (shell.some(at => at.endsWith("/sw.js")))
-    fail("sw.js 自己进了预缓存：浏览器再也拿不到新的 Service Worker");
-  console.log(`预缓存 ${shell.length} 项：${shell.join(" ")}`);
+    fail("sw.js precached itself: the browser could never pick up a new Service Worker");
+  console.log(`precached ${shell.length} entries: ${shell.join(" ")}`);
 
   await session.ev(`
-    const b = [...document.querySelectorAll('button')].find((x) => /演示/.test(x.textContent ?? ''));
+    const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === ${JSON.stringify(L.demo)});
     b?.click();
     return !!b;
   `);
-  const loaded = await waitFor("演示载入", () =>
+  const loaded = await waitFor("demo loaded", () =>
     session.ev<boolean>(`return !!document.querySelector('.spec');`),
   ).catch(() => false);
   const grown = await waitFor(
-    "演示资源入缓存",
+    "demo asset cached",
     async () => {
       const cached = await session.ev<string[]>(CACHED);
       return cached.length > shell.length ? cached : null;
@@ -192,21 +204,22 @@ try {
     8000,
   ).catch(() => null);
   const demo = (grown ?? []).filter(entry => entry.endsWith(".ogg"));
-  if (!loaded) fail("演示没能载入");
-  if (!demo.length) fail("演示音频没进运行期缓存：用过一次的素材应当离线可用");
-  else console.log(`运行期缓存 +${grown!.length - shell.length} 项（含演示音频 ${demo.join(" ")}）`);
+  if (!loaded) fail("the demo never loaded");
+  if (!demo.length)
+    fail("the demo audio never reached the runtime cache: a fixture used once should work offline");
+  else console.log(`runtime cache +${grown!.length - shell.length} entries (demo audio ${demo.join(" ")} included)`);
 
   const swPath = path.join(project, "dist/sw.js");
   const swBytes = await readFile(swPath, "utf8");
   try {
-    await writeFile(swPath, `${swBytes}\n// 更新探针 ${Date.now()}\n`);
+    await writeFile(swPath, `${swBytes}\n// update probe ${Date.now()}\n`);
     await session.ev(`
       const reg = await navigator.serviceWorker.getRegistration();
       await reg?.update();
       return !!reg;
     `);
     const parked = await waitFor(
-      "新版停在 waiting",
+      "the new version parks in waiting",
       () =>
         session.ev<boolean>(`
           const reg = await navigator.serviceWorker.getRegistration();
@@ -214,12 +227,14 @@ try {
         `),
       8000,
     ).then(() => true, () => false);
-    if (!parked) fail("新版 Service Worker 没停在 waiting：要么没被检测到，要么直接接管了正在用的页面");
-    else console.log("更新语义：新版停在 waiting，旧版继续服务");
+    if (!parked)
+      fail("the new Service Worker did not park in waiting: either it was not detected or it took over the live page");
+    else console.log("update semantics: the new version waits while the old one keeps serving");
     if (!(await session.ev<boolean>(`return !!navigator.serviceWorker.controller;`)))
-      fail("更新检测之后当前页面丢了 Service Worker 控制");
+      fail("the page lost Service Worker control after the update check");
     const kept = await session.ev<string[]>(CACHED);
-    for (const [what, at] of wanted) if (!kept.includes(at)) fail(`更新检测之后壳里少了${what}（${at}）`);
+    for (const [what, at] of wanted)
+      if (!kept.includes(at)) fail(`the shell lost ${what} after the update check (${at})`);
   } finally {
     await writeFile(swPath, swBytes);
   }
@@ -235,14 +250,14 @@ try {
   const poisoned = (await session.ev<string[]>(CACHED)).some(at => at.endsWith("__no-such-chunk__.js"));
   if (ghostResp.status !== 200 || ghostResp.type !== "text/html")
     fail(
-      `不存在的资源没走 SPA 回落（${ghostResp.status} ${ghostResp.type}）` +
-        "：服务端与部署端不同语义，下面这条断言是空的",
+      `a missing asset did not take the SPA fallback (${ghostResp.status} ${ghostResp.type})` +
+        ": the dev server and the deployment differ here, so the assertion below is vacuous",
     );
   else if (poisoned)
-    fail(`SPA 回落出来的 index.html 被冻进了运行期缓存（${ghost}）：一次偶发缺文件会变成永久坏死`);
-  else console.log("SPA 回落不进运行期缓存：缺失资源拿回 200 的 HTML，但没被冻住");
+    fail(`the index.html produced by the SPA fallback froze into the runtime cache (${ghost}): one transient missing file becomes permanent rot`);
+  else console.log("the SPA fallback stays out of the runtime cache: a missing asset returns the 200 HTML but is not frozen");
 
-  console.log("关掉 HTTP 服务：这个源真的不可达了");
+  console.log("shutting the HTTP server down: the origin is genuinely unreachable now");
   shutDown();
   await sleep(300);
   const probe = await session.ev<Record<string, number | boolean>>(`
@@ -259,13 +274,13 @@ try {
     ${demo[0] ? `out.demo = await status(${JSON.stringify(demo[0])});` : ""}
     return out;
   `);
-  console.log(`断网探针（cache:reload 绕过 HTTP 缓存）：${JSON.stringify(probe)}`);
+  console.log(`offline probe (cache:reload bypasses the HTTP cache): ${JSON.stringify(probe)}`);
   if (probe.offline !== 0)
-    fail(`对照地址 ${CONTROL} 断网后仍拿到 ${probe.offline} —— 离线这半段是空的`);
+    fail(`the control address ${CONTROL} still answers ${probe.offline} offline: the offline half of this check is vacuous`);
   for (const key of ["html", "script", "style", "manifest", "kernel"])
-    if (probe[key] !== 200) fail(`断网后 ${key} 拿不到（${probe[key]}）`);
-  if (demo[0] && probe.demo !== 200) fail(`断网后演示音频拿不到（${probe.demo}）`);
-  if (!probe.controlled) fail("断网后页面丢了 Service Worker 控制");
+    if (probe[key] !== 200) fail(`${key} is unreachable offline (${probe[key]})`);
+  if (demo[0] && probe.demo !== 200) fail(`the demo audio is unreachable offline (${probe.demo})`);
+  if (!probe.controlled) fail("the page lost Service Worker control while offline");
 
   const reloaded = await session.goto(APP, ".app").then(() => true, () => false);
   const cold = await session
@@ -273,17 +288,18 @@ try {
       return { drop: !!document.querySelector('.drop'), params: !!document.querySelector('.params') };
     `)
     .catch(() => null);
-  if (!reloaded || !cold) fail("断网后重载打不开：应用壳没落到位");
-  else if (!cold.drop || cold.params) fail("断网重载后的首屏不对：应当只有空态拖放区");
-  else console.log("断网重载：应用壳完整渲染出空态");
+  if (!reloaded || !cold) fail("reloading offline does not open: the app shell never landed");
+  else if (!cold.drop || cold.params)
+    fail("the first screen after an offline reload is wrong: it should be the empty drop zone only");
+  else console.log("offline reload: the shell renders the empty state in full");
 } finally {
   await session.stop();
   shutDown();
 }
 
 if (failures.length) {
-  console.error(`\n不合格 ${failures.length} 项：`);
+  console.error(`\nfailed checks: ${failures.length}`);
   for (const why of failures) console.error(`  - ${why}`);
   process.exit(1);
 }
-console.log("\nPWA 与离线全部合格");
+console.log("\nPWA and offline all passed");

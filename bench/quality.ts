@@ -11,7 +11,7 @@ warmKernel(await loadDsp(compileWasm()));
 const tuneArg = process.argv.find(a => a.startsWith("--tune="));
 if (tuneArg) {
   Object.assign(TUNE, JSON.parse(tuneArg.slice(7)) as Partial<typeof TUNE>);
-  console.log(`TUNE 覆盖：${tuneArg.slice(7)}\n`);
+  console.log(`TUNE override: ${tuneArg.slice(7)}\n`);
 }
 
 function rng(seed: number): () => number {
@@ -77,9 +77,9 @@ function harsh(sr: number, seconds: number): Samples {
 }
 
 const SIGNALS: [string, (sr: number, sec: number) => Samples][] = [
-  ["人声", voice],
-  ["乐声", music],
-  ["严苛", harsh],
+  ["voice", voice],
+  ["music", music],
+  ["harsh", harsh],
 ];
 
 interface Row {
@@ -111,7 +111,7 @@ async function runCase(name: string, gen: (sr: number, sec: number) => Samples, 
   const conv = spectral(magnitudes(ref, 1024, 256), magnitudes(got, 1024, 256)).conv;
   return {
     signal: name,
-    label: doublePass ? `${caseLabel(enc)} ×2 往返` : caseLabel(enc),
+    label: doublePass ? `${caseLabel(enc)} ×2 round trip` : caseLabel(enc),
     snr: Math.round(m.snr * 10) / 10,
     corr: Math.round(m.corr * 1000) / 1000,
     conv: Math.round(conv * 10) / 10,
@@ -123,8 +123,8 @@ async function runCase(name: string, gen: (sr: number, sec: number) => Samples, 
 }
 
 function caseLabel(enc: Encode): string {
-  if (enc.mode === "exact") return `可逆 ${enc.sr / 1000}k`;
-  return `紧凑 ${enc.sr / 1000}k ${enc.bits}bit`;
+  if (enc.mode === "exact") return `exact ${enc.sr / 1000}k`;
+  return `compact ${enc.sr / 1000}k ${enc.bits}bit`;
 }
 
 const CASES: { enc: Encode; double?: boolean }[] = [
@@ -136,11 +136,11 @@ const CASES: { enc: Encode; double?: boolean }[] = [
 ];
 
 const GATE: [string, string, number, number, number, number][] = [
-  ["严苛", "可逆 8k", 0.99, 2.5, -30, 0.95],
-  ["人声", "紧凑 8k 8bit", 0.2, 6, -12, 0.9],
-  ["严苛", "紧凑 8k 8bit", 0.08, 5, -6, 0.9],
-  ["乐声", "紧凑 8k 8bit", 0.5, 5, -15, 0.8],
-  ["乐声", "紧凑 8k 4bit", 0.4, 20, -6, 0.62],
+  ["harsh", "exact 8k", 0.99, 2.5, -30, 0.95],
+  ["voice", "compact 8k 8bit", 0.2, 6, -12, 0.9],
+  ["harsh", "compact 8k 8bit", 0.08, 5, -6, 0.9],
+  ["music", "compact 8k 8bit", 0.5, 5, -15, 0.8],
+  ["music", "compact 8k 4bit", 0.4, 20, -6, 0.62],
 ];
 
 function gate(rows: Row[]): boolean {
@@ -148,15 +148,15 @@ function gate(rows: Row[]): boolean {
   for (const [signal, tag, minCorr, maxLsd, maxConv, minEnv] of GATE) {
     const row = rows.find(r => r.signal === signal && r.label.startsWith(tag));
     if (!row) {
-      console.log(`  ✗ 门禁用例缺失：${signal} / ${tag}`);
+      console.log(`  ✗ gate case missing: ${signal} / ${tag}`);
       ok = false;
       continue;
     }
     const pass = row.corr >= minCorr && row.lsd <= maxLsd && row.conv <= maxConv && row.env >= minEnv;
     if (!pass) ok = false;
     console.log(
-      `  ${pass ? "✓" : "✗"} ${signal} ${tag}  相关 ${row.corr} (≥${minCorr})  谱差 ${row.lsd} (≤${maxLsd})` +
-        `  收敛 ${row.conv} (≤${maxConv})  包络 ${row.env} (≥${minEnv})`,
+      `  ${pass ? "✓" : "✗"} ${signal} ${tag}  corr ${row.corr} (≥${minCorr})  LSD ${row.lsd} (≤${maxLsd})` +
+        `  conv ${row.conv} (≤${maxConv})  env ${row.env} (≥${minEnv})`,
     );
   }
   return ok;
@@ -172,16 +172,16 @@ for (const [name, gen] of SIGNALS)
 if (json) {
   console.log(JSON.stringify(rows, null, 2));
 } else {
-  console.log(`合成素材各 ${SECONDS}s，encode → synthesise 全链路，指标来自 metric.compare\n`);
+  console.log(`synthetic material, ${SECONDS}s each, full encode → synthesise chain, metrics from metric.compare\n`);
   console.log(
-    "信号  用例".padEnd(24) +
+    "signal  case".padEnd(24) +
       "SNR dB".padStart(9) +
-      "相关".padStart(8) +
-      "收敛 dB".padStart(9) +
-      "谱差 dB".padStart(9) +
-      "包络".padStart(8) +
-      "感知谱距".padStart(10) +
-      "耗时 ms".padStart(9),
+      "corr".padStart(8) +
+      "conv dB".padStart(9) +
+      "LSD dB".padStart(9) +
+      "env".padStart(8) +
+      "bark dist".padStart(10) +
+      "ms".padStart(9),
   );
   for (const r of rows)
     console.log(
@@ -195,7 +195,7 @@ if (json) {
         String(r.ms).padStart(9),
     );
   if (doGate) {
-    console.log("\n质量门禁：");
+    console.log("\nquality gate:");
     process.exitCode = gate(rows) ? 0 : 1;
   }
 }

@@ -208,7 +208,7 @@ export async function runCase(
   return {
     file: name,
     group,
-    case: `${c.mode}/${c.sr || "原"}/${c.bits}b/${FINENESS[c.fineness]!.label}/${c.via}/${(back.meta.samples / back.meta.sr).toFixed(2)}s/${dims}`,
+    case: `${c.mode}/${c.sr || "src"}/${c.bits}b/${FINENESS[c.fineness]!.label}/${c.via}/${(back.meta.samples / back.meta.sr).toFixed(2)}s/${dims}`,
     ms: Math.round(performance.now() - t0),
     bytes,
     frames: spec.meta.frames,
@@ -243,9 +243,9 @@ export async function pngCheck(bits: number[]): Promise<string[]> {
     try {
       const blob = await spectrumToPng(spec);
       const { spec: back } = await imageToSpectrum(blob, downloadName("probe", spec.meta));
-      out.push(`${b} bit: ${blob.size}B  层级最大偏差 ${levelGap(spec, back)}`);
+      out.push(`${b} bit: ${blob.size}B  max level gap ${levelGap(spec, back)}`);
     } catch (e) {
-      out.push(`${b} bit: 失败 — ${e instanceof Error ? e.message : String(e)}`);
+      out.push(`${b} bit: failed - ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return out;

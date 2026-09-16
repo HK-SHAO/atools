@@ -30,7 +30,7 @@ export async function ensureCached(rels: string[]): Promise<void> {
     new Float32Array(out.buffer, 4).set(pcm.subarray(0, head));
     await writeFile(path, out);
     console.log(
-      `  缓存 ${rel}  ${sr}Hz ${(head / sr).toFixed(1)}s（解码 ${((Date.now() - t) / 1000).toFixed(1)}s）`,
+      `  cached ${rel}  ${sr}Hz ${(head / sr).toFixed(1)}s (decoded in ${((Date.now() - t) / 1000).toFixed(1)}s)`,
     );
   }
 }

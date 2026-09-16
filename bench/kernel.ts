@@ -45,7 +45,7 @@ const TIERS: { label: string; enc: Encode }[] = [
   { label: "win1024", enc: mk("compact", 2) },
   { label: "win2048", enc: mk("compact", 3) },
   { label: "win4096", enc: mk("compact", 4) },
-  { label: "win1024 精确档", enc: mk("exact", 2) },
+  { label: "win1024 exact", enc: mk("exact", 2) },
 ];
 
 interface Run {
@@ -78,8 +78,8 @@ const total = (r: Run): number => r.ms.resample + r.ms.encode + r.ms.synthesise;
 
 const ROUNDS = 2;
 
-console.log(`素材 ${SECS}s @ ${SRC_SR}Hz · ${TIERS.length} 档 · 每档跑 ${ROUNDS} 轮取最快\n`);
-console.log("档位         重采样      编码       还原      合计   实时倍率  判");
+console.log(`material ${SECS}s @ ${SRC_SR}Hz · ${TIERS.length} tiers · best of ${ROUNDS} rounds\n`);
+console.log("tier        resample  encode    synthesise total   realtime  ok");
 console.log("─".repeat(76));
 
 const failures: string[] = [];
@@ -101,26 +101,26 @@ for (const { label, enc } of TIERS) {
       `${ms(r.ms.synthesise).padStart(9)} ${ms(got).padStart(8)} ${rt.toFixed(3).padStart(8)}×  ${ok ? "✓" : "✗"}`,
   );
 
-  if (!ok) failures.push(`${label}：${ms(got)} 算 ${SECS}s 音频 = ${rt.toFixed(3)}× 实时，未达 ${RT_GATE}×`);
+  if (!ok) failures.push(`${label}: ${ms(got)} for ${SECS}s of audio = ${rt.toFixed(3)}× realtime, over the ${RT_GATE}× gate`);
   for (let i = 0; i < r.out.length; i += 97)
     if (!Number.isFinite(r.out[i]!)) {
-      failures.push(`${label}：输出第 ${i} 个样点不是有限数`);
+      failures.push(`${label}: sample ${i} of the output is not finite`);
       break;
     }
   let peak = 0;
   for (const v of r.out) peak = Math.max(peak, Math.abs(v));
-  if (peak === 0) failures.push(`${label}：输出整条为 0`);
+  if (peak === 0) failures.push(`${label}: the whole output is zero`);
   for (const lv of r.spec.levels)
     if (!Number.isFinite(lv)) {
-      failures.push(`${label}：levels 里有非有限数`);
+      failures.push(`${label}: levels hold a non-finite value`);
       break;
     }
 }
 
 console.log("─".repeat(76));
 if (failures.length) {
-  console.log("不合格：");
+  console.log("failures:");
   for (const f of failures) console.log(`  ✗ ${f}`);
   process.exit(1);
 }
-console.log(`全部达标：每档都在 ${RT_GATE}× 实时以内，且输出是有限的非零信号。`);
+console.log(`every tier passes: within ${RT_GATE}× realtime, with finite non-zero output`);

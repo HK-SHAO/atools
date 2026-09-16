@@ -15,7 +15,7 @@ const built = await Bun.build({
   target: "browser",
   naming: "bundle.[ext]",
 });
-if (!built.success) throw new AggregateError(built.logs, "评测台 bundle 构建失败");
+if (!built.success) throw new AggregateError(built.logs, "bench bundle build failed");
 
 function discover(): string[] {
   const docs = `${import.meta.dirname}/../docs`;
@@ -107,17 +107,17 @@ try {
       console.log(
         `  ${row.case.padEnd(26)} ${String(row.frames).padStart(5)}×${String(row.bins).padStart(4)}` +
           `  ${String(Math.round(row.bytes / 1024)).padStart(4)}KB` +
-          `  SNR ${String(m.snr).padStart(6)}  相关 ${m.corr.toFixed(3)}` +
-          `  收敛 ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
-          `  幅度 ${String(m.magSnr).padStart(6)}  层级偏差 ${String(m.levelGap).padStart(3)}` +
-          `  认图 ${row.readMode || "-"}` +
-          `  相位可靠 ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
+          `  SNR ${String(m.snr).padStart(6)}  corr ${m.corr.toFixed(3)}` +
+          `  conv ${String(m.conv).padStart(6)}  LSD ${String(m.lsd).padStart(5)}` +
+          `  mag ${String(m.magSnr).padStart(6)}  level gap ${String(m.levelGap).padStart(3)}` +
+          `  read mode ${row.readMode || "-"}` +
+          `  phase reliability ${row.rel === null ? "-" : row.rel.toFixed(2)}` +
           `  ${row.ms}ms`,
       );
     }
   }
 
-  console.log("\nPNG 体检:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));
+  console.log("\nPNG check:", await ev<string[]>("return await Bench.pngCheck([1,2,4,6,8])"));
   await writeFile(OUT, JSON.stringify(rows, null, 2));
   console.log("\nerrs:", errors.length ? errors.slice(0, 3).join(" | ") : "(none)");
 } finally {
