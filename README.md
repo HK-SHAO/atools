@@ -12,9 +12,9 @@ Turn audio into a shareable spectrogram; turn a spectrogram, or any picture, bac
 
 ## 怎么用 / How to use
 
-拖入一段音频（mp3、wav、flac、m4a、ogg、amr）得到频谱图；把图拖回去就能出声。频谱图本身就是进度条：点、拖、方向键，落到哪听到哪。
+拖入一段音频（mp3、wav、flac、m4a、ogg、amr）得到频谱图；把图拖回去就能出声。频谱图本身就是进度条：点、拖、方向键，落到哪听到哪。默认参数对大多数素材都够用，采样、位深、窗长和区间收在「进阶参数」里。
 
-Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop the image back to hear it. The spectrogram is the progress bar: click, drag, or use the arrow keys; playback starts wherever you land.
+Drop in an audio file (mp3, wav, flac, m4a, ogg, amr) to get a spectrogram; drop the image back to hear it. The spectrogram is the progress bar: click, drag, or use the arrow keys; playback starts wherever you land. The defaults suit most material; sampling, bit depth, window length, and range live under Advanced.
 
 ## 两种模式 / Two modes
 

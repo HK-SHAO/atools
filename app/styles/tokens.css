@@ -24,6 +24,7 @@
   --glass-line: rgba(255, 255, 255, 0.6);
 
   --r-pill: 999px;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
   --font: ui-rounded, -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
     system-ui, sans-serif;
@@ -32,7 +33,7 @@
 }
 
 .shell {
-  --c-max: 100cqi;
+  --c-max: min(100cqi, 40rem);
   --c-eff: min(100cqi, 160cqb);
   --c-vh: 1cqb;
 

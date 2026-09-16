@@ -1,4 +1,5 @@
 import { CREDIT_AUTHOR, CREDIT_NAME } from "./credit";
+import { About } from "./ui/About";
 import { Dropzone } from "./ui/Dropzone";
 import { StatusNote } from "./ui/StatusNote";
 import { useDragDrop } from "./ui/useDragDrop";
@@ -17,14 +18,7 @@ export function App() {
         <header className="head">
           <h1>留声 SPECTRUM</h1>
           <p>声音 ↔ 图像</p>
-          <a
-            className="head-link"
-            href="https://github.com/HK-SHAO/atools"
-            target="_blank"
-            rel="noreferrer"
-          >
-            源代码
-          </a>
+          <About />
         </header>
 
         {source && job ? (

@@ -34,6 +34,10 @@
   border-top: 1px solid var(--line);
 }
 
+.more > .params {
+  margin-top: 0.75em;
+}
+
 .plabel {
   font-size: var(--fs-lo);
   letter-spacing: 0.1em;

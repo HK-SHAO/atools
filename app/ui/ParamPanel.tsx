@@ -9,6 +9,7 @@ import {
   type Encode,
   type Mode,
 } from "../lib/params";
+import { Fold } from "./Fold";
 import { OptionRow, Row, type Option } from "./OptionRow";
 
 const MODE_OPTIONS: readonly Option<Mode>[] = [
@@ -97,30 +98,32 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
   );
 
   return (
-    <div className="params">
-      <OptionRow<Mode> label="模式" value={enc.mode} options={MODE_OPTIONS} onPick={v => set("mode", v)} />
-      <OptionRow<number>
-        label="采样"
-        value={enc.sr}
-        options={SR_OPTS}
-        onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
-      />
-      {compact && (
-        <OptionRow<number> label="位深" value={enc.bits} options={BIT_OPTS} onPick={v => set("bits", v)} />
-      )}
-      <OptionRow<Encode["fineness"]>
-        label="窗长"
-        value={enc.fineness}
-        options={FINENESS_OPTS}
-        onPick={v => set("fineness", v)}
-      />
-      {compact && (
-        <OptionRow<number> label="频宽" value={enc.fmax} options={fmaxOptions} onPick={v => set("fmax", v)} />
-      )}
-      <Row label="区间">
-        {field("start", "起点秒数")}
-        {field("end", "终点秒数")}
-      </Row>
-    </div>
+    <Fold label="进阶参数" className="card more">
+      <div className="params">
+        <OptionRow<Mode> label="模式" value={enc.mode} options={MODE_OPTIONS} onPick={v => set("mode", v)} />
+        <OptionRow<number>
+          label="采样"
+          value={enc.sr}
+          options={SR_OPTS}
+          onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
+        />
+        {compact && (
+          <OptionRow<number> label="位深" value={enc.bits} options={BIT_OPTS} onPick={v => set("bits", v)} />
+        )}
+        <OptionRow<Encode["fineness"]>
+          label="窗长"
+          value={enc.fineness}
+          options={FINENESS_OPTS}
+          onPick={v => set("fineness", v)}
+        />
+        {compact && (
+          <OptionRow<number> label="频宽" value={enc.fmax} options={fmaxOptions} onPick={v => set("fmax", v)} />
+        )}
+        <Row label="区间">
+          {field("start", "起点秒数")}
+          {field("end", "终点秒数")}
+        </Row>
+      </div>
+    </Fold>
   );
 }

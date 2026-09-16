@@ -11,6 +11,10 @@
   box-shadow: var(--shadow-card);
 }
 
+details.card {
+  display: block;
+}
+
 .act,
 .chip,
 .icon-btn,
@@ -135,7 +139,7 @@
 .chip:active:not(.is-on):not(:disabled),
 .icon-btn:active,
 .drop-act:active {
-  transform: scale(1);
+  transform: scale(0.97);
   box-shadow: var(--shadow-ctl);
   background: var(--glass);
 }
@@ -180,11 +184,41 @@
 @supports (corner-shape: squircle) {
   .card,
   .drop,
-  .spec {
+  .spec,
+  .about {
     corner-shape: squircle;
   }
 
   .icon-btn {
     corner-shape: round;
   }
+}
+
+.fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  min-height: var(--h-ctl);
+  font-size: var(--fs-lo);
+  letter-spacing: 0.1em;
+  color: var(--soft);
+  list-style: none;
+  cursor: pointer;
+}
+
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > summary::marker {
+  content: "";
+}
+
+.fold > summary .ico {
+  transition: transform 0.2s var(--ease-out);
+}
+
+.fold[open] > summary .ico {
+  transform: rotate(180deg);
 }

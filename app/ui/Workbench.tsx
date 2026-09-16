@@ -122,67 +122,69 @@ export function Workbench({
   const canRefine = !hasStrongPhase(spec);
 
   return (
-    <section className="card">
-      <Spectrogram
-        sheet={sheet}
-        headRef={headRef}
-        onSeek={seek}
-        onScrub={scrub}
-        onCommit={commit}
-        onNudge={nudge}
-      />
+    <>
+      <section className="card">
+        <Spectrogram
+          sheet={sheet}
+          headRef={headRef}
+          onSeek={seek}
+          onScrub={scrub}
+          onCommit={commit}
+          onNudge={nudge}
+        />
 
-      <div className="bar">
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={toggle}
-          disabled={audio === null && busy}
-          aria-label={playing ? "暂停" : "播放"}
-        >
-          <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
-            {playing ? (
-              <path d="M9 6v12M15 6v12" />
-            ) : (
-              <path d="M8 5.5 18.5 12 8 18.5Z" fill="currentColor" stroke="none" />
-            )}
-          </svg>
-        </button>
-        <p className="time">
-          <span ref={timeRef}>0:00</span>
-          <span className="dim"> / {clock(duration)}</span>
-        </p>
-        {busy && <span className="dim tick">{stage.label}中</span>}
-      </div>
-
-      <p className="facts">
-        采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
-        {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
-        {loss ? `${lossLine(loss, compact)}；` : ""}
-        {note ? `${note}；` : ""}
-        {hint ? `${hint}；` : ""}
-      </p>
-
-      <StatusNote stage={stage} error={error} />
-
-      <div className="acts">
-        <button type="button" className="act" onClick={savePng}>
-          存频谱图
-        </button>
-        <button type="button" className="act" onClick={() => void saveWav()} disabled={busy}>
-          存音频
-        </button>
-        <button type="button" className="act" onClick={check} disabled={checking || busy}>
-          {checking ? `质检 ${Math.round(progress * 100)}%` : "质检"}
-        </button>
-        {canRefine && (
-          <button type="button" className="act" onClick={onRefine} disabled={busy}>
-            重建相位
+        <div className="bar">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={toggle}
+            disabled={audio === null && busy}
+            aria-label={playing ? "暂停" : "播放"}
+          >
+            <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
+              {playing ? (
+                <path d="M9 6v12M15 6v12" />
+              ) : (
+                <path d="M8 5.5 18.5 12 8 18.5Z" fill="currentColor" stroke="none" />
+              )}
+            </svg>
           </button>
-        )}
-      </div>
+          <p className="time">
+            <span ref={timeRef}>0:00</span>
+            <span className="dim"> / {clock(duration)}</span>
+          </p>
+          {busy && <span className="dim tick">{stage.label}中</span>}
+        </div>
+
+        <p className="facts">
+          采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
+          {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
+          {loss ? `${lossLine(loss, compact)}；` : ""}
+          {note ? `${note}；` : ""}
+          {hint ? `${hint}；` : ""}
+        </p>
+
+        <StatusNote stage={stage} error={error} />
+
+        <div className="acts">
+          <button type="button" className="act" onClick={savePng}>
+            存频谱图
+          </button>
+          <button type="button" className="act" onClick={() => void saveWav()} disabled={busy}>
+            存音频
+          </button>
+          <button type="button" className="act" onClick={check} disabled={checking || busy}>
+            {checking ? `质检 ${Math.round(progress * 100)}%` : "质检"}
+          </button>
+          {canRefine && (
+            <button type="button" className="act" onClick={onRefine} disabled={busy}>
+              重建相位
+            </button>
+          )}
+        </div>
+      </section>
 
       <ParamPanel enc={enc} srcSr={srcSr} srcDuration={srcDuration} onEnc={onEnc} />
-    </section>
+    </>
   );
 }

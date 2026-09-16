@@ -1,6 +1,6 @@
 import { cp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { open, serve, waitFor } from "./cdp.ts";
+import { open, serve, sleep, waitFor } from "./cdp.ts";
 
 const PORT = Number(process.env.UI_PORT ?? 4399);
 const project = `${import.meta.dirname}/..`;
@@ -89,6 +89,7 @@ async function chain(
   mark: (label: string) => void,
   onReady?: () => Promise<void>,
   probe = false,
+  chrome = false,
 ): Promise<readonly [string, string]> {
   await waitFor("应用载入", async () =>
     (await ev<number>("return document.querySelector('.drop') ? 1 : 0")) ? 1 : null,
@@ -109,6 +110,16 @@ async function chain(
       "演示就绪时还没有构造过 AudioContext：那一百多毫秒的一次性开销会落在第一次点播放那一刻",
     );
   if (contexts > 0) mark(`播放前 AudioContext ${contexts} 个`);
+
+  if (chrome) await chromeChecks(ev, mark);
+
+  // 参数收在「进阶」卡片里，先展开它，后面按 chip 才打在真界面上。
+  // 主构建那一遍的存在性由上面的 chromeChecks 钉住，所以这里的容错不会盖掉漏洞。
+  await ev(`
+    const d = document.querySelector('details.more');
+    if (d && !d.open) d.querySelector('summary')?.click();
+    return 1;
+  `);
 
   if (probe) {
     const posted = await waitFor(
@@ -347,6 +358,133 @@ async function chain(
   return [compact, exact];
 }
 
+interface MoreState {
+  open: boolean;
+  height: number;
+  slack: number;
+  shown: boolean;
+}
+
+const MORE_PROBE = `
+  const details = document.querySelector('details.more');
+  const chip = [...document.querySelectorAll('button.chip')].find(v => v.textContent.trim() === '可逆');
+  if (!details || !chip) return null;
+  const head = details.querySelector('summary').getBoundingClientRect();
+  const cs = getComputedStyle(details);
+  const frame = head.height
+    + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+    + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  return {
+    open: details.open,
+    height: Math.round(details.getBoundingClientRect().height),
+    slack: Math.round(details.getBoundingClientRect().height - frame),
+    shown: chip.checkVisibility(),
+  };
+`;
+
+interface Narrow {
+  cw: number;
+  over: number;
+  clipped: string[];
+  shell: number;
+  spec: number;
+  acts: number;
+}
+
+// .app 是 overflow-x: hidden，横向溢出不会冒到 document 上（documentElement 的 scrollWidth
+// 恒等于 clientWidth），只会被悄悄裁掉 —— 所以要逐个元素量，不能只看文档宽度。
+const SCAN_NARROW = `
+  const scan = () => {
+    const w = (s) => Math.round(document.querySelector(s)?.getBoundingClientRect().width ?? 0);
+    const app = document.querySelector('.app');
+    const clipped = [];
+    for (const el of app.querySelectorAll('*'))
+      if (el.scrollWidth > el.clientWidth + 1)
+        clipped.push(el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0] +
+          ' ' + el.clientWidth + '→' + el.scrollWidth);
+    return {
+      cw: document.documentElement.clientWidth,
+      over: app.scrollWidth - app.clientWidth,
+      clipped: clipped.slice(0, 5),
+      shell: w('.shell'),
+      spec: w('.spec'),
+      acts: w('.acts'),
+    };
+  };
+`;
+
+// 只在主构建那一遍跑：基线是旧产物，没有「进阶参数」与「关于」这两块界面。
+async function chromeChecks(ev: Ev, mark: (label: string) => void): Promise<void> {
+  // 没打开的弹窗必须在页面里不占位：作者的 .about 一旦压过 UA 的
+  // `dialog:not([open]) { display: none }`，它就会以 absolute + margin:auto 叠在页面上。
+  const idle = await ev<{ display: string; shown: boolean } | null>(`
+    const d = document.querySelector('dialog.about');
+    if (!d) throw new Error("界面上没有关于弹窗");
+    return { display: getComputedStyle(d).display, shown: d.checkVisibility() };
+  `);
+  if (!idle) failures.push("界面上没有关于弹窗");
+  else if (idle.shown || idle.display !== "none")
+    failures.push(`没打开的关于弹窗还占着页面（display: ${idle.display}）：样式压过了 dialog:not([open])`);
+  else mark("关于弹窗默认不占页面");
+
+  const shut = await ev<MoreState | null>(MORE_PROBE);
+  if (!shut) failures.push("界面上没有「进阶参数」卡片或参数控件");
+  else if (shut.open || shut.shown)
+    failures.push("进阶参数一上来就露在界面上：小白默认态不该带着这些参数");
+  // 收起时除摘要行与自身的边框内边距外不该再多出任何高度：details 一旦被摆成 flex 容器，
+  // 隐藏的正文仍会占掉一个 gap（实测 8px），而「展开后变高、参数可见」那两条看不见它。
+  else if (Math.abs(shut.slack) > 1)
+    failures.push(`收起的「进阶参数」仍为隐藏的参数留了 ${shut.slack}px 空隙：卡片不能当弹性容器摆`);
+  else mark(`进阶参数默认收起（卡片 ${shut.height}px）`);
+
+  // 用 checkVisibility 而不是 getBoundingClientRect：收起的 details 里，后者仍返回旧盒子。
+  await ev(`document.querySelector('details.more > summary').click(); return 1`);
+  const expanded = await ev<MoreState | null>(MORE_PROBE);
+  if (!expanded || !expanded.open || !expanded.shown)
+    failures.push("点开「进阶参数」后参数仍不可见：展开开关坏了");
+  else if (expanded.height <= (shut?.height ?? 0))
+    failures.push(`展开「进阶参数」后卡片没变高（${shut?.height} → ${expanded.height}）：参数没被放出来`);
+  else mark(`进阶参数展开后 ${expanded.height}px，参数可见`);
+
+  await ev(`
+    const b = document.querySelector('button.head-btn');
+    if (!b) throw new Error("页头没有「关于」按钮");
+    b.click();
+    return 1;
+  `);
+  const about = await ev<{
+    open: boolean;
+    box: [number, number];
+    inView: boolean;
+    title: boolean;
+    close: boolean;
+  }>(`
+    const d = document.querySelector('dialog.about');
+    if (!d) throw new Error("界面上没有关于弹窗");
+    const r = d.getBoundingClientRect();
+    const head = document.querySelector('#about-title').getBoundingClientRect();
+    const foot = document.querySelector('.about-foot button').getBoundingClientRect();
+    const inside = (b) => b.height > 0 && b.top >= -1 && b.bottom <= window.innerHeight + 1;
+    return {
+      open: d.open,
+      box: [Math.round(r.width), Math.round(r.height)],
+      inView: r.top >= -1 && r.left >= -1 && r.bottom <= window.innerHeight + 1 && r.right <= window.innerWidth + 1,
+      title: inside(head),
+      close: inside(foot),
+    };
+  `);
+  if (!about.open) failures.push("点「关于」没有弹出弹窗");
+  else if (!about.inView) failures.push(`关于弹窗没完整落在视口里（${about.box.join("×")}）`);
+  else if (!about.title || !about.close)
+    failures.push("关于弹窗的标题或「关闭」按钮不在视口里：正文把它们挤出屏幕了");
+  else mark(`关于弹窗 ${about.box.join("×")}，标题与关闭都在视口内`);
+
+  await ev(`document.querySelector('.about-foot button').click(); return 1`);
+  if (await ev<boolean>(`return document.querySelector('dialog.about').open`))
+    failures.push("在弹窗里点「关闭」没有关掉它");
+  else mark("关于弹窗可关");
+}
+
 const staged = SUBPATH ? `${tmpdir()}/atools-subpath-${process.pid}` : "";
 if (staged) await cp(`${project}/dist`, `${staged}${SUBPATH}`, { recursive: true });
 const base = `http://127.0.0.1:${PORT}${SUBPATH}/`;
@@ -397,6 +535,7 @@ try {
       console.log("界面链：");
     },
     true,
+    true,
   );
 
   const pairs = [
@@ -416,6 +555,38 @@ try {
   const total = seen.tasks.reduce((sum, [, ms]) => sum + ms, 0);
   console.log(`  主线程长任务（>50ms）：${seen.tasks.length} 个，合计 ${total}ms`);
   for (const [at, ms] of seen.tasks) mark(`阻塞 ${ms}ms`, at);
+
+  // —— 窄屏：这是给手机设计的界面，320 宽下不许出现横向溢出 ——
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: 320,
+    height: 640,
+    deviceScaleFactor: 2,
+    mobile: true,
+  });
+  await sleep(400);
+  const narrow = await ev<Narrow>(`${SCAN_NARROW}\nreturn scan();`);
+  // 阳性对照：把谱图临时撑到 900px，同一套扫描必须报出溢出与出处。
+  // 没有它，选择器写错或扫描本身退化会变成「对着什么都报没问题」—— 而那时它照样全绿。
+  const forced = await ev<Narrow>(`${SCAN_NARROW}
+    const st = document.createElement('style');
+    st.textContent = '.spec { min-width: 900px; }';
+    document.head.append(st);
+    const out = scan();
+    st.remove();
+    return out;
+  `);
+  // cw 是这次断言的另一道阳性对照：视口没换成功的话，溢出检查会变成对着宽屏说「没问题」。
+  if (narrow.cw !== 320) failures.push(`窄屏那一步没换到 320 宽（拿到 ${narrow.cw}）：检查本身没生效`);
+  else if (!(forced.over > 0 && forced.clipped.length))
+    failures.push(
+      `窄屏溢出的扫描失效了：把谱图硬撑到 900px 也报不出溢出（外壳多出 ${forced.over}px，元素级读数 ${forced.clipped.length} 条）`,
+    );
+  else if (narrow.over > 0 || narrow.clipped.length)
+    failures.push(
+      `320 宽下有内容横向溢出并被裁掉：外壳多出 ${narrow.over}px；${narrow.clipped.join("，") || "（无元素级读数）"}`,
+    );
+  else mark(`320 宽无横向裁切（外壳 ${narrow.shell}、谱图 ${narrow.spec}、动作行 ${narrow.acts}）`);
+  await session.send("Emulation.clearDeviceMetricsOverride", {});
 } catch (e) {
   failures.push(String(e));
   console.log("  当前 facts：", await ev<string>(FACTS).catch(() => "(取不到)"));

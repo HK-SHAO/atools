@@ -47,19 +47,28 @@
   color: var(--soft);
 }
 
-.head-link {
+.head-btn {
   margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--soft);
   font-size: var(--fs-lo);
   letter-spacing: 0.04em;
-  color: var(--soft);
   text-decoration: underline;
   text-decoration-color: var(--line);
   text-underline-offset: 2px;
+  cursor: pointer;
   transition: color 0.15s;
 }
 
-.head-link:hover {
+.head-btn:hover {
   color: var(--ink);
+}
+
+.head-btn:focus-visible {
+  outline: 0.125em solid rgba(147, 200, 234, 0.8);
+  outline-offset: 0.125em;
 }
 
 .drop {
@@ -136,7 +145,8 @@
 @media (prefers-reduced-motion: reduce) {
   .app *,
   .app *::before,
-  .app *::after {
+  .app *::after,
+  .app *::backdrop {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }

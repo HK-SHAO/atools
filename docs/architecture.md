@@ -36,7 +36,7 @@ atools 是浏览器本地运行的音频 ↔ 频谱图工具。它是纯静态 P
 | --- | --- |
 | `app/lib/` | 音频、频谱、图片、PNG、指标与内核绑定 |
 | `app/ui/` | React 交互、Worker 客户端与 Worker 入口 |
-| `app/styles/` | reset、令牌、基础控件和页面布局 |
+| `app/styles/` | reset、令牌、基础控件、页面布局与关于弹窗 |
 | `app/sw.ts` | 无第三方运行期的 Service Worker |
 | `moon/` | MoonBit 数值内核与白盒测试 |
 | `bench/` | 质量、性能、浏览器和离线门禁 |
@@ -53,7 +53,7 @@ atools 是浏览器本地运行的音频 ↔ 频谱图工具。它是纯静态 P
 | `bun run kernel` | 完整数值链低于 `0.05×` 实时 |
 | `bun run perf` | 重采样缓存必须快于逐样点计算 |
 | `bun run build:web` | 扁平产物、完整壳、SW 注入、主线程无内核 |
-| `bun run ui` | 演示、播放、质检、精修和可逆模式 |
+| `bun run ui` | 演示、播放、质检、精修、可逆模式、进阶参数、关于弹窗与 320 宽窄屏 |
 | `bun run offline` | 安装、更新、缓存隔离和断网重载 |
 
 `SUBPATH=/path bun run ui` 验证子路径部署；`UI_BASELINE=/old/dist bun run ui` 比较两个构建。真实素材经 PNG、JPEG 和缩放的评测方法见 [bench/README.md](../bench/README.md)。

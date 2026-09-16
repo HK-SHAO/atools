@@ -1,0 +1,105 @@
+.about {
+  flex-direction: column;
+  width: min(100% - 2em, var(--c-max));
+  max-height: calc(100% - 2em);
+  padding: 0;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background: rgba(255, 252, 245, 0.94);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(0.96);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--fs-lead);
+  letter-spacing: 0.02em;
+  line-height: 1.6;
+  transition:
+    opacity 0.2s var(--ease-out),
+    transform 0.2s var(--ease-out),
+    overlay 0.2s allow-discrete,
+    display 0.2s allow-discrete;
+}
+
+.about[open] {
+  display: flex;
+  opacity: 1;
+  transform: none;
+}
+
+.about::backdrop {
+  opacity: 0;
+  background: rgba(61, 52, 39, 0.28);
+  transition:
+    opacity 0.2s var(--ease-out),
+    overlay 0.2s allow-discrete,
+    display 0.2s allow-discrete;
+}
+
+.about[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  .about[open] {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  .about[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+.about h2 {
+  margin: 0;
+  padding: 1em 1em 0;
+  font-size: 1.125em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.about-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5em;
+  min-height: 0;
+  padding: 0.5em 1em 0.75em;
+  overflow-y: auto;
+}
+
+.about-body .fold p + p {
+  margin-top: 0.5em;
+}
+
+.about-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.625em 1em;
+  border-top: 1px solid var(--line);
+}
+
+.about-foot a {
+  margin-right: auto;
+  font-size: var(--fs-lo);
+  letter-spacing: 0.04em;
+  color: var(--soft);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 2px;
+  transition: color 0.15s;
+}
+
+.about-foot a:hover {
+  color: var(--ink);
+}
+
+.about-foot a:focus-visible {
+  outline: 0.125em solid rgba(147, 200, 234, 0.8);
+  outline-offset: 0.125em;
+}
