@@ -1,7 +1,7 @@
 /**
- * 纯静态 assets 部署：无 Worker 源码、无 main、无 bindings。
- * assets.directory 指向根目录 `bun run build:web` 产出的 ../dist，相对本文件解析。
- * 模式参考 shaofeng 仓库 cloudflare workspace（commit 3138ea7）。
+ * Pure static assets deployment: no Worker source, no main, no bindings.
+ * assets.directory points at ../dist, produced by `bun run build:web` in the repository root and resolved relative to this file.
+ * The pattern follows the shaofeng repository's cloudflare workspace (commit 3138ea7).
  */
 {
 	"name": "atools",
@@ -13,6 +13,6 @@
 	"observability": {
 		"enabled": true
 	},
-	// 部署产物本无 .map；若未来开 sourcemap，true 会把源码公开上传——显式关闭
+	// The build emits no .map files; if sourcemaps were ever enabled, true would upload the source publicly, so it is explicitly off
 	"upload_source_maps": false
 }

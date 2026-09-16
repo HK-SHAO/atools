@@ -1,59 +1,61 @@
-# 架构
+# Architecture
 
-atools 是浏览器本地运行的音频 ↔ 频谱图工具。它是纯静态 PWA，没有后端、数据库或账号。格式契约见 [format-spec.md](format-spec.md)，算法取舍见 [algorithms.md](algorithms.md)，构建与部署见 [build.md](build.md)。
+atools is a browser-local audio ↔ spectrogram tool: a static PWA with no backend, database, or accounts. The format contract is in [format-spec.md](format-spec.md), algorithmic trade-offs in [algorithms.md](algorithms.md), and building and deployment in [build.md](build.md).
 
-## 数据流
+## Data flow
 
 ```text
-文件 ─┬─ 音频 → 主线程解码 ──────────────┐
-      └─ 图片 → 主线程识别容器 ─┐        │
-                                ▼        ▼
-                         Pipeline Worker
-                         ├ 重采样与频谱编码
-                         ├ 图片编解码与质检
-                         ├ 相位重建与波形合成
-                         └ MoonBit Wasm 内核
-                                │
-                                ▼
-                         主线程播放与交互
+file ─┬─ audio → decode on the main thread ────┐
+      └─ image → identify container ───┐       │
+                                       ▼       ▼
+                                 Pipeline Worker
+                                 ├ resample and spectrogram encode
+                                 ├ image encode/decode and audit
+                                 ├ phase reconstruction and waveform synthesis
+                                 └ MoonBit Wasm kernel
+                                       │
+                                       ▼
+                                 playback and interaction
 ```
 
-主线程只保留文件输入、音频解码、播放和 DOM。可无头运行的重计算放在 Worker；Worker 是浏览器中唯一装载 Wasm 内核的一侧。
+The main thread keeps only file input, audio decoding, playback, and the DOM. Headless-friendly heavy work lives in the Worker, which is the only side in the browser that loads the Wasm kernel.
 
-## 边界
+## Boundaries
 
-**Worker 协议。** `app/ui/pipeline.ts` 定义请求、响应、取消和作用域。Worker 以 single-flight 队列串行执行重任务，取消的排队任务不会进入内核，避免多个 DSP 工作区争用内存。返回的数组缓冲转移所有权；主线程仍需播放的输入 PCM 保持可用。Worker 崩溃会拒绝全部待处理请求并释放实例，下一次请求重新连接。
+**Worker protocol.** `app/ui/pipeline.ts` defines requests, responses, cancellation, and scopes. The Worker runs heavy jobs serially through a single-flight queue, and cancelled queued jobs never reach the kernel, so several DSP work areas cannot contend for memory. Returned array buffers transfer ownership; input PCM the main thread still needs for playback stays usable. A Worker crash rejects every pending request and drops the instance, and the next request reconnects.
 
-**Wasm ABI。** `app/lib/dsp.ts` 是唯一宿主绑定。启动时核对 ABI 版本、导出集合和线性内存读写。Plan、Slot 或 Job 的创建可能触发 `memory.grow`，所以数组视图按需取得，不能跨 `await` 保存。
+**Wasm ABI.** `app/lib/dsp.ts` is the single host binding. At startup it checks the ABI version, the export set, and linear-memory reads and writes. Creating a Plan, Slot, or Job can trigger `memory.grow`, so array views are taken on demand and never held across an `await`.
 
-**容量。** 内核报告 Plan、Slot 和 Job 的地址与容量；宿主不复制内存布局。池耗尽或形状不合法用返回值拒绝。音频最多 800 万样本；图片另受 1600 万输出像素、2400 万输入像素、65535 单边尺寸和 64 MiB PNG 输入限制。PNG 在解压前校验结构、CRC、尺寸与预期解压量，元数据声明的样本数不得超出帧覆盖范围。
+**Capacity.** The kernel reports Plan, Slot, and Job addresses and capacities; the host does not copy the memory layout. Exhausted pools or invalid shapes are rejected by return value. Audio is capped at 8 million samples; images are additionally bounded by 16 million output pixels, 24 million input pixels, 65535 per side, and a 64 MiB PNG input. PNG structure, CRC, dimensions, and expected decompressed size are validated before decompression, and the sample count declared in the metadata must not exceed what the frames cover.
 
-**PWA 缓存。** Service Worker 的缓存名包含部署路径和应用壳内容指纹。更新只清理同一路径的旧版本；不同子路径和其他应用缓存互不影响。
+**PWA cache.** The Service Worker cache name includes the deployment path and a content fingerprint of the app shell. An update clears only old versions of the same path; other subpaths and other apps' caches are untouched.
 
-## 目录
+**Language.** `app/lib/i18n.ts` is a dependency-free leaf: it picks `en` or `zh` from `navigator.languages` once at load, holds both dictionaries, and exports `t()`. The markup ships English (`<html lang="en">`, title, description, manifest), and `applyHead()` in `app/frontend.tsx` switches `lang` and `title` for Chinese clients. Both the main thread and the Worker read the same module, so copy produced inside the Worker follows the client language too.
 
-| 路径 | 职责 |
+## Layout
+
+| Path | Responsibility |
 | --- | --- |
-| `app/lib/` | 音频、频谱、图片、PNG、指标与内核绑定 |
-| `app/ui/` | React 交互、Worker 客户端与 Worker 入口 |
-| `app/styles/` | reset、令牌、基础控件、页面布局与关于弹窗 |
-| `app/sw.ts` | 无第三方运行期的 Service Worker |
-| `moon/` | MoonBit 数值内核与白盒测试 |
-| `bench/` | 质量、性能、浏览器和离线门禁 |
-| `scripts/` | Bun 构建、开发服务和 MoonBit 驱动 |
+| `app/lib/` | audio, spectrum, images, PNG, metrics, kernel binding, copy tables |
+| `app/ui/` | React interaction, Worker client, and Worker entry |
+| `app/styles/` | reset, tokens, base controls, page layout, and the About dialog |
+| `app/sw.ts` | Service Worker with no third-party runtime |
+| `moon/` | MoonBit numeric kernel and white-box tests |
+| `bench/` | quality, performance, browser, and offline gates |
+| `scripts/` | Bun build, dev server, and the MoonBit driver |
 
-## 门禁
+## Gates
 
-| 命令 | 守住的边界 |
+| Command | Boundary it holds |
 | --- | --- |
-| `bun run typecheck` / `bun run lint` | TypeScript 与 React 静态规则 |
-| `bun run test` | 格式、算法、解码与 Wasm 宿主边界 |
-| `bun run test:kernel` | FFT、内存池、PGHI、RTISI 与票根 |
-| `bun run quality -- --gate` | 确定性素材的重建质量 |
-| `bun run kernel` | 完整数值链低于 `0.05×` 实时 |
-| `bun run perf` | 重采样缓存必须快于逐样点计算 |
-| `bun run build:web` | 扁平产物、完整壳、SW 注入、主线程无内核 |
-| `bun run ui` | 演示、播放、质检、精修、可逆模式、进阶参数、关于弹窗与 320 宽窄屏 |
-| `bun run offline` | 安装、更新、缓存隔离和断网重载 |
+| `bun run typecheck` / `bun run lint` | TypeScript and React static rules |
+| `bun run test` | format, algorithms, decoding, and the Wasm host boundary |
+| `bun run test:kernel` | FFT, memory pools, PGHI, RTISI, and the parameter ticket |
+| `bun run quality -- --gate` | reconstruction quality on deterministic material |
+| `bun run kernel` | the full numeric chain below `0.05×` real time |
+| `bun run perf` | the resampling cache must beat a per-sample computation |
+| `bun run build:web` | flat output, complete shell, SW injection, no kernel on the main thread |
+| `bun run ui` | demo, playback, verify, fine render, exact mode, Advanced, About dialog, and 320-wide narrow screens |
+| `bun run offline` | install, update, cache isolation, and reload with the network gone |
 
-`SUBPATH=/path bun run ui` 验证子路径部署；`UI_BASELINE=/old/dist bun run ui` 比较两个构建。真实素材经 PNG、JPEG 和缩放的评测方法见 [bench/README.md](../bench/README.md)。
+`SUBPATH=/path bun run ui` verifies a subpath deployment; `UI_BASELINE=/old/dist bun run ui` compares two builds. The evaluation method for real material through PNG, JPEG, and resizing is in [bench/README.md](../bench/README.md).

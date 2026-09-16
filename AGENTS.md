@@ -1,16 +1,16 @@
 ## Rules
 
-- 克制、克制、克制
-- 权衡取舍、取舍、取舍
-- 设计、工程、架构、模块、代码要优先遵循 apple、google 规范
-- 代码、交互、UI、文案：精悍、简约、易懂、零冗余
-- 少即是多，不留任何债务，不约束现在与未来
-- 有特别多报酬、精力和时间，“沉没成本”始终不影响判断、规划、执行
-- 高内聚低耦合、解耦、模块化、易理解、易维护、非必要不注释、零注释（要让工程、架构、代码本身易理解，而不是依靠注释）
-- 第一性原理是用户体验、玩家体验、遵守规则
-- 积极采用或参考可靠的经验、轮子，引入依赖项之前要研究是否值得
-- 能用标准库就用标准库，不造轮子；判「有没有现成的」要全仓扫一遍，不为历史妥协
+- Restraint, restraint, restraint
+- Weigh the trade-offs, then trade, then trade again
+- Design, engineering, architecture, modules, and code follow Apple and Google conventions first
+- Code, interaction, UI, copy: terse, simple, clear, zero redundancy
+- Less is more; leave no debt; constrain neither the present nor the future
+- Pay, effort, and time are abundant, so sunk cost never influences judgement, planning, or execution
+- High cohesion, low coupling; decoupled, modular, easy to read, easy to maintain; no comments unless unavoidable, and ideally none (the engineering, architecture, and code should explain themselves)
+- First principles are user experience, player experience, and following the rules
+- Adopt or consult proven experience and wheels; research whether a dependency is worth it before adding one
+- Use the standard library when it fits and do not reinvent wheels; when asking "does something already exist", scan the whole repository and do not compromise for history's sake
 
-## 架构
+## Architecture
 
-见 [docs/architecture.md](docs/architecture.md)。
+See [docs/architecture.md](docs/architecture.md).

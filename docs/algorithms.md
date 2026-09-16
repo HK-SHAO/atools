@@ -1,73 +1,73 @@
-# 算法与质量
+# Algorithms and Quality
 
-格式字段、像素布局和票根位流见 [format-spec.md](format-spec.md)。本文说明当前算法的取舍、已知边界和验证方法。
+Format fields, pixel layout, and the ticket bitstream are in [format-spec.md](format-spec.md). This document covers the trade-offs in the current algorithms, the known boundaries, and the verification methods.
 
-## 编码
+## Encoding
 
-输入先转单声道并重采样，再用 Hann 窗做 STFT。`hop = win / 4`，窗长可取 256、512、1024、2048、4096。四倍重叠同时控制图像尺寸和相位重建约束；两倍重叠会损坏长窗的包络，八倍重叠会增大图片。
+The input is converted to mono and resampled, then transformed with a Hann-window STFT. `hop = win / 4`, and the window length may be 256, 512, 1024, 2048, or 4096. Four-fold overlap governs image size and the phase reconstruction constraint at the same time; two-fold overlap damages the envelope of long windows, and eight-fold overlap grows the image.
 
-幅度按 dB 映射到字节。紧凑模式再量化为 2、4 或 8 bit；位深改变有效档数，不改变内存元素类型。可逆模式用固定 120 dB 标度，并把相位存为 `cos(φ)` 与 `sin(φ)`，避免折叠角在 2π 边界产生不连续。
+Magnitude is mapped to bytes in dB. Compact mode then quantizes to 2, 4, or 8 bit; the bit depth changes the effective number of steps, not the in-memory element type. Exact mode uses a fixed 120 dB scale and stores phase as `cos(φ)` and `sin(φ)`, which avoids the discontinuity that a wrapped angle produces at the 2π boundary.
 
-图像受两道上限约束：
+The image is bounded by two limits:
 
-- 1600 万像素，限制时间与内存成本。
-- 单边 65535 像素，避开浏览器 canvas 的静默失败区。
+- 16 million pixels, which bounds time and memory cost.
+- 65535 pixels per side, which avoids the silent-failure range of the browser canvas.
 
-编码器用同一份几何函数选择可容纳输入的最高配置。近似像素数为 `样本数 × 重叠倍数 / 2`，与窗长无关；短窗更早碰到宽度上限，长窗更适合长音频。
+The encoder uses one geometry function to choose the highest configuration that fits the input. The approximate pixel count is `samples × overlap / 2`, independent of window length; short windows hit the width limit sooner, and long windows suit long audio better.
 
-## 还原
+## Restoration
 
-| 输入 | 默认路径 |
+| Input | Default path |
 | --- | --- |
-| 相位可靠 | 直接逆 STFT |
-| 无相位或弱相位 | PGHI 初始化 → RTISI-LA，8 次迭代 |
-| 用户选择精修 | RTISI-LA 16 次迭代 → 有预算上限的锚定 Griffin–Lim |
+| Reliable phase | Direct inverse STFT |
+| No phase or weak phase | PGHI initialization → RTISI-LA, 8 iterations |
+| User selects refinement | RTISI-LA 16 iterations → anchored Griffin–Lim with a budget cap |
 
-直接逆变换保留原始 PNG 中的相位，是可逆图的最佳路径。对可靠相位继续迭代会降低波形一致性。
+The direct inverse transform keeps the phase from the original PNG and is the best path for a reversible image. Continuing to iterate on reliable phase reduces waveform consistency.
 
-紧凑图的相位已经丢失，任何算法都只能寻找与幅度谱一致的波形。PGHI 提供确定的初相位，RTISI-LA 用逐帧前瞻减少爆音。精修主要降低频谱误差，不保证提高与原波形的相关性。
+A compact image has lost its phase, so any algorithm can only look for a waveform consistent with the magnitude spectrum. PGHI supplies a deterministic initial phase, and RTISI-LA uses per-frame lookahead to reduce clicks. Refinement mainly lowers spectral error and does not guarantee better correlation with the original waveform.
 
-低位深下，最低量化档表示“低于阈值”，并不表示幅度恰好等于档中心。重建只对这一档放宽下界，避免人为铺出噪声地板；8 bit 的动态范围足够大，保持原路径不变。
+At low bit depths the lowest quantization step means below threshold, not that the magnitude equals the step center. Reconstruction relaxes only the lower bound of that step, which avoids laying down an artificial noise floor; 8 bit has enough dynamic range and keeps the original path unchanged.
 
-弱相位作为逐频点加权的先验参与 Griffin–Lim。JPEG 的相位扰动通常仍保留方向，缩放则会混合相邻相位并快速破坏方向，因此读端结合票根尺寸和平均相位矢量长度决定直接使用、弱锚或丢弃相位。具体阈值属于格式读取策略，见 [format-spec.md](format-spec.md)。
+Weak phase enters Griffin–Lim as a per-bin weighted prior. JPEG phase perturbation usually keeps the direction, while rescaling mixes adjacent phases and destroys the direction quickly, so the reader combines the ticket dimensions and the mean phase vector length to decide between direct use, weak anchor, or discarding the phase. The exact thresholds belong to the format read policy and are in [format-spec.md](format-spec.md).
 
-## 与 librosa 的边界
+## Boundary with librosa
 
-librosa 是 Python 音频分析库；本项目是浏览器产品和可传播的声音图片格式。两者在 STFT、重采样和相位重建上重叠，但不能互相替代。
+librosa is a Python audio analysis library; this project is a browser product and a transmissible sound-image format. The two overlap on STFT, resampling, and phase reconstruction, but neither replaces the other.
 
-librosa 适合研究分析、批处理、MIR 特征工程和 Python 集成；本项目负责 PNG 编码、Exact 相位、参数与票根恢复、受损图片降级和离线交互。用 librosa 编写兼容实现，仍须实现[格式规范](format-spec.md)。同口径 STFT/ISTFT 对标见[量化数据](metrics.md#librosa-交叉核验)。
+librosa suits research analysis, batch processing, MIR feature engineering, and Python integration; this project handles PNG encoding, Exact phase, parameter and ticket recovery, degraded-image fallback, and offline interaction. A compatible implementation written with librosa still has to implement the [format spec](format-spec.md). For same-convention STFT/ISTFT comparison see the [quantitative data](metrics.md#librosa-cross-check).
 
-相位重建按相同幅度谱和迭代次数比较，但 PGHI+RTISI-LA 与 Griffin-Lim 不是同一算法。三段真实素材上的对比显示，把初值对齐后两种迭代方式的谱收敛差在 `1.7 dB` 以内，而随机初值与本项目默认的差在 `10.7 dB` 以上：这一段差距主要来自 PGHI 初值，不是迭代方式。质量需同时看谱收敛、LSD、包络和相关；性能只比较相同帧数下的完整默认方案。方法与数据见[相位重建数据](metrics.md#相位重建)。
+Phase reconstruction is compared at equal magnitude spectrum and iteration count, but PGHI+RTISI-LA and Griffin-Lim are not the same algorithm. A comparison on three real clips shows that after aligning the initial values the two iteration schemes differ in spectral convergence by no more than `1.7 dB`, while a random initial value differs from this project's default by more than `10.7 dB`: most of that gap comes from the PGHI initial value, not from the iteration scheme. Quality has to be read from spectral convergence, LSD, envelope, and correlation together; performance compares only the complete default scheme at equal frame counts. Method and data are in the [phase reconstruction data](metrics.md#phase-reconstruction).
 
-## 实测边界
+## Measured Boundaries
 
-原始 Exact PNG 接近原波形；JPEG 会扰动相位，缩放会混合相邻相位。Compact 模式追求体积和可听性，不承诺原波形。质量、速度与容量见[量化数据](metrics.md)。
+An original Exact PNG stays close to the original waveform; JPEG perturbs the phase and rescaling mixes adjacent phases. Compact mode targets size and audibility and makes no promise about the original waveform. Quality, speed, and capacity are in the [quantitative data](metrics.md).
 
-短窗 RTISI 对浮点微扰敏感：单个输入值相差 1 ulp 也可能收敛到另一个有效波形。因此数值改动必须比较多素材分布、谱误差和包络，不能用单条素材的相关性升降下结论。可逆路径则要求逐样点或逐字节等价。
+Short-window RTISI is sensitive to floating-point perturbation: a single input value differing by 1 ulp can converge to another valid waveform. Numeric changes therefore have to compare distributions over multiple clips, spectral error, and envelope; a correlation rise or fall on a single clip is not a conclusion. The reversible path instead requires sample-exact or byte-exact equality.
 
-## 音频解码与重采样
+## Audio Decoding and Resampling
 
-浏览器先尝试 `decodeAudioData`，失败后按容器特征选择 Wasm 解码器。Ogg 通过首包区分 Opus 与 Vorbis。WAV、FLAC、Ogg、Opus 和 MP3 可从容器读取采样率；M4A 不据此创建解码上下文，因为 HE-AAC 的条目可能只报告核心采样率。
+The browser tries `decodeAudioData` first and, on failure, picks a Wasm decoder from the container signature. Ogg distinguishes Opus from Vorbis by the first packet. WAV, FLAC, Ogg, Opus, and MP3 expose the sample rate from the container; M4A does not create a decoding context from it, because HE-AAC entries may report only the core sample rate.
 
-原生解码使用 `OfflineAudioContext`，避免设备上下文把素材隐式重采样，也避免首次创建设备上下文阻塞解码。播放所需的 `AudioContext` 在材料就绪时预建，与 Worker 计算重叠。
+Native decoding uses `OfflineAudioContext`, which keeps a device context from resampling the clip implicitly and keeps the first device-context creation from blocking decoding. The `AudioContext` needed for playback is created ahead of time once the clip is ready, overlapping Worker computation.
 
-带限重采样器缓存相同输出相位的抽头权重。缓存有条目数和 4 MB 内存双重上限；输出与逐样点计算逐位一致。`bun run perf` 要求缓存路径在所有受测采样率组合上更快。
+The band-limited resampler caches tap weights for identical output phases. The cache is capped by both entry count and 4 MB of memory; output is bit-identical to per-sample computation. `bun run perf` requires the cached path to be faster across every tested sample-rate combination.
 
-## Worker 与 MoonBit 边界
+## Worker and MoonBit Boundary
 
-解码后的 PCM 留在主线程供播放，其余大部分无头流水线在 Worker：重采样、STFT、量化、图片编解码、相位重建和质量计算。结果缓冲转移所有权；仍供界面播放的请求缓冲保留在主线程。
+Decoded PCM stays on the main thread for playback, and most of the remaining headless pipeline runs in a Worker: resampling, STFT, quantization, image codec, phase reconstruction, and quality measurement. Result buffers transfer ownership; request buffers still used for interface playback stay on the main thread.
 
-MoonBit 内核负责高频、形状稳定且能在同一块线性内存连续完成的工作：FFT、STFT 帧操作、PGHI、RTISI-LA 和票根。图片 DOM、Web Audio、格式路由和低频控制逻辑留在 TypeScript。这个边界避免为几毫秒收益增加跨线程复制、对象生命周期或第二套业务规则。
+The MoonBit kernel handles hot, shape-stable work that can run to completion in one linear memory block: FFT, STFT frame operations, PGHI, RTISI-LA, and the ticket. Image DOM, Web Audio, format routing, and low-frequency control logic stay in TypeScript. This boundary avoids adding cross-thread copies, object lifetimes, or a second set of business rules for a few milliseconds of gain.
 
-内核热循环使用已由 Plan、Slot 和 Job 容量证明安全的无边界检查访问。白盒测试覆盖 FFT 往返、Parseval、计划尺寸和池生命周期。宿主在任何可能增长线性内存的操作后重新取得数组视图。
+Kernel hot loops use unchecked access that Plan, Slot, and Job capacity already prove safe. White-box tests cover the FFT round trip, Parseval, plan dimensions, and pool lifetime. The host re-acquires array views after any operation that may grow linear memory.
 
-长计算每约 12 ms 用一次性 `MessageChannel` 让出 Worker 消息循环，使取消和进度事件及时处理。通道完成后立即关闭，避免把 Bun 或浏览器的事件循环保持为活跃状态。
+Long computations yield the Worker message loop about every 12 ms through a one-shot `MessageChannel`, so cancellation and progress events are handled promptly. The channel is closed as soon as it completes, which keeps it from holding the Bun or browser event loop active.
 
-## 性能与验证
+## Performance and Verification
 
-`bun run kernel` 要求完整数值链低于 `0.05×` 实时。绝对时间随机器变化；[量化数据](metrics.md)记录本次运行环境下的结果。
+`bun run kernel` requires the complete numeric chain below `0.05×` real time. Absolute times vary by machine; the [quantitative data](metrics.md) records the results in this run environment.
 
-发布前的最小验证集：
+The minimum verification set before release:
 
 ```sh
 bun run typecheck
@@ -82,4 +82,4 @@ bun run ui
 bun run offline
 ```
 
-真实素材经 PNG、JPEG 和缩放的完整链路由 `bun run bench` 覆盖。命令、参数和基线比较方法见 [bench/README.md](../bench/README.md)。
+The complete chain on real clips through PNG, JPEG, and rescaling is covered by `bun run bench`. Commands, parameters, and the baseline comparison method are in [bench/README.md](../bench/README.md).

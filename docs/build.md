@@ -1,8 +1,8 @@
-# 构建与运行
+# Build and Run
 
-## 工具链
+## Toolchain
 
-Bun 安装依赖、运行 TypeScript、测试、开发服务和生产构建；MoonBit 只编译数值内核。
+Bun installs dependencies and runs TypeScript, tests, the dev server, and the production build; MoonBit compiles the numeric kernel only.
 
 ```sh
 bun install --frozen-lockfile
@@ -14,37 +14,37 @@ bun run test:kernel
 bun run build:web
 ```
 
-服务默认监听 `http://127.0.0.1:3000`，`PORT` 可改端口。MoonBit 从 `MOON`、`PATH` 或 `~/.moon/bin` 定位。`dist/` 产物由各门禁脚本（`bun run offline`、`bun run ui`）自起服务验证，部署直接走 `bun run deploy`。
+The server listens on `http://127.0.0.1:3000` by default; `PORT` changes it. MoonBit is located through `MOON`, `PATH`, or `~/.moon/bin`. The gate scripts (`bun run offline`, `bun run ui`) start their own servers against `dist/`, and deployment is just `bun run deploy`.
 
-## 生产构建
+## Production build
 
-`scripts/build.ts` 按依赖顺序执行两次 Bun 构建：
+`scripts/build.ts` runs two Bun builds in dependency order:
 
-1. `index.html` → 应用、CSS 与按需音频解码器；`scripts/worker-plugin.ts` 在构建内响应 `./pipeline.worker.ts?worker&url` 导入，把 Worker 连同 Wasm 以内容哈希产出到 `dist/` 根目录。
-2. `sw.ts` → 注入应用壳清单和内容指纹的 `sw.js`。
+1. `index.html` → the app, CSS, and the on-demand audio decoders; in the same build `scripts/worker-plugin.ts` answers the `./pipeline.worker.ts?worker&url` import and emits the Worker plus the Wasm into the `dist/` root under content hashes.
+2. `sw.ts` → `sw.js` with the app shell manifest and content fingerprint injected.
 
-应用代码用 `import workerUrl from "./pipeline.worker.ts?worker&url"` 声明 Worker，URL 由插件注入，dev 与 build 同一写法。构建会拒绝缺失的壳文件、未被入口按相对 URL 引用的 Worker、未注入的 Service Worker 清单，以及任何进入应用产物的 Wasm 内核握手（主线程不含数值，见 docs/architecture.md）。
+App code declares the Worker as `import workerUrl from "./pipeline.worker.ts?worker&url"`, with the URL injected by the plugin, so dev and build share one form. The build rejects missing shell files, a Worker the entry never references by relative URL, an uninjected Service Worker manifest, and any Wasm kernel handshake that reaches the app output (the main thread holds no numerics, see docs/architecture.md).
 
-音频解码器和演示音频按需下载并进入运行时缓存，不计入首次离线应用壳。完整职责与门禁见 [architecture.md](architecture.md)。
+Audio decoders and the demo audio download on demand and land in the runtime cache; they are not part of the first offline app shell. Full responsibilities and gates are in [architecture.md](architecture.md).
 
-`app/public/_headers` 原样复制为 `dist/_headers`（Cloudflare 静态资源的响应头），只设 Referrer-Policy、X-Content-Type-Options、Permissions-Policy。**不设 CSP**：Google Analytics 的 gtag 与 Cloudflare Web Analytics 注入的 beacon（外链加载器加内联引导脚本）都不在 `'self'` 之内，硬设就只能退化成 `'unsafe-inline'` 加域名白名单，约束不到任何东西。
+`app/public/_headers` is copied verbatim to `dist/_headers` (response headers for Cloudflare's static assets) and sets only Referrer-Policy, X-Content-Type-Options, and Permissions-Policy. **There is no CSP**: the Google Analytics gtag script and the beacon Cloudflare Web Analytics injects (an external loader plus an inline bootstrap) both fall outside `'self'`, so a CSP would have to degrade to `'unsafe-inline'` plus a domain allowlist and would constrain nothing.
 
-## 开发服务
+## Dev server
 
-`app/index.ts` 是开发服务器入口，`bun dev` 直接运行它（Bun HTML 路由 + HMR）；Worker 的构建与路由由 `scripts/worker-plugin.ts` 提供（bunfig `[serve.static]` 注册），请求 Worker 入口时按源码重新构建，修改 `moon/` 时重编内核（`scripts/moon.ts` 的 `watchKernel`）。开发环境不注册 Service Worker。
+`app/index.ts` is the dev server entry, and `bun dev` runs it directly (Bun HTML routes plus HMR). Worker builds and routes come from `scripts/worker-plugin.ts` (registered through bunfig `[serve.static]`): requesting the Worker entry rebuilds it from source, and changes under `moon/` rebuild the kernel (`watchKernel` in `scripts/moon.ts`). The dev environment registers no Service Worker.
 
-## 离线与更新
+## Offline and updates
 
-首次安装缓存应用壳。新版本等待旧页面关闭后激活，避免中断正在进行的转换；激活时只删除当前部署路径的旧版本缓存。
+The first install caches the app shell. A new version activates only after the old page closes, so a running conversion is never interrupted, and activation deletes only old caches of the current deployment path.
 
-导航优先网络，断网时返回当前版本首页；其他同源 GET 请求优先读当前版本缓存。成功的非 HTML 响应可写入运行时缓存，Range 请求不缓存。不同部署路径的缓存互不读取和清理。
+Navigations prefer the network and fall back to the current version's home page when offline; other same-origin GET requests prefer the current version's cache. Successful non-HTML responses may enter the runtime cache, and Range requests are never cached. Caches of different deployment paths neither read nor clear one another.
 
-`bun run offline` 验证安装、更新等待、缓存隔离、运行时缓存和真正断服后的重载。`bun run ui` 验证主要交互；`UI_BASELINE=/path/to/old/dist bun run ui` 可对比两个构建。
+`bun run offline` verifies installation, the waiting update, cache isolation, the runtime cache, and a reload after the server is genuinely gone. `bun run ui` verifies the main interactions; `UI_BASELINE=/path/to/old/dist bun run ui` compares two builds.
 
-## 浏览器基线
+## Browser baseline
 
-**Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**。
+**Chrome / Edge 108+ · Firefox 128+ · Safari 16.4+**
 
-硬要求是 WebAssembly SIMD、模块 Worker、OffscreenCanvas、CompressionStream / DecompressionStream、容器查询、容器相对单位和 `@property`。其中 Firefox 128 才完整支持 `@property`，Safari 16.4 才支持所用的 Wasm SIMD 指令；Chrome 108 保证动态视口单位，其余硬要求更早可用。
+The hard requirements are WebAssembly SIMD, module Workers, OffscreenCanvas, CompressionStream / DecompressionStream, container queries, container-relative units, and `@property`. Firefox 128 is the first with complete `@property` support and Safari 16.4 the first with the Wasm SIMD instructions used here; Chrome 108 guarantees dynamic viewport units, and the other hard requirements land earlier.
 
-自动化门禁使用本机 Chrome。Chromium 152 与 WebKit 26.6 已跑通真实 `dist/`；Firefox 基线来自特性支持范围，尚未完成实机端到端验证。
+The automated gates use the local Chrome. Chromium 152 and WebKit 26.6 have both run the real `dist/`; the Firefox baseline comes from feature support and has no end-to-end run on hardware yet.

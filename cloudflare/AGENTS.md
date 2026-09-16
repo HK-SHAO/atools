@@ -1,21 +1,21 @@
-# Cloudflare 部署（atools）
+# Cloudflare deployment (atools)
 
-纯静态 assets 部署：无 Worker 源码、无 main、无 bindings。
-`wrangler.jsonc` 的 `assets.directory` 指向 `../dist`（由根目录 `bun run build:web` 产出），相对本目录解析；
-`not_found_handling: single-page-application` 兜底路由。本应用是单页，无服务端逻辑。
+A pure static assets deployment: no Worker source, no main, no bindings.
+`assets.directory` in `wrangler.jsonc` points at `../dist` (produced by `bun run build:web` in the repository root), resolved relative to this directory;
+`not_found_handling: single-page-application` provides the fallback route. The app is a single page with no server-side logic.
 
-## 命令
+## Commands
 
-| 命令 | 用途 |
+| Command | Purpose |
 |---|---|
-| `bun run deploy`（根目录） | build:web → `wrangler deploy` |
-| `bunx wrangler deploy --config cloudflare/wrangler.jsonc` | 仅部署（dist 须已构建） |
+| `bun run deploy` (repository root) | build:web → `wrangler deploy` |
+| `bunx wrangler deploy --config cloudflare/wrangler.jsonc` | deploy only (dist must already be built) |
 
-首次使用需 `bunx wrangler login`。`workers_dev` 默认开启，部署得 `*.workers.dev` 域名；
-日后绑自定义域名时再设 `workers_dev: false` 并配 routes。
+The first run needs `bunx wrangler login`. `workers_dev` is on by default, so a deployment gets a `*.workers.dev` domain;
+set `workers_dev: false` and configure routes once a custom domain is attached.
 
-## 注意事项
+## Notes
 
-- `upload_source_maps: false` 是刻意设置：一旦构建开启 sourcemap，会把源码公开上传
-- wrangler 经 `bunx` 按需拉取，不进 dependencies、不动 bun.lock；遇破坏性升级在脚本里钉版本（如 `bunx wrangler@^4`）
-- 无 bindings，无需 `wrangler types`
+- `upload_source_maps: false` is deliberate: turning on sourcemaps in the build would upload the source publicly
+- wrangler is pulled on demand through `bunx` and stays out of dependencies and bun.lock; pin the version in the script when a breaking upgrade lands (for example `bunx wrangler@^4`)
+- no bindings, so `wrangler types` is unnecessary
