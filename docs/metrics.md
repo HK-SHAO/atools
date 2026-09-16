@@ -117,22 +117,6 @@ Compact 不保存相位。相关系数衡量波形一致性，LSD 和包络相�
 
 `bun run perf` 用 60 秒、44.1 kHz、264.6 万样本检查重采样缓存。8/16/48 kHz 输出分别比逐样点计算快 6.9×、5.6×、5.2×；相位种类最多的测试组合为 4.27× 至 5.66×。
 
-## 测试与产物
-
-| 项目 | 当前值 |
-| --- | ---: |
-| TypeScript 测试 | 155 个 |
-| MoonBit 白盒测试 | 48 个 |
-| TS/TSX 与 MoonBit 源码 | 13293 行 |
-| 主界面 JS | 240.4 KiB |
-| Pipeline Worker | 66.0 KiB |
-| MoonBit Wasm | 44.0 KiB |
-| CSS | 7.2 KiB |
-
-源码行数为 `app/`、`bench/`、`scripts/` 的 TS/TSX 与 `moon/` 的 MoonBit 合计，不含 `moon/_build`。
-
-解码器按格式拆分加载。AAC、AMR、Opus、Vorbis、MP3、FLAC 和 WAV 模块不进入主界面包。
-
 ## 复现
 
 ```sh

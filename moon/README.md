@@ -5,6 +5,8 @@ A spectral DSP kernel written in MoonBit and compiled to WebAssembly. It is the 
 - Live demo: <https://atools.shao.fun/>
 - Source: <https://github.com/HK-SHAO/atools>
 
+The full documentation is available at [github.com/HK-SHAO/atools](https://github.com/HK-SHAO/atools/tree/main/docs).
+
 ## Functionality
 
 | File | Role |

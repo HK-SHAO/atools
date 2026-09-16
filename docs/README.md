@@ -10,7 +10,7 @@ Read only the documents needed for the task:
 - Implement an encoder or decoder: [format-spec.md](format-spec.md)
 - Change DSP or reconstruction: [algorithms.md](algorithms.md)
 - Change Worker, Wasm, PWA, or module boundaries: [architecture.md](architecture.md)
-- Check limits, quality, speed, or bundle size: [metrics.md](metrics.md)
+- Check limits, quality, or speed: [metrics.md](metrics.md)
 - Build, deploy, or test offline behavior: [build.md](build.md)
 - Run benchmarks or compare a baseline: [../bench/README.md](../bench/README.md)
 
