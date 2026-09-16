@@ -3,14 +3,12 @@ import { compileWasm } from "../../scripts/moon";
 import {
   ABI,
   attachKernel,
-  kernelReady,
+  createKernelHost,
   loadDsp,
   mustKernel,
   openJob,
-  startKernel,
   type Dsp,
 } from "./dsp";
-import { stubRows } from "./stub";
 
 describe("内核握手与访存", () => {
   let dsp: Dsp;
@@ -88,19 +86,30 @@ describe("内核握手与访存", () => {
 describe("内核启动路径", () => {
   test("没启动过就原样放行 —— 手工挂载的路照旧（评测台与其余测试都走它）", async () => {
     const held = mustKernel();
-    await expect(kernelReady()).resolves.toBeUndefined();
-    expect(mustKernel()).toBe(held);
+    const host = createKernelHost();
+    host.attach(held);
+    await expect(host.ready()).resolves.toBeUndefined();
+    expect(host.must()).toBe(held);
   });
 
   test("重复调用共享同一次加载，且 kernelReady 真的等到挂上为止", async () => {
-    const first = startKernel({ fft: false }, compileWasm());
-    await kernelReady();
-    expect(mustKernel()).toBe(await first);
-    expect(startKernel({ fft: false }, compileWasm())).toBe(first);
+    const host = createKernelHost();
+    const first = host.start({ fft: false }, compileWasm());
+    expect(host.start({ fft: false }, compileWasm())).toBe(first);
+    await host.ready();
+    expect(host.must()).toBe(await first);
   });
 
   test("不建 FFT 表组也能用：主线程要的票根问得动", async () => {
-    await kernelReady();
-    expect(stubRows()).toBeGreaterThan(0);
+    const host = createKernelHost();
+    await host.start({ fft: false }, compileWasm());
+    expect(host.must().kernel.dsp_stub_rows()).toBeGreaterThan(0);
+  });
+
+  test("加载失败不污染下一次启动", async () => {
+    const host = createKernelHost();
+    await expect(host.start({ fft: false }, new Uint8Array())).rejects.toThrow();
+    const recovered = await host.start({ fft: false }, compileWasm());
+    expect(host.must()).toBe(recovered);
   });
 });

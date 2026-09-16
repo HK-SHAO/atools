@@ -92,34 +92,81 @@ export interface Dsp {
   u8(ptr: number, len: number): Uint8Array;
 }
 
-let attached: Dsp | null = null;
+export interface KernelHost {
+  attach(dsp: Dsp | null): void;
+  must(): Dsp;
+  start(
+    use: { fft: boolean },
+    source?: string | ArrayBuffer | Uint8Array,
+  ): Promise<Dsp>;
+  ready(): Promise<void>;
+}
 
-export const attachKernel = (dsp: Dsp | null): void => {
-  attached = dsp;
+interface KernelState {
+  attached: Dsp | null;
+  started: Promise<Dsp> | null;
+}
+
+const newKernelState = (): KernelState => ({ attached: null, started: null });
+
+const attach = (state: KernelState, dsp: Dsp | null): void => {
+  state.attached = dsp;
 };
 
-export const mustKernel = (): Dsp => {
-  if (!attached)
+const must = (state: KernelState): Dsp => {
+  if (!state.attached)
     throw new Error(
       "数值内核还没挂上：这一侧的入口要先 startKernel（线上只有 worker 那一侧挂，见 app/lib/dsp.ts）",
     );
-  return attached;
+  return state.attached;
 };
 
-let started: Promise<Dsp> | null = null;
+const start = (
+  state: KernelState,
+  use: { fft: boolean },
+  source: string | ArrayBuffer | Uint8Array = kernelUrl(),
+): Promise<Dsp> => {
+  if (state.started) return state.started;
+  const pending = loadDsp(source).then(dsp => {
+    const warmed = prewarm(dsp, use.fft);
+    attach(state, warmed);
+    return warmed;
+  });
+  state.started = pending;
+  void pending.catch(() => {
+    if (state.started === pending) state.started = null;
+  });
+  return pending;
+};
+
+const ready = async (state: KernelState): Promise<void> => {
+  if (state.started) await state.started;
+};
+
+export const createKernelHost = (): KernelHost => {
+  const state = newKernelState();
+  return {
+    attach: dsp => attach(state, dsp),
+    must: () => must(state),
+    start: (use, source) => start(state, use, source),
+    ready: () => ready(state),
+  };
+};
+
+const kernel = newKernelState();
+
+export const attachKernel = (dsp: Dsp | null): void => {
+  attach(kernel, dsp);
+};
+
+export const mustKernel = (): Dsp => must(kernel);
 
 export const startKernel = (
   use: { fft: boolean },
   source: string | ArrayBuffer | Uint8Array = kernelUrl(),
-): Promise<Dsp> => {
-  started ??= loadDsp(source).then(dsp => prewarm(dsp, use.fft));
-  started.catch(() => {});
-  return started;
-};
+): Promise<Dsp> => start(kernel, use, source);
 
-export const kernelReady = async (): Promise<void> => {
-  if (started) await started;
-};
+export const kernelReady = (): Promise<void> => ready(kernel);
 
 const toBuffer = async (source: string | ArrayBuffer | Uint8Array): Promise<ArrayBuffer> => {
   if (typeof source === "string")
@@ -262,10 +309,13 @@ export const openJob = (dsp: Dsp, words: number, bytes: number): Job => {
 const FFT_WINS: readonly number[] = FINENESS.map(f => f.win);
 
 const prewarm = (dsp: Dsp, fft: boolean): Dsp => {
-  attachKernel(dsp);
   if (fft) for (const win of FFT_WINS) planOf(dsp, win);
   openJob(dsp, 0, 0).close();
   return dsp;
 };
 
-export const warmKernel = (dsp: Dsp): Dsp => prewarm(dsp, true);
+export const warmKernel = (dsp: Dsp): Dsp => {
+  const warmed = prewarm(dsp, true);
+  attachKernel(warmed);
+  return warmed;
+};
