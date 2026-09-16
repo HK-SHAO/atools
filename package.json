@@ -1,6 +1,6 @@
 {
   "name": "atools",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "private": true,
   "author": {
     "name": "烧风 HK-SHAO",
@@ -20,8 +20,13 @@
     "test": "bun test",
     "check": "bun typecheck && bun lint && bun test && bun test:kernel && bun build:web",
     "test:kernel": "cd moon && moon test --release --deny-warn --target wasm",
+    "compare:librosa": "bun bench/librosa.ts",
+    "compare:librosa:stft": "${PYTHON:-python3} bench/librosa_stft.py",
+    "compare:librosa:phase": "bun bench/librosa_phase.ts",
+    "compare:librosa:phase-perf": "${PYTHON:-python3} bench/librosa_phase_perf.py",
     "moon:ports": "cd moon && moon check --deny-warn --target js && moon check --deny-warn --target native",
     "bench:kernel": "cd moon && moon bench --release --deny-warn --target wasm",
+    "bench:kernel:native": "cd moon && moon bench --release --deny-warn --target native",
     "bench:kernel:build": "cd moon && moon bench --release --deny-warn --target wasm --build-only",
     "bench:moonebench": "bun bench/moonebench.ts",
     "quality": "bun bench/quality.ts",

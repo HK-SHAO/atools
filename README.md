@@ -40,6 +40,10 @@ Decoding adapts to the available information: intact phase is inverted directly,
 
 The DSP kernel is a pure MoonBit package ([HK-SHAO/dsp](https://mooncakes.io/docs/HK-SHAO/dsp)): FFT (256–4096), STFT codec, quantization, and phase reconstruction, compiled to WASM and consumed directly in the browser with no JS runtime or server dependency. See [moon/README.md](moon/README.md) for the host ABI, memory layout, and design notes.
 
+librosa 是 Python 音频分析库，本项目是浏览器产品和声音图片格式，不能互相替代。共有的 STFT 数值核心与 librosa 0.11.0 对齐，五档窗长最差相对误差为 `6.14e-16`；相位重建在三段真实素材上与 `librosa.griffinlim()` 同预算对比，本项目默认方案的 LSD、谱收敛和包络都更好。产品差异见[算法说明](docs/algorithms.md#与-librosa-的边界)，数据见[量化结果](docs/metrics.md#librosa-交叉核验)。
+
+librosa is a Python analysis library; this project is a browser product and an image format for sound. They overlap in DSP but do not replace one another. Across all five window sizes, the STFT agrees with librosa 0.11.0 within `6.14e-16` relative error, and on three real recordings the default phase-reconstruction path beats `librosa.griffinlim()` at the same iteration budget on LSD, spectral convergence, and envelope. See the [scope](docs/algorithms.md#与-librosa-的边界) and [measurements](docs/metrics.md#librosa-交叉核验).
+
 ## 开发 / Development
 
 ```bash

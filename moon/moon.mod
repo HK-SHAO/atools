@@ -1,6 +1,6 @@
 name = "HK-SHAO/dsp"
 
-version = "0.1.3"
+version = "0.1.4"
 
 preferred_target = "wasm"
 
