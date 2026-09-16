@@ -71,15 +71,15 @@ describe("params", () => {
       mode: "compact",
       sr: 8000,
       bits: 8,
-      fineness: 2, // 默认最长窗：分辨率优先
+      fineness: 2, // default longest window: resolution first
       fmax: 0,
       start: 0,
       end: 0,
     });
     expect(winOf(VOICE)).toBe(1024);
     expect(hopOf(VOICE)).toBe(256);
-    expect(winOf({ ...VOICE, fineness: 3 })).toBe(2048); // 菜单最大档
-    expect(winOf({ ...VOICE, fineness: 4 })).toBe(4096); // 内核计划表上限
+    expect(winOf({ ...VOICE, fineness: 3 })).toBe(2048); // top rung of the menu
+    expect(winOf({ ...VOICE, fineness: 4 })).toBe(4096); // kernel plan ceiling
     for (const fineness of [0, 1, 2, 3, 4] as const)
       expect(hopOf({ ...VOICE, fineness }) * OVERLAP).toBe(winOf({ ...VOICE, fineness }));
     expect(stepsOf(8)).toBe(255);
@@ -539,7 +539,7 @@ describe("shape", () => {
       maxFramesFor(rowsFor(winOf({ ...VOICE, fineness }), 8000, 0), 1);
     expect(framesOf(0)).toBe(MAX_FRAMES);
     expect(framesOf(2)).toBeLessThan(MAX_FRAMES);
-    expect(framesOf(3)).toBeLessThan(framesOf(2)); // 窗越长，列墙越早到
+    expect(framesOf(3)).toBeLessThan(framesOf(2)); // the longer the window, the sooner the column wall arrives
     expect(framesOf(4)).toBeLessThan(framesOf(3));
   });
 
@@ -778,7 +778,7 @@ describe("metadata", () => {
   });
 
   test("the filename carries the same numbers", () => {
-    const name = `语音_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}.png`;
+    const name = `voice_SR${meta.sr}_N${meta.win}_H${meta.hop}_F${meta.frames}_L${meta.samples}_B${meta.bits}.png`;
     const back = metaFromName(name);
     expect(back?.sr).toBe(meta.sr);
     expect(back?.win).toBe(meta.win);
@@ -1053,8 +1053,8 @@ describe("image footprint", () => {
   });
 });
 
-describe("让出方式", () => {
-  test("让出走消息通道，不走会被浏览器夹到 4 ms 的定时器", async () => {
+describe("how it yields", () => {
+  test("yields through a message channel, not a timer the browser clamps to 4 ms", async () => {
     const sr = 8000;
     const spec = await encode(signal(sr * 4, sr), sr, VOICE);
 

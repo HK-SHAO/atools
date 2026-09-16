@@ -116,7 +116,7 @@ const attach = (state: KernelState, dsp: Dsp | null): void => {
 const must = (state: KernelState): Dsp => {
   if (!state.attached)
     throw new Error(
-      "数值内核还没挂上：这一侧的入口要先 startKernel（线上只有 worker 那一侧挂，见 app/lib/dsp.ts）",
+      "The numeric kernel is not attached: this side must call startKernel first (in production only\n      the worker side attaches it, see app/lib/dsp.ts)",
     );
   return state.attached;
 };
@@ -182,20 +182,20 @@ export async function loadDsp(source: string | ArrayBuffer | Uint8Array): Promis
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const k = instance.exports as unknown as Kernel;
 
-  if (k.dsp_abi() !== ABI) throw new Error(`内核 ABI 不匹配：产物 ${k.dsp_abi()}，加载器 ${ABI}`);
+  if (k.dsp_abi() !== ABI) throw new Error(`Kernel ABI mismatch: build ${k.dsp_abi()}, loader ${ABI}`);
 
   const h = k.dsp_job_open(PROBE, PROBE);
-  if (h === 0) throw new Error("内核引导失败：开不出一段探测作业");
+  if (h === 0) throw new Error("Kernel bootstrap failed: could not open a probe job");
   try {
     const wantD = k.dsp_probe_want(0);
     const wantB = k.dsp_probe_want(1);
-    if (k.dsp_probe_stamp(h) !== 1) throw new Error("内核引导失败：写不出探测花纹");
+    if (k.dsp_probe_stamp(h) !== 1) throw new Error("Kernel bootstrap failed: the probe pattern did not survive the round trip");
     const d = new Float64Array(k.memory.buffer, k.dsp_job_d(h), PROBE);
     const b = new Uint8Array(k.memory.buffer, k.dsp_job_b(h), PROBE);
     for (let i = 0; i < PROBE; i++) {
       if (d[i] !== wantD + i || b[i] !== wantB + i)
         throw new Error(
-          `内核地址约定对不上：d[${i}] = ${d[i]} / b[${i}] = ${b[i]}，期望 ${wantD + i} / ${wantB + i}`,
+          `Kernel addressing mismatch: d[${i}] = ${d[i]} / b[${i}] = ${b[i]}, expected ${wantD + i} / ${wantB + i}`,
         );
     }
     for (let i = 0; i < PROBE; i++) {
@@ -203,7 +203,7 @@ export async function loadDsp(source: string | ArrayBuffer | Uint8Array): Promis
       b[i] = HOST_B + i;
     }
     if (k.dsp_probe_check(h, HOST_D, HOST_B) !== 1)
-      throw new Error("内核地址约定对不上：宿主写下去的值内核读不回来");
+      throw new Error("Kernel addressing mismatch: values the host wrote do not read back");
   } finally {
     k.dsp_job_close(h);
   }
@@ -228,7 +228,7 @@ export interface Plan {
 export const planOf = (dsp: Dsp, win: number): Plan => {
   const { kernel: k } = dsp;
   const index = k.dsp_plan(win);
-  if (index < 0) throw new Error(`内核不接受窗长 ${win}`);
+  if (index < 0) throw new Error(`The kernel does not accept window length ${win}`);
   return {
     win,
     rev: () => dsp.i32(k.dsp_plan_rev(index), win),
@@ -249,8 +249,8 @@ export interface Slot {
 export const openSlot = (dsp: Dsp, win: number): Slot => {
   const k = dsp.kernel;
   const id = k.dsp_slot_open(win);
-  if (id === -1) throw new Error(`内核不接受窗长 ${win}`);
-  if (id < 0) throw new Error("内核会话槽已满：拿到槽就必须还（见 moon/session.mbt）");
+  if (id === -1) throw new Error(`The kernel does not accept window length ${win}`);
+  if (id < 0) throw new Error("Kernel session slots exhausted: a slot taken must be returned (see moon/session.mbt)");
   let open = true;
   return {
     id,
@@ -258,7 +258,7 @@ export const openSlot = (dsp: Dsp, win: number): Slot => {
     mem: () => dsp.f64(k.dsp_slot_mem(id), k.dsp_slot_words(id)),
     table: (which) => {
       const off = k.dsp_pair_off(id, which);
-      if (off < 0) throw new Error(`槽 ${id} 没有第 ${which} 张配对表`);
+      if (off < 0) throw new Error(`Slot ${id} has no pairing table ${which}`);
       const len = which >= 4 ? k.dsp_pair_size(id) : k.dsp_pair_half(id);
       return dsp.f64(k.dsp_slot_mem(id) + off * 8, len);
     },
@@ -278,7 +278,7 @@ export const fftBuffers = (slot: Slot): { re: Float64Array; im: Float64Array } =
 
 export const realIfft = (dsp: Dsp, slot: Slot, bins: number): void => {
   if (dsp.kernel.dsp_real_ifft(slot.id, bins) !== 1)
-    throw new Error(`内核拒绝了实反变换：槽 ${slot.id}、${bins} 行`);
+    throw new Error(`The kernel rejected the real inverse transform: slot ${slot.id}, ${bins} rows`);
 };
 
 export interface Job {
@@ -297,7 +297,7 @@ export const jobBytes = (dsp: Dsp, handle: number, off: number, len: number): Ui
 export const openJob = (dsp: Dsp, words: number, bytes: number): Job => {
   const k = dsp.kernel;
   const handle = k.dsp_job_open(words, bytes);
-  if (handle === 0) throw new Error(`开不出作业区：${words} 个元素 + ${bytes} 字节`);
+  if (handle === 0) throw new Error(`Could not open a work area: ${words} words + ${bytes} bytes`);
   return {
     handle,
     d: () => dsp.f64(k.dsp_job_d(handle), k.dsp_job_words(handle)),

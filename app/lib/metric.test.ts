@@ -123,7 +123,7 @@ describe("lag search", () => {
     return y as Samples;
   };
 
-  test("能量用前缀和取整段，与逐点累加给出同一个峰", () => {
+  test("segment energy off a prefix sum peaks at the same place as the point-by-point sum", () => {
     const x = voice(0.5);
     for (const by of [-511, -353, -31, -16, -1, 0, 1, 9, 16, 137, 511]) {
       const y = shifted(x, by);
@@ -131,7 +131,7 @@ describe("lag search", () => {
     }
   });
 
-  test("峰落在任意整数延迟上都定得住", () => {
+  test("the peak holds at any integer lag", () => {
     const x = voice(0.5);
     for (const by of [-480, -97, -33, 0, 33, 97, 480]) {
       const y = shifted(x, by);

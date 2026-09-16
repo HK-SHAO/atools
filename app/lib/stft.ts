@@ -18,7 +18,7 @@ export class Frames {
   }
 
   data(): { re: Float64Array; im: Float64Array } {
-    if (this.closed) throw new Error("这一帧的工作区已经还给内核了");
+    if (this.closed) throw new Error("This frame's work area has already been returned to the kernel");
     return fftBuffers(this.slot);
   }
 

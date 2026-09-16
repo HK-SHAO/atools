@@ -1,6 +1,7 @@
 import type { Pixels } from "./arrays";
 import { sniff, type Container, type ReadMode } from "./container";
 import { kernelReady } from "./dsp";
+import { t } from "./i18n";
 import { FROM_LUMA, RAMP, luma } from "./palette";
 import { indexedPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { BANDS, DEFAULT_SR, MAX_FRAMES, MAX_SAMPLES, maxFramesFor, paramsForImage, type Meta, type Spectrum } from "./spectrum";
@@ -169,7 +170,7 @@ export function recognizeExact(pixels: Pixels, w: number, h: number): boolean {
 function surface(width: number, height: number) {
   const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
-  if (!ctx) throw new Error("离屏画布不可用");
+  if (!ctx) throw new Error("Offscreen canvas unavailable");
   return { canvas, ctx };
 }
 
@@ -314,7 +315,7 @@ function stubFromPixels(pixels: Pixels, w: number, h: number): StubInfo | null {
 
 export async function imageToSpectrum(file: Blob, fileName: string): Promise<Decoded> {
   await kernelReady();
-  if (file.size > MAX_SOURCE_BYTES) throw new Error("图片文件不能超过 64 MiB");
+  if (file.size > MAX_SOURCE_BYTES) throw new Error(t("errImage"));
   const bytes = new Uint8Array(await file.arrayBuffer());
   const container = sniff(bytes);
   let meta = textToMeta(readMeta(bytes) ?? "") ?? metaFromName(fileName);

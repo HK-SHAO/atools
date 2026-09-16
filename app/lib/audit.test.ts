@@ -25,11 +25,11 @@ function signal(samples: number, sr: number): Samples {
   return out;
 }
 
-// 精修合成带时间预算（glBudgetMs），两次运行允许小幅浮动
+// Fine synthesis carries a time budget (glBudgetMs); two runs may drift a little
 const near = (a: number, b: number, tol: number): boolean => Math.abs(a - b) <= tol;
 
 describe("sameSpectrum", () => {
-  test("一致判定与逐项否决", async () => {
+  test("agrees on a match and rejects field by field", async () => {
     const pcm = resample(signal(SR * 2, 44100), 44100, SR);
     const spec = await encode(pcm, SR, VOICE);
     expect(sameSpectrum(spec, spec)).toBe(true);
@@ -45,11 +45,12 @@ describe("sameSpectrum", () => {
   });
 });
 
-describe("evaluateRow 缓存复用", () => {
-  // 守卫语义：sameSpectrum 只验证「读回的谱与编码谱一致」，缓存音频本身
-  // 由调用方契约保证来自同一谱的精修合成（useAudit 只传当前 job 的 audio）。
+describe("evaluateRow cache reuse", () => {
+  // Guard semantics: sameSpectrum only proves the read-back spectrum equals the encoded
+  // one. That the cached audio is a fine synthesis of the same spectrum comes from the
+  // caller contract (useAudit passes only the current job's audio).
 
-  test("谱一致时走复用路径：坏缓存原样生效（fresh 合成不可能得到 corr≈0）", async () => {
+  test("matching spectra take the reuse path: a bad cache passes through untouched (a fresh synthesis cannot reach corr≈0)", async () => {
     const pcm = resample(signal(SR * 2, 44100), 44100, SR);
     const spec = await encode(pcm, SR, VOICE);
     const cached = await synthesise(spec, undefined, undefined, "fine");
@@ -60,30 +61,32 @@ describe("evaluateRow 缓存复用", () => {
       const tol = key === "corr" ? 0.02 : key === "snr" ? 1 : 0.3;
       expect(
         near(reused[key]!, fresh[key]!, tol),
-        `${key}: 复用 ${reused[key]} vs 现算 ${fresh[key]}`,
+        `${key}: reused ${reused[key]} vs computed fresh ${fresh[key]}`,
       ).toBe(true);
     }
     expect(reused.level).toBe(0);
 
-    // 全零缓存 + 谱一致 → 必须走复用（若复用没发生，corr 会接近 fresh 的高值）
+    // All-zero cache with matching spectra must take the reuse path (if reuse did not
+    // happen, corr would sit near the high fresh value)
     const hit = await evaluateRow(pcm, spec, spec, new Float32Array(cached.length), false);
     expect(hit.corr).toBeLessThan(0.5);
   });
 
-  test("谱不一致时拒绝复用：改坏的谱必须重新合成", async () => {
+  test("mismatched spectra refuse reuse: a tampered spectrum must be re-synthesised", async () => {
     const pcm = resample(signal(SR * 2, 44100), 44100, SR);
     const spec = await encode(pcm, SR, VOICE);
     const levels = spec.levels.slice();
     for (let i = 0; i < levels.length; i += 97) levels[i] = Math.min(255, levels[i]! + 9);
     const tampered = { ...spec, levels };
 
-    // 守卫拒绝复用（哪怕缓存传的是全零），从改坏的谱重新合成 → 结果仍接近原声。
-    // 若守卫失效变成无条件复用，全零缓存会让 corr 掉到 0。
+    // The guard refuses reuse even when the cache passed in is all zeros, and
+    // re-synthesises from the tampered spectrum, so the result still tracks the input.
+    // A guard that degraded into unconditional reuse would let the zeros drop corr to 0.
     const bad = await evaluateRow(pcm, spec, tampered, new Float32Array(pcm.length), false);
     expect(bad.corr).toBeGreaterThan(0.8);
   });
 
-  test("可逆强相位走精确路径：自检零损失", async () => {
+  test("reversible strong phase takes the exact path: the self-check loses nothing", async () => {
     const pcm = resample(signal(SR * 2, 44100), 44100, SR);
     const spec = await encode(pcm, SR, { ...VOICE, mode: "exact" });
     const row = await evaluateRow(pcm, spec, spec, null, true);

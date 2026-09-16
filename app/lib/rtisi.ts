@@ -33,8 +33,8 @@ export async function rtisiLa(
   const fb = frames * bins;
   const band = opts.band ?? null;
   if (band && band.levels.length < fb)
-    throw new Error(`频带表太短：${band.levels.length} < ${fb} 个元素`);
-  if (opts.warm && opts.warm.length < fb) throw new Error(`相位初值太短：${opts.warm.length} < ${fb}`);
+    throw new Error(`Band table too short: ${band.levels.length} < ${fb} elements`);
+  if (opts.warm && opts.warm.length < fb) throw new Error(`Phase seed too short: ${opts.warm.length} < ${fb}`);
 
   const h = k.dsp_rtisi_open(
     frames,
@@ -47,7 +47,7 @@ export async function rtisiLa(
     band ? 1 : 0,
     opts.budget ?? TUNE.rtisiBudget,
   );
-  if (h === 0) throw new Error(`RTISI 作业开不出来：frames=${frames} win=${win} bins=${bins}`);
+  if (h === 0) throw new Error(`Could not open an RTISI job: frames=${frames} win=${win} bins=${bins}`);
 
   try {
     const view = (which: number, len: number): Float64Array =>

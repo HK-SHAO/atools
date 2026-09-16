@@ -48,8 +48,8 @@ const relative = (a: Float64Array, b: Float64Array): number => {
   return worst / peak;
 };
 
-describe("rtisi（跨边界的那三件事）", () => {
-  test("给了真值相位就几乎原样还回来（宿主这条路上的数值确实是对的）", async () => {
+describe("rtisi (the three things that cross the boundary)", () => {
+  test("given the true phase it comes back nearly unchanged (the numbers on this host path really are right)", async () => {
     const fx = fixture(256, 64, 16000);
     const y = await rtisiLa(fx.mag, fx.frames, fx.bins, fx.win, fx.hop, fx.samples, {
       iters: 8,
@@ -60,7 +60,7 @@ describe("rtisi（跨边界的那三件事）", () => {
     );
   });
 
-  test("一个窗的 padding 不会让最后几帧搞砸整体（输出处处有限）", async () => {
+  test("one window of padding does not let the last frames wreck the whole (output is finite everywhere)", async () => {
     const fx = fixture(256, 64, 16000);
     const y = await rtisiLa(fx.mag.subarray(0, 5 * fx.bins), 5, fx.bins, fx.win, fx.hop, 4 * fx.hop, {
       iters: 4,
@@ -68,7 +68,7 @@ describe("rtisi（跨边界的那三件事）", () => {
     for (const v of y) expect(Number.isFinite(v)).toBe(true);
   });
 
-  test("频带表按内核那套坐标读到（写错就退成另一条路，输出差别是 O(1)）", async () => {
+  test("the band tables read in the kernel's own coordinates (write them wrong and it falls back to the other path, an O(1) difference in output)", async () => {
     const fx = fixture(256, 64, 9000);
     const fb = fx.frames * fx.bins;
     const levels = new Uint8Array(fb).fill(1);
@@ -96,7 +96,7 @@ describe("rtisi（跨边界的那三件事）", () => {
     expect(hardPeak).toBeGreaterThan(1e-3);
   });
 
-  test("另一件作业同时开着，结果逐位不变（各占各的数组）", async () => {
+  test("another job held open at the same time leaves the result bit for bit unchanged (each owns its arrays)", async () => {
     const fx = fixture(512, 128, 4096);
     const o = { iters: 8, warm: fx.truth.slice() };
     const base = await rtisiLa(fx.mag, fx.frames, fx.bins, fx.win, fx.hop, fx.samples, o);
@@ -109,7 +109,7 @@ describe("rtisi（跨边界的那三件事）", () => {
     }
   });
 
-  test("tick 按块报进度，且**让出之后仍然算对**", async () => {
+  test("tick reports progress per block and **is still right after yielding**", async () => {
     const fx = fixture(512, 128, 4096);
     const seen: number[] = [];
     const y = await rtisiLa(fx.mag, fx.frames, fx.bins, fx.win, fx.hop, fx.samples, {
@@ -127,7 +127,7 @@ describe("rtisi（跨边界的那三件事）", () => {
     expect(y.length).toBe(fx.samples);
   });
 
-  test("中途取消不留作业（正常收尾与抛错两条路都不漏）", async () => {
+  test("a cancel midway leaves no job behind (neither the clean finish nor the throw path leaks one)", async () => {
     const fx = fixture(512, 128, 4096);
     const live = (): number => dsp.kernel.dsp_job_live();
     const before = live();
@@ -143,7 +143,7 @@ describe("rtisi（跨边界的那三件事）", () => {
 });
 
 describe("metric", () => {
-  test("align 把已知时延对齐到相关 1", () => {
+  test("align brings a known delay to correlation 1", () => {
     const sr = 1000;
     const a = new Float32Array(sr);
     for (let i = 0; i < sr; i++) a[i] = Math.sin((2 * Math.PI * 7 * i) / sr);
@@ -153,7 +153,7 @@ describe("metric", () => {
     expect(align(a, b, 64).corr).toBeGreaterThan(0.999);
   });
 
-  test("magnitudes + spectral 对相同输入给出零误差", () => {
+  test("magnitudes + spectral give zero error on identical input", () => {
     const x = new Float32Array(2048);
     for (let i = 0; i < x.length; i++) x[i] = Math.sin((2 * Math.PI * 50 * i) / 8000);
     const m = magnitudes(x, 256, 64);

@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import { downloadName, type ReadMode } from "../lib/container";
+import { t, type Key } from "../lib/i18n";
 import { srLabel, type Encode } from "../lib/params";
 import { hasStrongPhase, type Spectrum } from "../lib/spectrum";
 import { wavFile } from "../lib/wav";
@@ -15,11 +16,17 @@ import type { Stage } from "./useStudio";
 
 const SHEET_ROWS = 360;
 
-const MODE_NOTE: Record<ReadMode, string | null> = {
-  exact: "相位已载入。无损图片的音质更好",
+const MODE_NOTE: Record<ReadMode, Key | null> = {
+  exact: "readExact",
   compact: null,
-  degraded: "此图片有损，音质会失真",
-  foreign: "不建议加载非专用图片",
+  degraded: "readDegraded",
+  foreign: "readForeign",
+};
+
+const CASE_LABEL: Record<LossRow["kind"], Key> = {
+  original: "case",
+  lossy: "caseLossy",
+  half: "caseHalf",
 };
 
 const kb = (n: number): string =>
@@ -31,16 +38,15 @@ const kb = (n: number): string =>
 
 function lossLine(rows: LossRow[], compact: boolean): string {
   const own = rows[0]!;
-  if (!compact && own.level === 0 && own.corr > 0.999) return "自检：存出再读回，完全一致";
-  // 紧凑模式不存相位，波形域指标（相关度/信噪比）度量的是它天生给不了的东西，
-  // 与听感脱节；谱距离才贴近听感，故紧凑模式只展示谱距离。
+  if (!compact && own.level === 0 && own.corr > 0.999) return t("selfCheck");
+  // Compact mode stores no phase, so waveform metrics (correlation, SNR) measure
+  // what it cannot have and do not track listening; spectral distance does, so
+  // compact mode shows only that.
   const cell = (r: LossRow): string =>
     compact
-      ? `${r.label} ${r.lsd.toFixed(1)}`
-      : `${r.label} ${Math.round(r.corr * 100)}%, ${r.snr.toFixed(1)}dB, ${r.lsd.toFixed(1)}`;
-  return compact
-    ? `谱距离：${rows.map(cell).join("；")}`
-    : `相关度，信噪比，谱距离：${rows.map(cell).join("；")}`;
+      ? `${t(CASE_LABEL[r.kind])} ${r.lsd.toFixed(1)}`
+      : `${t(CASE_LABEL[r.kind])} ${Math.round(r.corr * 100)}%, ${r.snr.toFixed(1)}dB, ${r.lsd.toFixed(1)}`;
+  return (compact ? t("lossLsd") : t("lossAll")) + rows.map(cell).join(t("sep"));
 }
 
 function save(blob: Blob, filename: string): void {
@@ -120,6 +126,7 @@ export function Workbench({
   const compact = enc.mode === "compact";
   const note = MODE_NOTE[mode];
   const canRefine = !hasStrongPhase(spec);
+  const sep = t("sep");
 
   return (
     <>
@@ -139,7 +146,7 @@ export function Workbench({
             className="icon-btn"
             onClick={toggle}
             disabled={audio === null && busy}
-            aria-label={playing ? "暂停" : "播放"}
+            aria-label={playing ? t("pause") : t("play")}
           >
             <svg className="ico" viewBox="0 0 24 24" aria-hidden="true">
               {playing ? (
@@ -153,32 +160,40 @@ export function Workbench({
             <span ref={timeRef}>0:00</span>
             <span className="dim"> / {clock(duration)}</span>
           </p>
-          {busy && <span className="dim tick">{stage.label}中</span>}
+          {busy && (
+            <span className="dim tick">
+              {stage.label}
+              {t("busy")}
+            </span>
+          )}
         </div>
 
         <p className="facts">
-          采样率 {srLabel(meta.sr)}；PNG {kb(png.size)}；
-          {compact ? "紧凑：不保存相位信息；" : "可逆模式：保存相位信息；"}
-          {loss ? `${lossLine(loss, compact)}；` : ""}
-          {note ? `${note}；` : ""}
-          {hint ? `${hint}；` : ""}
+          {t("sampleRate")} {srLabel(meta.sr)}
+          {sep}PNG {kb(png.size)}
+          {sep}
+          {compact ? t("storeCompact") : t("storeExact")}
+          {sep}
+          {loss ? `${lossLine(loss, compact)}${sep}` : ""}
+          {note ? `${t(note)}${sep}` : ""}
+          {hint ? `${hint}${sep}` : ""}
         </p>
 
         <StatusNote stage={stage} error={error} />
 
         <div className="acts">
           <button type="button" className="act" onClick={savePng}>
-            存频谱图
+            {t("saveImage")}
           </button>
           <button type="button" className="act" onClick={() => void saveWav()} disabled={busy}>
-            存音频
+            {t("saveAudio")}
           </button>
           <button type="button" className="act" onClick={check} disabled={checking || busy}>
-            {checking ? `质检 ${Math.round(progress * 100)}%` : "质检"}
+            {checking ? t("verifying", { pct: String(Math.round(progress * 100)) }) : t("verify")}
           </button>
           {canRefine && (
             <button type="button" className="act" onClick={onRefine} disabled={busy}>
-              重建相位
+              {t("rebuildPhase")}
             </button>
           )}
         </div>

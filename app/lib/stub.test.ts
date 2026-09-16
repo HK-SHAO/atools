@@ -4,7 +4,7 @@ import type { Pixels } from "./arrays";
 import { attachKernel, loadDsp, type Dsp } from "./dsp";
 import { decodeStub, drawStub, stubFits, stubLuma, stubRows } from "./stub";
 
-describe("票根（跨边界的那一段）", () => {
+describe("stub (the segment that crosses the boundary)", () => {
   let dsp: Dsp;
   beforeAll(async () => {
     dsp = await loadDsp(compileWasm());
@@ -17,7 +17,7 @@ describe("票根（跨边界的那一段）", () => {
     return { px, rows, top: (h - rows) * w * 4 };
   };
 
-  test("行数与格式一致：画在底部那几行，上面一格都不动", () => {
+  test("rows match the format: it paints the bottom rows and leaves every cell above untouched", () => {
     const w = 400;
     const h = 40;
     const rows = stubRows();
@@ -45,7 +45,7 @@ describe("票根（跨边界的那一段）", () => {
     return prof;
   };
 
-  test("打包结果拆得回来（三档宽度前缀各走一遍，含双窗口）", () => {
+  test("the packed result unpacks (each of the three width prefixes runs, the two-window case included)", () => {
     for (const [w, sr, win] of [
       [255, 96000, 2048],
       [4095, 44100, 512],
@@ -63,23 +63,23 @@ describe("票根（跨边界的那一段）", () => {
     }
   });
 
-  test("stubFits 说装得下，画下去就真的画得出来、也认得回来", () => {
+  test("when stubFits says it fits, painting really paints and decoding really reads it back", () => {
     const rows = stubRows();
     for (const w of [46, 60, 100, 255, 400, 4095, 65535]) {
       if (!stubFits(w)) {
-        expect(stubLuma(w, 44100, 512, false), `w=${w} 不该能画`).toBeNull();
+        expect(stubLuma(w, 44100, 512, false), `w=${w} must not be paintable`).toBeNull();
         continue;
       }
       const { px, top } = sheet(w, rows + 16, rows);
       drawStub(px, w, rows + 16, 44100, 512, false);
       let lit = 0;
       for (let i = top; i < px.length; i += 4) if (px[i] !== 20) lit++;
-      expect(lit, `w=${w} 一个亮像素都没有`).toBeGreaterThan(0);
+      expect(lit, `w=${w} has not one lit pixel`).toBeGreaterThan(0);
       expect(decodeStub(profileOf(px, w, top)), `w=${w}`).not.toBeNull();
     }
   });
 
-  test("认不出来的剖面给 null，而不是一个坏结果", () => {
+  test("a profile it cannot recognise gives null rather than a bad result", () => {
     expect(decodeStub(Array.from({ length: 400 }, () => 111.2))).toBeNull();
     expect(decodeStub([])).toBeNull();
   });

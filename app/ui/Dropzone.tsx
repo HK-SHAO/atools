@@ -1,3 +1,5 @@
+import { t } from "../lib/i18n";
+
 interface Props {
   onFile: (file: File) => void;
   dragging: boolean;
@@ -7,11 +9,15 @@ export function Dropzone({ onFile, dragging }: Props) {
   return (
     <section className="card">
       <div className={dragging ? "drop is-hot" : "drop"}>
-        <span className="drop-lead">声音转换成图像，还能转换回去</span>
-        <span className="drop-sub">mp3, wav, flac, m4a, ogg, amr ↔ png, jpg, webp<br/>音频与图片在本地处理，不上传文件</span>
+        <span className="drop-lead">{t("dropLead")}</span>
+        <span className="drop-sub">
+          {t("dropFormats")}
+          <br />
+          {t("dropPrivacy")}
+        </span>
         <div className="drop-acts">
           <label className="drop-act">
-            选文件
+            {t("pickFile")}
             <input
               id="source-file"
               name="source-file"

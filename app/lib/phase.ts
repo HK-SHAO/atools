@@ -33,10 +33,10 @@ export function phaseFromMagnitude(
   const dsp = mustKernel();
   const k = dsp.kernel;
   const h = k.dsp_pghi_open(frames, bins, win, hop, TUNE.gamma, TUNE.tol[0], TUNE.tol[1]);
-  if (h === 0) throw new Error(`PGHI 作业开不出来：frames=${frames} bins=${bins} win=${win}`);
+  if (h === 0) throw new Error(`Could not open a PGHI job: frames=${frames} bins=${bins} win=${win}`);
   try {
     jobSlice(dsp, h, k.dsp_pghi_off(h, 0), n).set(mag.subarray(0, n));
-    if (k.dsp_pghi_run(h) !== 1) throw new Error(`PGHI 拒绝了作业 ${h}`);
+    if (k.dsp_pghi_run(h) !== 1) throw new Error(`PGHI rejected job ${h}`);
     phase.set(jobSlice(dsp, h, k.dsp_pghi_off(h, 1), n));
   } finally {
     k.dsp_pghi_close(h);

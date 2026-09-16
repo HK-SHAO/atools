@@ -1,5 +1,6 @@
 import { audit } from "../lib/audit";
 import { startKernel } from "../lib/dsp";
+import { t } from "../lib/i18n";
 import { imageToSpectrum, spectrumToPng } from "../lib/image";
 import { compare } from "../lib/metric";
 import { resample } from "../lib/resample";
@@ -79,7 +80,7 @@ async function run(request: JobRequest): Promise<void> {
       worker.postMessage({
         id,
         kind: "error",
-        message: error instanceof Error ? error.message : "数值流水线出错",
+        message: error instanceof Error ? error.message : t("errPipeline"),
       });
   } finally {
     cancelled.delete(id);

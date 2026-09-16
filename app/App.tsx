@@ -1,4 +1,5 @@
 import { CREDIT_AUTHOR, CREDIT_NAME } from "./credit";
+import { t } from "./lib/i18n";
 import { About } from "./ui/About";
 import { Dropzone } from "./ui/Dropzone";
 import { StatusNote } from "./ui/StatusNote";
@@ -16,8 +17,8 @@ export function App() {
     <div className="app" {...handlers}>
       <div className="shell">
         <header className="head">
-          <h1>留声 SPECTRUM</h1>
-          <p>声音 ↔ 图像</p>
+          <h1>{t("brand")}</h1>
+          <p>{t("tagline")}</p>
           <About />
         </header>
 
@@ -49,11 +50,11 @@ export function App() {
         <footer className="foot">
           {source ? (
             <button type="button" className="act" onClick={studio.clear}>
-              清空
+              {t("clear")}
             </button>
           ) : (
             <button type="button" className="act" onClick={studio.demo}>
-              演示
+              {t("demo")}
             </button>
           )}
           <span className="credit">

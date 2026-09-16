@@ -16,7 +16,7 @@ const ftyp = (major: string) => {
 };
 
 describe("sniff", () => {
-  test("普通图片格式照常识别", () => {
+  test("ordinary image formats are recognised as usual", () => {
     expect(sniff(new Uint8Array([0x89, 0x50, 0x4e, 0x47]))).toBe("png");
     expect(sniff(new Uint8Array([0xff, 0xd8, 0xff, 0x00]))).toBe("jpeg");
     expect(sniff(new Uint8Array([0x42, 0x4d, 0x00]))).toBe("bmp");
@@ -27,25 +27,25 @@ describe("sniff", () => {
     expect(sniff(webp)).toBe("webp");
   });
 
-  test("真正的 AVIF 仍是 avif", () => {
+  test("a real AVIF stays avif", () => {
     expect(sniff(ftyp("avif"))).toBe("avif");
     expect(sniff(ftyp("avis"))).toBe("avif");
     expect(sniff(ftyp("mif1"))).toBe("avif");
   });
 
-  test("m4a / mp4 / mov 不被误判成图像", () => {
+  test("m4a / mp4 / mov are not mistaken for images", () => {
     expect(sniff(ftyp("M4A "))).toBe("?");
     expect(sniff(ftyp("isom"))).toBe("?");
     expect(sniff(ftyp("mp42"))).toBe("?");
     expect(sniff(ftyp("qt  "))).toBe("?");
   });
 
-  test("完全认不出的二进制归为未知", () => {
+  test("wholly unrecognised bytes come back unknown", () => {
     expect(sniff(new Uint8Array([0, 1, 2, 3, 4, 5]))).toBe("?");
   });
 });
 
-describe("recognizeExact（可逆图像素签名）", () => {
+describe("recognizeExact (reversible image pixel signature)", () => {
   function exactPixels(w: number, h: number): Pixels {
     const px = new Uint8ClampedArray(w * h * 4);
     const rows = Math.floor(h / 2);
@@ -70,19 +70,19 @@ describe("recognizeExact（可逆图像素签名）", () => {
     return px;
   }
 
-  test("完整可逆图（偶高度）命中", () => {
+  test("a complete reversible image (even height) hits", () => {
     const w = 64;
     const h = 128;
     expect(recognizeExact(exactPixels(w, h) as Pixels, w, h)).toBe(true);
   });
 
-  test("缩放后的奇数高度也命中（回归：旧版 h%2 直接否掉）", () => {
+  test("an odd height after scaling hits too (regression: the old h%2 check rejected it outright)", () => {
     const w = 64;
     const h = 97;
     expect(recognizeExact(exactPixels(w, h) as Pixels, w, h)).toBe(true);
   });
 
-  test("相位被缩放平均（矢量塌缩）后仍能认出是可逆图", () => {
+  test("a phase averaged away by scaling (vector collapse) is still recognised as reversible", () => {
     const w = 64;
     const h = 96;
     const src = exactPixels(w, h * 2) as Pixels;
@@ -96,7 +96,7 @@ describe("recognizeExact（可逆图像素签名）", () => {
     expect(recognizeExact(px as Pixels, w, h)).toBe(true);
   });
 
-  test("普通照片（B 通道不趋零）不命中", () => {
+  test("an ordinary photo (B channel does not tend to zero) does not hit", () => {
     const w = 64;
     const h = 128;
     const px = new Uint8ClampedArray(w * h * 4);
@@ -111,7 +111,7 @@ describe("recognizeExact（可逆图像素签名）", () => {
     expect(recognizeExact(px as Pixels, w, h)).toBe(false);
   });
 
-  test("纯灰图不命中（半径塌缩成点）", () => {
+  test("a pure grey image does not hit (the radius collapses to a point)", () => {
     const w = 64;
     const h = 128;
     const px = new Uint8ClampedArray(w * h * 4).fill(128);
@@ -119,17 +119,17 @@ describe("recognizeExact（可逆图像素签名）", () => {
     expect(recognizeExact(px as Pixels, w, h)).toBe(false);
   });
 
-  test("太小的不认", () => {
+  test("anything too small is rejected", () => {
     expect(recognizeExact(exactPixels(2, 8) as Pixels, 2, 8)).toBe(false);
   });
 });
 
-describe("紧凑档出图", () => {
+describe("compact image output", () => {
   beforeAll(() => {
     void startKernel({ fft: false }, compileWasm());
   });
 
-  test("图出得来、tEXt 里的 meta 一字不差（票根链没把行数搞错）", async () => {
+  test("the image comes out and the tEXt meta is not a character off (the stub chain keeps the row count right)", async () => {
     const meta: Meta = {
       sr: 8000,
       win: 256,

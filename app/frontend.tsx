@@ -2,6 +2,9 @@ import "./styles/index.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { applyHead } from "./lib/i18n";
+
+applyHead();
 
 const elem = document.getElementById("root")!;
 const app = (

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
+import { t } from "../lib/i18n";
 import type { Raster } from "./raster";
 
 interface Props {
@@ -56,7 +57,7 @@ export function Spectrogram({ sheet, headRef, onSeek, onScrub, onCommit, onNudge
       ref={boxRef}
       className="spec"
       tabIndex={0}
-      aria-label="播放进度：点按即播，拖动可擦洗，左右方向键微调"
+      aria-label={t("timeline")}
       onPointerDown={e => {
         try {
           e.currentTarget.setPointerCapture(e.pointerId);

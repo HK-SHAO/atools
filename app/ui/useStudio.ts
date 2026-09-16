@@ -3,6 +3,7 @@ import DEMO_URL from "../assets/demo.ogg";
 import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
 import { sniff, type Container, type ReadMode } from "../lib/container";
+import { t } from "../lib/i18n";
 import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
 import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
@@ -19,7 +20,7 @@ interface Job {
   png: Blob;
   ref: Samples;
   audio: Samples | null;
-  audioFine: boolean; // audio 是否为精修档产物（质检只在精修档时复用缓存）
+  audioFine: boolean; // whether audio came from fine rendering (the audit reuses it only then)
 }
 
 export type Stage = { label: string; value: number } | null;
@@ -63,7 +64,7 @@ export function useStudio() {
   const pendingRef = useRef<{ spec: Spectrum; p: Promise<Samples | null> } | null>(null);
   const readyRef = useRef<Promise<void>>(Promise.resolve());
   const wantedRef = useRef(false);
-  // 图片加载自带作业（读回的谱），下一轮编码 effect 直接放行
+  // Loading an image brings its own job (the spectrum read back), so the next encode pass is let through
   const skipEncodeRef = useRef(false);
 
   const putJob = useCallback((next: Job | null) => {
@@ -101,7 +102,7 @@ export function useStudio() {
     const alive = () => !cancelled;
 
     void (async () => {
-      setStage({ label: "转换", value: 0.05 });
+      setStage({ label: t("stageConvert"), value: 0.05 });
       try {
         const clipped = slice(source.pcm, source.sr, enc.start, enc.end);
         const fit = fitEncode(enc, source.sr, clipped.length);
@@ -115,11 +116,11 @@ export function useStudio() {
         await nextFrame();
 
         const spec = await io.encode(tuned, sr, enc, v => {
-          if (!cancelled) setStage({ label: "生成图片", value: v });
+          if (!cancelled) setStage({ label: t("stageEncode"), value: v });
         });
         if (cancelled) return;
 
-        setStage({ label: "打包", value: 1 });
+        setStage({ label: t("stagePack"), value: 1 });
         await nextFrame();
         const png = await io.png(spec);
         if (cancelled) return;
@@ -129,7 +130,7 @@ export function useStudio() {
       } catch (e) {
         if (cancelled || e instanceof Aborted) return;
         console.error(e);
-        setError(e instanceof Error ? e.message : "转换失败");
+        setError(e instanceof Error ? e.message : t("errConvert"));
       } finally {
         release();
         if (alive()) setStage(null);
@@ -146,7 +147,7 @@ export function useStudio() {
   const render = useCallback(
     async (spec: Spectrum, fine: boolean, show: boolean): Promise<Samples | null> => {
       const alive = generation();
-      const label = fine ? "精修" : "还原";
+      const label = fine ? t("stageRefine") : t("stageRestore");
       const note = (next: Stage): void => {
         if (show || wantedRef.current) setStage(next);
       };
@@ -163,7 +164,7 @@ export function useStudio() {
       } catch (e) {
         if (e instanceof Aborted) return null;
         console.error(e);
-        if (alive()) setError(e instanceof Error ? e.message : "还原失败");
+        if (alive()) setError(e instanceof Error ? e.message : t("errRestore"));
         return null;
       } finally {
         if (alive()) note(null);
@@ -197,7 +198,7 @@ export function useStudio() {
     if (j.audio) return j.audio;
     if (pendingRef.current?.spec !== j.spec) return bake(j.spec, true);
     wantedRef.current = true;
-    setStage({ label: "还原", value: 0 });
+    setStage({ label: t("stageRestore"), value: 0 });
     try {
       return await bake(j.spec, true);
     } finally {
@@ -210,10 +211,10 @@ export function useStudio() {
     if (job && !job.audio) void bake(job.spec, false);
   }, [job, bake]);
 
-  // demo 与文件加载共用：解码 → 紧凑模式 → 区间 → 源。
+  // Shared by the demo and file loading: decode → compact mode → range → source.
   const loadAudio = useCallback(
     async (bytes: ArrayBuffer, name: string, alive: () => boolean): Promise<void> => {
-      setStage({ label: "解码", value: 0 });
+      setStage({ label: t("stageDecode"), value: 0 });
       await nextFrame();
       const { pcm: mono, sr } = await decodeAudioFile(bytes);
       if (!alive()) return;
@@ -229,7 +230,7 @@ export function useStudio() {
     async (file: File) => {
       const alive = generation();
       setError(null);
-      setStage({ label: "读取", value: 0 });
+      setStage({ label: t("stageRead"), value: 0 });
       try {
         const bytes = await file.arrayBuffer();
         const container: Container = sniff(new Uint8Array(bytes));
@@ -237,7 +238,7 @@ export function useStudio() {
           container !== "?" || file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
 
         if (looksImage) {
-          setStage({ label: "读图", value: 0 });
+          setStage({ label: t("stageReadImage"), value: 0 });
           await nextFrame();
           const { spec, mode: readMode, guessed } = await io.readImage(
             new Blob([bytes]),
@@ -245,7 +246,7 @@ export function useStudio() {
           );
           if (!alive()) return;
 
-          const label = "还原声音";
+          const label = t("stageSynthesise");
           setStage({ label, value: 0 });
           await nextFrame();
           const pcm = await io.synthesise(spec, false, v => {
@@ -256,8 +257,9 @@ export function useStudio() {
           setMode(readMode);
           setEnc(() => adoptMeta(spec.meta));
           setSource({ pcm, sr: spec.meta.sr, name: file.name });
-          // 直接以读回的谱为作业：相位参考（含弱参考）得以保留，「重建相位」才有东西可借；
-          // 重编码会现场重算相位，把参考扔掉。用户一改参数即回到常规重编码路径。
+          // Take the spectrum read back as the job: the phase reference (weak ones included) survives,
+          // so "Rebuild phase" has something to work from; re-encoding recomputes phase on the spot and
+          // throws the reference away. The user touching a parameter returns to the normal path.
           skipEncodeRef.current = true;
           putJob({
             spec,
@@ -267,13 +269,11 @@ export function useStudio() {
             audioFine: false,
           });
           if (guessed)
-            setHint(
-              "图里记录的参数被剥掉了（多半是压缩或转发所致），已按默认设置解读；若时长或音高不对，可在下方参数里调整",
-            );
+            setHint(t("hintGuessed"));
           else if (spec.meta.exact && spec.phaseWeak)
-            setHint("图中相位参考置信度较低，点「重建相位」可借它还原出更高音质");
+            setHint(t("hintWeakPhase"));
           else if (spec.meta.exact && !spec.phaseCos)
-            setHint("图里的相位没能读回来，点「重建相位」可重新生成");
+            setHint(t("hintNoPhase"));
           return;
         }
 
@@ -281,7 +281,7 @@ export function useStudio() {
       } catch (e) {
         if (!alive() || e instanceof Aborted) return;
         console.error(e);
-        setError(e instanceof Error ? e.message : "这个文件处理不了");
+        setError(e instanceof Error ? e.message : t("errFile"));
       } finally {
         if (alive()) setStage(null);
       }
@@ -293,20 +293,20 @@ export function useStudio() {
     const j = jobRef.current;
     if (!j) return;
     setError(null);
-    if (await render(j.spec, true, true)) setHint("相位已重建");
+    if (await render(j.spec, true, true)) setHint(t("hintRefined"));
   }, [render]);
 
   const demo = useCallback(async () => {
     const alive = generation();
     setError(null);
-    setStage({ label: "读取", value: 0 });
+    setStage({ label: t("stageRead"), value: 0 });
     try {
       const bytes = await (await fetch(DEMO_URL)).arrayBuffer();
       await loadAudio(bytes, "demo", alive);
     } catch (e) {
       if (!alive() || e instanceof Aborted) return;
       console.error(e);
-      setError(e instanceof Error ? e.message : "示例加载失败");
+      setError(e instanceof Error ? e.message : t("errDemo"));
     } finally {
       if (alive()) setStage(null);
     }
@@ -330,7 +330,7 @@ export function useStudio() {
     mode,
     stage,
     error,
-    hint: [pick.note, hint].filter(Boolean).join("；") || null,
+    hint: [pick.note, hint].filter(Boolean).join(t("sep")) || null,
     open,
     listen,
     refine,

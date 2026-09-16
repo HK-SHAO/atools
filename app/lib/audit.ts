@@ -4,8 +4,10 @@ import { imageToSpectrum } from "./image";
 import { compare, levelGap } from "./metric";
 import { Aborted, hasStrongPhase, synthesise, type Meta, type Spectrum } from "./spectrum";
 
+export type LossKind = "original" | "lossy" | "half";
+
 export interface LossRow {
-  label: string;
+  kind: LossKind;
   snr: number;
   corr: number;
   lsd: number;
@@ -13,8 +15,9 @@ export interface LossRow {
   bytes: number;
 }
 
-// 读回的谱与编码谱逐字段一致时，「原图」一档才能直接复用现成的精修音频
-// （此时 synthesise(back) 与 cached 必然是同一结果）；任何字段对不上都宁可重算。
+// Only the "original" case may reuse ready-made fine audio, and only when the spectrum read back
+// matches the encoded one field for field (then synthesise(back) and the cached audio are the same
+// result); any field that disagrees is worth recomputing.
 export function sameSpectrum(a: Spectrum, b: Spectrum): boolean {
   const meta = (m: Meta): string =>
     [m.sr, m.win, m.hop, m.frames, m.bins, m.samples, m.bits, m.ref, m.exact].join("/");
@@ -51,8 +54,9 @@ async function recode(blob: Blob, mode: "jpeg" | "half"): Promise<Blob> {
   return out;
 }
 
-// 评估一档：给定读回的谱 back，与基准 ref 比对。导出以便测试
-// （imageToSpectrum 依赖浏览器 canvas API，bun 里测不到端到端，由 ui 门禁覆盖）。
+// Score one case: compare the spectrum read back from an image against the reference. Exported for
+// tests (imageToSpectrum needs the browser canvas API, so bun cannot cover it end to end; the ui
+// gate does).
 export async function evaluateRow(
   ref: Samples,
   spec: Spectrum,
@@ -61,9 +65,10 @@ export async function evaluateRow(
   strongPhase: boolean,
   alive?: () => boolean,
   report?: (p: number) => void,
-): Promise<Omit<LossRow, "label" | "bytes">> {
-  // 与播放一致的标准：可逆强相位走直读相位的精确路径（精修此时不可用），
-  // 其余（紧凑 / 相位弱）走精修档合成。
+): Promise<Omit<LossRow, "kind" | "bytes">> {
+  // Same standard as playback: exact images with strong phase take the precise
+  // read-the-phase path (fine rendering is unavailable there); everything else
+  // (compact, weak phase) goes through fine synthesis.
   const hit = reuse !== null && sameSpectrum(spec, back);
   const y = hit
     ? reuse
@@ -79,7 +84,7 @@ export async function evaluateRow(
 }
 
 async function one(
-  label: string,
+  kind: LossKind,
   ref: Samples,
   spec: Spectrum,
   blob: Blob,
@@ -92,7 +97,7 @@ async function one(
   const back = (await imageToSpectrum(blob, fileName)).spec;
   if (alive && !alive()) throw new Aborted();
   const row = await evaluateRow(ref, spec, back, reuse, strongPhase, alive, report);
-  return { ...row, label, bytes: blob.size };
+  return { ...row, kind, bytes: blob.size };
 }
 
 export async function audit(
@@ -108,23 +113,23 @@ export async function audit(
   const strongPhase = hasStrongPhase(spec);
   const canRecode =
     typeof createImageBitmap === "function" && typeof OffscreenCanvas !== "undefined";
-  const cases: [string, Blob, string][] = [["原图", png, own]];
+  const cases: [LossKind, Blob, string][] = [["original", png, own]];
   if (canRecode)
-    for (const [label, mode] of [
-      ["有损", "jpeg"],
-      ["半尺寸", "half"],
+    for (const [kind, mode] of [
+      ["lossy", "jpeg"],
+      ["half", "half"],
     ] as const) {
       const blob = await recode(png, mode);
       if (alive && !alive()) throw new Aborted();
-      cases.push([label, blob, mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own]);
+      cases.push([kind, blob, mode === "jpeg" ? `${own.replace(/\.png$/i, "")}.jpg` : own]);
     }
 
   const out: LossRow[] = [];
-  for (const [i, [label, blob, fileName]] of cases.entries()) {
+  for (const [i, [kind, blob, fileName]] of cases.entries()) {
     onProgress?.(i / cases.length);
     out.push(
       await one(
-        label,
+        kind,
         ref,
         spec,
         blob,

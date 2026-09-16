@@ -1,4 +1,5 @@
 import type { Samples } from "./arrays";
+import { t } from "./i18n.ts";
 import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params.ts";
 import { TUNE, phaseFromMagnitude } from "./phase.ts";
 import { resampledLength } from "./resample.ts";
@@ -65,7 +66,8 @@ export interface Spectrum {
   meta: Meta;
 }
 
-// 可逆且相位数据完整可信：合成可直读相位，无需重建（「重建相位」按钮的显示条件与此一致）。
+// Exact, with phase data complete and trustworthy: synthesis reads the phase directly and nothing
+// needs rebuilding (the "Rebuild phase" button is shown under the same condition).
 export const hasStrongPhase = (s: Spectrum): boolean =>
   !!(s.meta.exact && s.phaseCos && s.phaseSin && !s.phaseWeak);
 
@@ -125,7 +127,7 @@ export function shapeFor(enc: Encode, sr: number, samples: number): Shape {
   const frames = Math.floor(Math.max(1, samples) / hop) + 1;
 
   if (samples > MAX_SAMPLES || frames > maxFramesFor(bins, bands))
-    throw new Error("音频太长，图放不下：调低采样率，或剪短一点");
+    throw new Error(t("errTooLong"));
 
   return { win, hop, frames, bins, samples };
 }
@@ -157,7 +159,12 @@ export function fitEncode(
     if (fits(e, sr, at(sr)))
       return {
         enc: { ...e, sr, fmax: e.fmax >= sr / 2 ? 0 : e.fmax },
-        note: `音频 ${secs} 秒超出 ${srLabel(want)} 的上限 ${ceilingOf(e, want)} 秒，已降到 ${srLabel(sr)}`,
+        note: t("hintFit", {
+          secs: String(secs),
+          want: srLabel(want),
+          ceiling: String(ceilingOf(e, want)),
+          sr: srLabel(sr),
+        }),
       };
   }
 
@@ -165,7 +172,7 @@ export function fitEncode(
   const keep = Math.max(1, ceilingOf(last, 8000));
   return {
     enc: { ...last, end: e.start + keep },
-    note: `音频太长，只保留前 ${keep} 秒`,
+    note: t("hintTrim", { keep: String(keep) }),
   };
 }
 

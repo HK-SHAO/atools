@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 export type Mode = "compact" | "exact";
 
 export interface Encode {
@@ -10,9 +12,9 @@ export interface Encode {
   end: number;
 }
 
-// 窗长档位：内核 FFT 计划表支持 256~4096（moon/plan.mbt），菜单给满五档。
-// 窗长越长频率分辨率越细（每格 sr/win Hz），时间分辨率越粗（瞬态更糊）；
-// 像素总量与窗长基本无关（帧数 ∝ 1/win，bin 数 ∝ win）。
+// Window sizes: the kernel FFT plan table covers 256~4096 (moon/plan.mbt), so the menu offers all five.
+// A longer window resolves frequency more finely (each cell is sr/win Hz) and time more coarsely
+// (transients blur); total pixels barely depend on the window, since frames ∝ 1/win and bins ∝ win.
 export const FINENESS = [
   { label: "256", win: 256 },
   { label: "512", win: 512 },
@@ -30,7 +32,8 @@ export const VOICE: Encode = {
   mode: "compact",
   sr: 8000,
   bits: 8,
-  // 默认 1024：8k 采样率下每格 7.8 Hz 已近收益顶点；2048 时间分辨率代价大，留给用户选。
+  // 1024 by default: at 8 kHz each cell is 7.8 Hz, already near the point of diminishing
+  // returns; 2048 costs too much time resolution, so it is left to the user.
   fineness: 2,
   fmax: 0,
   start: 0,
@@ -49,9 +52,9 @@ export const dbSpanOf = (bits: number): number => 12 * Math.max(1, bits);
 export const stepsOf = (bits: number): number => (1 << Math.max(1, bits)) - 1;
 
 export const srLabel = (sr: number): string =>
-  sr === 0 ? "原" : sr % 1000 === 0 ? `${sr / 1000}k` : `${(sr / 1000).toFixed(1)}k`;
+  sr === 0 ? t("rateSource") : sr % 1000 === 0 ? `${sr / 1000}k` : `${(sr / 1000).toFixed(1)}k`;
 
 export const hzLabel = (hz: number): string =>
-  hz === 0 ? "全" : hz % 1000 === 0 ? `${hz / 1000}k` : `${hz}`;
+  hz === 0 ? t("bandFull") : hz % 1000 === 0 ? `${hz / 1000}k` : `${hz}`;
 
 export const reopen = (e: Encode): Encode => ({ ...e, start: 0, end: 0 });

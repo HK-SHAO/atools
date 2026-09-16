@@ -1,8 +1,8 @@
 {
-  "name": "留声 SPECTRUM：声音与图像双向转换",
-  "short_name": "留声",
-  "description": "在浏览器本地把音频转换为频谱图，并从频谱图或图片合成声音。",
-  "lang": "zh-CN",
+  "name": "Spectrum: sound ↔ image",
+  "short_name": "Spectrum",
+  "description": "Turn audio into a spectrogram, and a spectrogram or any image back into sound, entirely in the browser.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -10,18 +10,18 @@ import {
   type Dsp,
 } from "./dsp";
 
-describe("内核握手与访存", () => {
+describe("kernel handshake and memory access", () => {
   let dsp: Dsp;
   beforeAll(async () => {
     dsp = await loadDsp(compileWasm());
     attachKernel(dsp);
   });
 
-  test("ABI 版本与加载器一致", () => {
+  test("the ABI version matches the loader", () => {
     expect(dsp.kernel.dsp_abi()).toBe(ABI);
   });
 
-  test("加载期已经把地址约定自证过一遭", async () => {
+  test("the load stage has already proved the address convention once", async () => {
     const { kernel } = dsp;
     const job = openJob(dsp, 8, 8);
     try {
@@ -45,7 +45,7 @@ describe("内核握手与访存", () => {
     }
   });
 
-  test("memory.grow 顶掉旧视图，而从当前 buffer 现切就还是那一格", () => {
+  test("memory.grow drops the old view, but slicing from the current buffer still lands on the same cell", () => {
     const { kernel } = dsp;
     const job = openJob(dsp, 64, 32);
     try {
@@ -65,26 +65,26 @@ describe("内核握手与访存", () => {
     }
   });
 
-  test("没挂上内核就当场抛，不悄悄换路", () => {
+  test("a missing kernel throws on the spot instead of quietly switching paths", () => {
     const held = mustKernel();
     attachKernel(null);
     try {
-      expect(() => mustKernel()).toThrow(/内核还没挂上/);
+      expect(() => mustKernel()).toThrow(/not attached/);
     } finally {
       attachKernel(held);
     }
     expect(mustKernel()).toBe(held);
   });
 
-  test("零 import：内核不向宿主索取任何东西", () => {
+  test("zero imports: the kernel asks its host for nothing", () => {
     const module = new WebAssembly.Module(compileWasm());
     expect(WebAssembly.Module.imports(module)).toEqual([]);
     expect(WebAssembly.Module.exports(module).some(e => e.name === "memory")).toBe(true);
   });
 });
 
-describe("内核启动路径", () => {
-  test("没启动过就原样放行 —— 手工挂载的路照旧（评测台与其余测试都走它）", async () => {
+describe("kernel startup paths", () => {
+  test("without a start call the manual attach path passes straight through (the audit bench and the other tests all take it)", async () => {
     const held = mustKernel();
     const host = createKernelHost();
     host.attach(held);
@@ -92,7 +92,7 @@ describe("内核启动路径", () => {
     expect(host.must()).toBe(held);
   });
 
-  test("重复调用共享同一次加载，且 kernelReady 真的等到挂上为止", async () => {
+  test("repeated calls share one load, and kernelReady really waits until it is attached", async () => {
     const host = createKernelHost();
     const first = host.start({ fft: false }, compileWasm());
     expect(host.start({ fft: false }, compileWasm())).toBe(first);
@@ -100,13 +100,13 @@ describe("内核启动路径", () => {
     expect(host.must()).toBe(await first);
   });
 
-  test("不建 FFT 表组也能用：主线程要的票根问得动", async () => {
+  test("usable without the FFT tables: the stub rows the main thread wants answer", async () => {
     const host = createKernelHost();
     await host.start({ fft: false }, compileWasm());
     expect(host.must().kernel.dsp_stub_rows()).toBeGreaterThan(0);
   });
 
-  test("加载失败不污染下一次启动", async () => {
+  test("a failed load does not poison the next start", async () => {
     const host = createKernelHost();
     await expect(host.start({ fft: false }, new Uint8Array())).rejects.toThrow();
     const recovered = await host.start({ fft: false }, compileWasm());

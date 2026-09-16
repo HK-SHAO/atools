@@ -46,8 +46,8 @@ function stft(x: Float64Array, win: number, hop: number) {
   }
 }
 
-describe("相位初值的绑定", () => {
-  test("幅度进、相位出，出来的是 frames×bins 个有限角度", () => {
+describe("binding the initial phase", () => {
+  test("magnitude in, phase out: frames×bins finite angles come back", () => {
     const frames = 24;
     const bins = 129;
     const win = 256;
@@ -68,7 +68,7 @@ describe("相位初值的绑定", () => {
     expect(mag.some((v, i) => v !== before[i]!)).toBe(false);
   });
 
-  test("同一输入两次调用逐位相同（进出两侧都拷过，视图不会串）", () => {
+  test("two calls on the same input are bit for bit identical (both sides are copied, so views cannot alias)", () => {
     const sr = 16000;
     const { mag, frames, bins } = stft(chirp(sr, sr, 300, 4000), 256, 64);
     const a = phaseFromMagnitude(mag, frames, bins, 256, 64);
@@ -76,7 +76,7 @@ describe("相位初值的绑定", () => {
     expect(a.findIndex((v, i) => v !== b[i]!)).toBe(-1);
   });
 
-  test("退化输入给零相位，不抛（内核在 open 就拒了这些参数）", () => {
+  test("degenerate input yields zero phase instead of throwing (the kernel rejects these parameters at open)", () => {
     const shallow = new Float64Array(4 * 5);
     expect(phaseFromMagnitude(shallow, 1, 5, 256, 64).every(v => v === 0)).toBe(true);
     expect(phaseFromMagnitude(shallow, 4, 1, 256, 64).every(v => v === 0)).toBe(true);
@@ -84,15 +84,15 @@ describe("相位初值的绑定", () => {
     expect(phaseFromMagnitude(new Float64Array(6), 4, 5, 256, 64).every(v => v === 0)).toBe(true);
   });
 
-  test("无能量的谱走完整条路，留下零相位", () => {
+  test("an energy-free spectrum runs the whole path and leaves zero phase", () => {
     const out = phaseFromMagnitude(new Float64Array(8 * 9), 8, 9, 256, 64);
     expect(out.length).toBe(72);
     expect(out.every(v => v === 0)).toBe(true);
   });
 });
 
-describe("stft 约定", () => {
-  test("频率步进带半个窗的 π", () => {
+describe("stft conventions", () => {
+  test("a frequency step carries the half-window π", () => {
     const sr = 16000;
     const win = 512;
     const hop = 128;
@@ -132,8 +132,8 @@ describe("resample", () => {
   });
 });
 
-describe("stft 适配层", () => {
-  test("窗函数来自内核表组，与内核表组是同一份", () => {
+describe("stft adapter layer", () => {
+  test("the window function comes from the kernel tables and is the same one", () => {
     const w = hannOf(mustKernel(), 256);
     expect(w.length).toBe(256);
     expect(w[128]).toBeCloseTo(1, 12);
@@ -141,16 +141,16 @@ describe("stft 适配层", () => {
     expect(hannOf(mustKernel(), 512).length).toBe(512);
   });
 
-  test("工作区还回去之后就不能再用（借还有据）", () => {
+  test("a work area cannot be used once it is handed back (borrows are accounted for)", () => {
     const core = new Frames(512);
     core.close();
-    expect(() => core.data()).toThrow(/还给内核/);
+    expect(() => core.data()).toThrow(/returned to the kernel/);
     core.close();
   });
 
-  test("槽位池满时报出来（池是 6 个，漏还不会变成慢慢变慢的路）", () => {
+  test("a full slot pool reports itself (the pool is 6, so a missed return cannot become a slow path)", () => {
     const held = Array.from({ length: 6 }, () => new Frames(512));
-    expect(() => new Frames(512)).toThrow(/会话槽已满/);
+    expect(() => new Frames(512)).toThrow(/session slots exhausted/);
     for (const c of held) c.close();
     new Frames(512).close();
   });

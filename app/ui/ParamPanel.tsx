@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../lib/i18n";
 import {
   BITS_OPTIONS,
   FMAX_OPTIONS,
@@ -13,8 +14,8 @@ import { Fold } from "./Fold";
 import { OptionRow, Row, type Option } from "./OptionRow";
 
 const MODE_OPTIONS: readonly Option<Mode>[] = [
-  { value: "compact", label: "紧凑" },
-  { value: "exact", label: "可逆" },
+  { value: "compact", label: t("compact") },
+  { value: "exact", label: t("exact") },
 ];
 
 const SR_OPTS: readonly Option<number>[] = SR_OPTIONS.map(sr => ({
@@ -68,7 +69,7 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
 
   const field = (side: "start" | "end", aria: string) => (
     <label className="num">
-      <span aria-hidden="true">{side === "start" ? "起" : "止"}</span>
+      <span aria-hidden="true">{side === "start" ? t("rangeFrom") : t("rangeTo")}</span>
       <input
         id={`range-${side}`}
         name={`range-${side}`}
@@ -98,30 +99,45 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
   );
 
   return (
-    <Fold label="进阶参数" className="card more">
+    <Fold label={t("advanced")} className="card more">
       <div className="params">
-        <OptionRow<Mode> label="模式" value={enc.mode} options={MODE_OPTIONS} onPick={v => set("mode", v)} />
+        <OptionRow<Mode>
+          label={t("mode")}
+          value={enc.mode}
+          options={MODE_OPTIONS}
+          onPick={v => set("mode", v)}
+        />
         <OptionRow<number>
-          label="采样"
+          label={t("rate")}
           value={enc.sr}
           options={SR_OPTS}
           onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
         />
         {compact && (
-          <OptionRow<number> label="位深" value={enc.bits} options={BIT_OPTS} onPick={v => set("bits", v)} />
+          <OptionRow<number>
+            label={t("depth")}
+            value={enc.bits}
+            options={BIT_OPTS}
+            onPick={v => set("bits", v)}
+          />
         )}
         <OptionRow<Encode["fineness"]>
-          label="窗长"
+          label={t("window")}
           value={enc.fineness}
           options={FINENESS_OPTS}
           onPick={v => set("fineness", v)}
         />
         {compact && (
-          <OptionRow<number> label="频宽" value={enc.fmax} options={fmaxOptions} onPick={v => set("fmax", v)} />
+          <OptionRow<number>
+            label={t("band")}
+            value={enc.fmax}
+            options={fmaxOptions}
+            onPick={v => set("fmax", v)}
+          />
         )}
-        <Row label="区间">
-          {field("start", "起点秒数")}
-          {field("end", "终点秒数")}
+        <Row label={t("range")}>
+          {field("start", t("rangeFromAria"))}
+          {field("end", t("rangeToAria"))}
         </Row>
       </div>
     </Fold>

@@ -1,6 +1,7 @@
 import type { Samples } from "../lib/arrays";
 import type { LossRow } from "../lib/audit";
 import type { Decoded } from "../lib/image";
+import { t } from "../lib/i18n";
 import type { Metrics } from "../lib/metric";
 import type { Encode } from "../lib/params";
 import { Aborted, type Spectrum } from "../lib/spectrum";
@@ -91,8 +92,8 @@ function connect(): Wire {
     else if (message.kind === "error") job.reject(new Error(message.message));
     else job.resolve(message.value as never);
   };
-  worker.onerror = () => fail("数值内核没能启动");
-  worker.onmessageerror = () => fail("数值内核的消息解析失败");
+  worker.onerror = () => fail(t("errKernel"));
+  worker.onmessageerror = () => fail(t("errKernelMessage"));
 
   import.meta.hot.dispose(() => {
     worker.terminate();
