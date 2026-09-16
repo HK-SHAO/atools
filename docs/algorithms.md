@@ -74,6 +74,8 @@ bun run typecheck
 bun run lint
 bun run test
 bun run test:kernel
+bun run moon:ports
+bun run moon:fmt
 bun run quality -- --gate
 bun run kernel
 bun run perf

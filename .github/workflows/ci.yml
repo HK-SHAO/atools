@@ -25,5 +25,7 @@ jobs:
       - run: bun run lint
       - run: bun run test
       - run: bun run test:kernel
+      - run: bun run moon:ports
+      - run: bun run moon:fmt
       - run: bun run quality -- --gate
       - run: bun run build:web

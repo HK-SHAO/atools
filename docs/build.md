@@ -14,7 +14,7 @@ bun run test:kernel
 bun run build:web
 ```
 
-The server listens on `http://127.0.0.1:3000` by default; `PORT` changes it. MoonBit is located through `MOON`, `PATH`, or `~/.moon/bin`. The gate scripts (`bun run offline`, `bun run ui`) start their own servers against `dist/`, and deployment is just `bun run deploy`.
+The server listens on `http://127.0.0.1:3000` by default; `PORT` changes it. MoonBit is located through `MOON`, `PATH`, or `~/.moon/bin`. The gate scripts (`bun run offline`, `bun run ui`) start their own servers against `dist/`, and deployment is `bun run deploy`.
 
 ## Production build
 
@@ -39,7 +39,7 @@ The first install caches the app shell. A new version activates only after the o
 
 Navigations prefer the network and fall back to the current version's home page when offline; other same-origin GET requests prefer the current version's cache. Successful non-HTML responses may enter the runtime cache, and Range requests are never cached. Caches of different deployment paths neither read nor clear one another.
 
-`bun run offline` verifies installation, the waiting update, cache isolation, the runtime cache, and a reload after the server is genuinely gone. `bun run ui` verifies the main interactions; `UI_BASELINE=/path/to/old/dist bun run ui` compares two builds.
+`bun run offline` verifies installation, the waiting update, cache isolation, the runtime cache, and a reload after the server is gone. `bun run ui` verifies the main interactions; `UI_BASELINE=/path/to/old/dist bun run ui` compares two builds.
 
 ## Browser baseline
 

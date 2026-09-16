@@ -1,11 +1,10 @@
 # `dsp`
 
-A spectral DSP kernel written in MoonBit and compiled to WebAssembly. It is the numeric core of [atools](https://github.com/HK-SHAO/atools)' audio ↔ spectrogram conversion: FFT analysis and synthesis of audio, and reconstruction of audio from a magnitude-only spectrum.
+A spectral DSP kernel written in MoonBit and compiled to WebAssembly. It is the numeric core of [atools](https://github.com/HK-SHAO/atools)' audio ↔ spectrogram conversion: FFT analysis and synthesis, and reconstruction from a magnitude-only spectrum.
 
 - Live demo: <https://atools.shao.fun/>
 - Source: <https://github.com/HK-SHAO/atools>
-
-The full documentation is available at [github.com/HK-SHAO/atools](https://github.com/HK-SHAO/atools/tree/main/docs).
+- Documentation: <https://github.com/HK-SHAO/atools/tree/main/docs>
 
 ## Functionality
 
@@ -37,7 +36,7 @@ An exported `FixedArray` reaches the host as the address of its data. The startu
 | Slot | One transform session | Pool of six; always release |
 | Arena | One PGHI, RTISI, or stub job | Owns one double and one byte segment |
 
-Opening any of these may grow linear memory and detach existing host views: obtain views after each allocation, and again after every `await`. Hot loops use unchecked access only where Plan, Slot, or Arena capacity proves the index range — in release builds, checked indexing on the kernel's non-provable index patterns measures 2–3× slower (reads and writes alike), and every unchecked loop is covered by white-box tests.
+Opening any of these may grow linear memory and detach existing host views: obtain views after each allocation, and again after an `await`. Hot loops use unchecked access only where Plan, Slot, or Arena capacity proves the index range. In release builds, checked indexing on the kernel's non-provable index patterns measures 2–3× slower for reads and writes, and white-box tests cover each unchecked loop.
 
 ## Rules
 
