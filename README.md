@@ -30,7 +30,7 @@ Compact images omit phase. They usually remain readable after common sharing, co
 
 ## 陌生图片也能出声 / Any image can play
 
-按图里保留的信息自动选择还原路径：相位完好时直接逆变换；相位受损时重建；陌生图片则把整张图当作幅度谱尝试合成。
+按图里保留的信息自动还原路径：相位完好时直接逆变换；相位受损时重建；陌生图片则把整张图当作幅度谱尝试合成。
 
 Decoding adapts to the available information: intact phase is inverted directly, damaged phase is reconstructed, and an unfamiliar image is treated as a magnitude spectrum for synthesis.
 
