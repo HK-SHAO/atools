@@ -6,9 +6,10 @@
     "suspicious": "warn"
   },
   "rules": {
-    // `Bun.build` 的 `reactCompiler` 已在编译期改写组件，这一组是**编译器自己的退让理由**：
-    // 它认不出的写法会静默地不优化，而静默正是最难察觉的那种退化。把编译器内部那套校验
-    // 也在 lint 里开一遍，「没被优化」就当场可见，不必靠人去猜。
+    // `Bun.build`'s `reactCompiler` already rewrites components at compile time, and this group is
+    // that compiler's own list of reasons to step back: a pattern it cannot recognise is silently
+    // left unoptimised, and silence is the hardest regression to notice. Running the compiler's
+    // internal checks here too makes "not optimised" visible instead of a guess.
     "react/hooks": "error",
     "react/purity": "error",
     "react/immutability": "error",
@@ -17,28 +18,32 @@
     "react/set-state-in-render": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }],
 
-    // 这四条一度是我们**明知故犯**的偏离（effect 里取消在飞的作业 + 重置派生结果），当时降到
-    // warn 留着可见。那几处现已改成派生：结果与它所属的 spec 一起存、区间草稿与参数一起存、
-    // 播放状态与时间轴一起存，于是 effect 里再没有 setState，整仓一条不剩 —— 与其余编译器规则
-    // 一致按 error 钉住。将来真需要偏离就用 `// oxlint-disable-next-line <rule>` 就地说明。
+    // These four were once deliberate deviations (cancelling an in-flight job inside an effect and
+    // resetting derived state), kept at warn so they stayed visible. Those places now derive: a
+    // result is stored with the spec it belongs to, the range draft with the parameters, the
+    // playback state with the timeline, so no effect calls setState and not one case is left in the
+    // repository. They are pinned at error like the rest. A real deviation gets an inline
+    // `// oxlint-disable-next-line <rule>` next to the reason.
     "react/set-state-in-effect": "error",
     "react/exhaustive-effect-dependencies": "error",
     "react-hooks/exhaustive-deps": "error",
     "react/memo-dependencies": "error",
 
-    // `react/refs` 把 JSX 上的 `ref={job.ref}` 读成「渲染期访问 ref 值」，连带把同一个元素上的
-    // `spec` / `audio` / `png` 也一起报了。本仓的 `ref` 是**格式字段**（编码前的参照样点，见
-    // docs/format-spec.md），不是 React ref，改名会动到文件格式，不做。
+    // `react/refs` reads `ref={job.ref}` in JSX as touching a ref value during render, and takes
+    // `spec` / `audio` / `png` on the same elements down with it. Here `ref` is a format field (the
+    // reference samples of the source, see docs/format-spec.md), not a React ref, and renaming it
+    // would change the file format.
     "react/refs": "off",
 
-    // 只适用于 classic JSX runtime；本项目是 `jsx: "react-jsx"`（自动运行时，无需 React 在作用域内）。
+    // Classic JSX runtime only; this project uses `jsx: "react-jsx"`, the automatic runtime where
+    // React need not be in scope.
     "react/react-in-jsx-scope": "off",
 
-    // 风格类，且这几条与本项目的取舍相反：
-    "unicorn/consistent-function-scoping": "off", // 只管「函数能否提出父作用域」，不判对错
-    "unicorn/prefer-add-event-listener": "off", // `node.onended = fn` 要的就是「只有一个处理者」
-    "unicorn/require-post-message-target-origin": "off", // 消息发给 Worker，没有 origin 这个参数
-    "unicorn/no-array-sort": "off" // 被点的几处排的都是刚 filter / 新建出来的数组
+    // Style rules, and these run against the choices made here:
+    "unicorn/consistent-function-scoping": "off", // asks whether a function can move out of its parent scope, never whether it should
+    "unicorn/prefer-add-event-listener": "off", // `node.onended = fn` wants exactly one handler
+    "unicorn/require-post-message-target-origin": "off", // the target is a Worker, so there is no origin argument
+    "unicorn/no-array-sort": "off" // the flagged calls sort arrays that filter or a fresh literal just produced
   },
   "ignorePatterns": ["dist", "node_modules", ".local", "moon/_build", "bench/bundle*.js"]
 }

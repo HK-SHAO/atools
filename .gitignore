@@ -8,7 +8,7 @@ dist
 *.zip
 bench/bundle*.js
 
-# MoonBit 内核产物与依赖缓存（由 scripts/moon.ts 编译，源头在 moon/）
+# MoonBit kernel artifacts and dependency cache (built by scripts/moon.ts, sources in moon/)
 moon/_build/
 moon/.mooncakes/
 
@@ -34,12 +34,12 @@ coverage
 .vscode
 .DS_Store
 
-# 大体积音频样本（评测台素材，不入库）
+# large audio samples (benchmark material, not tracked)
 docs/voice
 docs/audio-examples
 docs/ra2
 
-# 本地参考资料（moonbitlang/skills 的副本），与仓库无关
+# local reference material (a copy of moonbitlang/skills), unrelated to the repository
 .local/
 
 .workbuddy/
