@@ -6,7 +6,7 @@ import { exactPixels, metaFromGeometry, metaFromName, metaToText, recognizeExact
 import { indexedPng, isPng, readIndexedRamp, readMeta, withMeta } from "./png";
 import { RAMP } from "./palette";
 import { BANDS, MAX_FRAMES, MAX_PIXELS, MAX_SAMPLES, encode, fitEncode, maxFramesFor, paramsForImage, rowsFor, shapeFor, synthesise, type Spectrum } from "./spectrum";
-import { OVERLAP, SR_OPTIONS, FMAX_OPTIONS, VOICE, dbSpanOf, hopOf, stepsOf, winOf, type Encode } from "./params";
+import { OVERLAP, SR_MIN, VOICE, clampEncode, dbSpanOf, hopOf, hzLabel, sourceSr, stepsOf, winOf, type Encode } from "./params";
 import { stubFits, stubRows } from "./stub";
 import { Frames } from "./stft";
 import { TUNE } from "./phase";
@@ -66,12 +66,12 @@ const localCorrelation = (a: Samples, b: Samples, sr: number): number => {
 };
 
 describe("params", () => {
-  test("defaults are the voice minimum", () => {
+  test("defaults keep the source rate", () => {
     expect(VOICE).toEqual({
       mode: "compact",
-      sr: 8000,
+      sr: 0,
       bits: 8,
-      fineness: 2, // default longest window: resolution first
+      fineness: 2,
       fmax: 0,
       start: 0,
       end: 0,
@@ -84,6 +84,16 @@ describe("params", () => {
       expect(hopOf({ ...VOICE, fineness }) * OVERLAP).toBe(winOf({ ...VOICE, fineness }));
     expect(stepsOf(8)).toBe(255);
     expect(dbSpanOf(8)).toBe(96);
+    expect(hzLabel(8000)).toBe("8k");
+    expect(hzLabel(7334)).toBe("7.3k");
+    expect(sourceSr(48000)).toBe(48000);
+    expect(sourceSr(0)).toBe(SR_MIN);
+    expect(clampEncode({ ...VOICE, sr: 32000, fmax: 12000 }, 16000)).toEqual({
+      ...VOICE,
+      sr: 0,
+      fmax: 0,
+    });
+    expect(clampEncode({ ...VOICE, sr: 12000, fmax: 4000 }, 48000).sr).toBe(12000);
   });
 
   test("bit depth drives the dynamic range", () => {
@@ -579,21 +589,33 @@ describe("shape", () => {
 
     const fit = fitEncode(want, 44100, samples);
     expect(fit.note).not.toBeNull();
-    expect(fit.enc.sr).toBe(24000);
-    expect(() => shapeFor(want, 32000, resampledLength(samples, 44100, 32000))).toThrow();
-    const tuned = shapeFor(fit.enc, fit.enc.sr, resampledLength(samples, 44100, fit.enc.sr));
-    expect(tuned.frames).toBeLessThanOrEqual(MAX_FRAMES);
-    expect(tuned.frames * tuned.bins).toBeLessThanOrEqual(MAX_PIXELS);
+    expect(fit.enc.sr).toBeGreaterThanOrEqual(44100 / 2);
+    expect(fit.enc.sr).toBeLessThan(44100);
+    const n = resampledLength(samples, 44100, fit.enc.sr);
+    expect(() => shapeFor(fit.enc, fit.enc.sr, n)).not.toThrow();
+    expect(() => shapeFor(want, fit.enc.sr + 1, resampledLength(samples, 44100, fit.enc.sr + 1))).toThrow();
 
     const short = fitEncode(want, 44100, 44100 * 30);
     expect(short.enc).toEqual(want);
     expect(short.note).toBeNull();
+    expect(fitEncode(VOICE, 44100, 44100 * 30).enc.sr).toBe(0);
 
     const huge = fitEncode(VOICE, 44100, 44100 * 3600);
-    expect(huge.enc.sr).toBe(8000);
+    expect(huge.enc.sr).toBe(Math.ceil(44100 / 2));
+    expect(huge.enc.sr).toBeGreaterThanOrEqual(44100 / 2);
     const kept = huge.enc.end - huge.enc.start;
-    expect(kept).toBeGreaterThan(400);
-    expect(() => shapeFor(huge.enc, 8000, kept * 8000)).not.toThrow();
+    expect(kept).toBeGreaterThan(300);
+    expect(() => shapeFor(huge.enc, huge.enc.sr, kept * huge.enc.sr)).not.toThrow();
+
+    const asked = fitEncode({ ...VOICE, sr: 8000 }, 44100, 44100 * 3600);
+    expect(asked.enc.sr).toBe(8000);
+
+    const hi = fitEncode(VOICE, 96000, 96000 * 200);
+    expect(hi.enc.sr).toBe(48000);
+    expect(hi.note).not.toBeNull();
+
+    expect(() => fitEncode(VOICE, 0, 0)).not.toThrow();
+    expect(() => fitEncode(VOICE, Number.NaN, -1)).not.toThrow();
   });
 
   test("fitEncode resolves pixel-bound exact audio instead of dead-ending", () => {
@@ -616,19 +638,14 @@ describe("shape", () => {
     }
   });
 
-  test("bandwidth ladder is capped by Nyquist, not by the menu", () => {
-    const bands: readonly number[] = FMAX_OPTIONS;
-    for (const hz of [4000, 8000, 12000, 16000]) expect(bands).toContain(hz);
-    expect(FMAX_OPTIONS.some(hz => hz > 8000 && hz < 32000 / 2)).toBe(true);
-  });
-
-  test("sample-rate ladder has no near-duplicate rungs", () => {
-    const rates: number[] = [...SR_OPTIONS].filter(s => s > 0).sort((a, b) => a - b);
-    expect(rates[0]).toBe(8000);
-    expect(rates.at(-1)).toBe(32000);
-    for (const sr of [8000, 16000, 24000, 32000]) expect(rates).toContain(sr);
-    for (let i = 1; i < rates.length; i++)
-      expect(rates[i]! / rates[i - 1]!).toBeGreaterThanOrEqual(1.25);
+  test("a frequency ceiling may sit anywhere below Nyquist", () => {
+    const sr = 48000;
+    const win = 1024;
+    expect(rowsFor(win, sr, 0)).toBe(win / 2 + 1);
+    expect(rowsFor(win, sr, sr / 2)).toBe(win / 2 + 1);
+    expect(rowsFor(win, sr, 3500)).toBeGreaterThanOrEqual(8);
+    expect(rowsFor(win, sr, 3500)).toBeLessThan(rowsFor(win, sr, 0));
+    expect(rowsFor(win, sr, 7 * (sr / win))).toBe(8);
   });
 });
 

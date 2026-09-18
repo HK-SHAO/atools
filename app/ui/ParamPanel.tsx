@@ -2,26 +2,24 @@ import { useState } from "react";
 import { t } from "../lib/i18n";
 import {
   BITS_OPTIONS,
-  FMAX_OPTIONS,
   FINENESS,
-  SR_OPTIONS,
+  SR_MIN,
+  clampEncode,
   hzLabel,
+  sourceSr,
   srLabel,
+  winOf,
   type Encode,
   type Mode,
 } from "../lib/params";
 import { Fold } from "./Fold";
 import { OptionRow, Row, type Option } from "./OptionRow";
+import { Slide } from "./Slide";
 
 const MODE_OPTIONS: readonly Option<Mode>[] = [
   { value: "compact", label: t("compact") },
   { value: "exact", label: t("exact") },
 ];
-
-const SR_OPTS: readonly Option<number>[] = SR_OPTIONS.map(sr => ({
-  value: sr,
-  label: srLabel(sr),
-}));
 
 const BIT_OPTS: readonly Option<number>[] = BITS_OPTIONS.map(b => ({
   value: b,
@@ -52,7 +50,11 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
   const set = <K extends keyof Encode>(key: K, value: Encode[K]) => onEnc({ ...enc, [key]: value });
   const endShown = (end: number): string => (end === 0 ? "" : String(end));
   const compact = enc.mode === "compact";
-  const nyquist = (enc.sr > 0 ? enc.sr : srcSr) / 2;
+  const src = sourceSr(srcSr);
+  const rate = enc.sr > 0 ? enc.sr : src;
+  const nyq = Math.floor(rate / 2);
+  const bandMin = Math.min(nyq, Math.ceil((7 * rate) / winOf(enc)));
+  const band = enc.fmax > 0 && enc.fmax < nyq ? Math.min(nyq, Math.max(bandMin, Math.round(enc.fmax))) : nyq;
   const maxLabel = srcDuration > 0 ? String(Math.round(srcDuration * 10) / 10) : undefined;
 
   const commitRange = () => {
@@ -62,10 +64,6 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
     setDraft(null);
     if (start !== enc.start || end !== enc.end) onEnc({ ...enc, start, end });
   };
-
-  const fmaxOptions: Option<number>[] = FMAX_OPTIONS.filter(hz => hz === 0 || hz < nyquist).map(
-    hz => ({ value: hz, label: hzLabel(hz) }),
-  );
 
   const field = (side: "start" | "end", aria: string) => (
     <label className="num">
@@ -107,11 +105,14 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
           options={MODE_OPTIONS}
           onPick={v => set("mode", v)}
         />
-        <OptionRow<number>
+        <Slide
           label={t("rate")}
-          value={enc.sr}
-          options={SR_OPTS}
-          onPick={v => onEnc({ ...enc, sr: v, fmax: v > 0 && enc.fmax >= v / 2 ? 0 : enc.fmax })}
+          aria={t("sampleRate")}
+          min={SR_MIN}
+          max={src}
+          value={rate}
+          format={v => (v >= src ? t("rateSource") : srLabel(v))}
+          onCommit={v => onEnc(clampEncode({ ...enc, sr: v }, srcSr))}
         />
         {compact && (
           <OptionRow<number>
@@ -128,11 +129,14 @@ export function ParamPanel({ enc, srcSr, srcDuration, onEnc }: Props) {
           onPick={v => set("fineness", v)}
         />
         {compact && (
-          <OptionRow<number>
+          <Slide
             label={t("band")}
-            value={enc.fmax}
-            options={fmaxOptions}
-            onPick={v => set("fmax", v)}
+            aria={t("band")}
+            min={bandMin}
+            max={nyq}
+            value={band}
+            format={v => (v >= nyq ? t("bandFull") : hzLabel(v))}
+            onCommit={v => onEnc({ ...enc, fmax: v >= nyq ? 0 : v })}
           />
         )}
         <Row label={t("range")}>

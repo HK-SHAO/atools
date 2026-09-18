@@ -23,17 +23,16 @@ export const FINENESS = [
   { label: "4096", win: 4096 },
 ] as const;
 
-export const SR_OPTIONS = [8000, 16000, 24000, 32000, 0] as const;
-export const BITS_OPTIONS = [2, 4, 8] as const;
+export const SR_MIN = 8000;
+export const SR_MAX = 96000;
 
-export const FMAX_OPTIONS = [0, 2000, 4000, 8000, 12000, 16000] as const;
+export const BITS_OPTIONS = [2, 4, 8] as const;
 
 export const VOICE: Encode = {
   mode: "compact",
-  sr: 8000,
+  sr: 0,
   bits: 8,
-  // 1024 by default: at 8 kHz each cell is 7.8 Hz, already near the point of diminishing
-  // returns; 2048 costs too much time resolution, so it is left to the user.
+  // 1024 by default: at 44.1 kHz each cell is 43 Hz; 2048 is left to the user.
   fineness: 2,
   fmax: 0,
   start: 0,
@@ -54,7 +53,24 @@ export const stepsOf = (bits: number): number => (1 << Math.max(1, bits)) - 1;
 export const srLabel = (sr: number): string =>
   sr === 0 ? t("rateSource") : sr % 1000 === 0 ? `${sr / 1000}k` : `${(sr / 1000).toFixed(1)}k`;
 
-export const hzLabel = (hz: number): string =>
-  hz === 0 ? t("bandFull") : hz % 1000 === 0 ? `${hz / 1000}k` : `${hz}`;
+export const hzLabel = (hz: number): string => {
+  if (hz === 0) return t("bandFull");
+  if (hz % 1000 === 0) return `${hz / 1000}k`;
+  if (hz >= 1000) return `${(hz / 1000).toFixed(1)}k`;
+  return `${Math.round(hz)}`;
+};
+
+export const sourceSr = (srcSr: number): number => {
+  const src = Number.isFinite(srcSr) && srcSr > 0 ? Math.round(srcSr) : SR_MIN;
+  return Math.min(Math.max(src, SR_MIN), SR_MAX);
+};
+
+export const clampEncode = (e: Encode, srcSr: number): Encode => {
+  const src = sourceSr(srcSr);
+  const sr = e.sr > 0 && e.sr < src ? Math.max(SR_MIN, Math.round(e.sr)) : 0;
+  const nyq = (sr || src) / 2;
+  const fmax = e.fmax > 0 && e.fmax < nyq ? Math.round(e.fmax) : 0;
+  return { ...e, sr, fmax };
+};
 
 export const reopen = (e: Encode): Encode => ({ ...e, start: 0, end: 0 });

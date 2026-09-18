@@ -1,6 +1,6 @@
 import type { Samples } from "./arrays";
 import { t } from "./i18n.ts";
-import { SR_OPTIONS, dbSpanOf, hopOf, srLabel, stepsOf, winOf, type Encode } from "./params.ts";
+import { SR_MIN, SR_MAX, dbSpanOf, hopOf, sourceSr, srLabel, stepsOf, winOf, type Encode } from "./params.ts";
 import { TUNE, phaseFromMagnitude } from "./phase.ts";
 import { resampledLength } from "./resample.ts";
 import { rtisiLa } from "./rtisi.ts";
@@ -142,34 +142,58 @@ function ceilingOf(enc: Encode, sr: number): number {
   return Math.floor(Math.min(MAX_SAMPLES, (maxFramesFor(bins, bands) - 1) * hop) / sr);
 }
 
+function withRate(e: Encode, sr: number, src: number): Encode {
+  return { ...e, sr: sr === src ? 0 : sr, fmax: e.fmax > 0 && e.fmax >= sr / 2 ? 0 : e.fmax };
+}
+
+function highestFit(
+  e: Encode,
+  src: number,
+  srcSamples: number,
+  lo: number,
+  hi: number,
+): number | null {
+  const at = (sr: number): number => resampledLength(Math.max(0, srcSamples), src, sr);
+  if (lo > hi || !fits(e, lo, at(lo))) return null;
+  let a = lo;
+  let b = hi;
+  while (a < b) {
+    const m = a + ((b - a + 1) >> 1);
+    if (fits(e, m, at(m))) a = m;
+    else b = m - 1;
+  }
+  return a;
+}
+
 export function fitEncode(
   e: Encode,
   srcSr: number,
   srcSamples: number,
 ): { enc: Encode; note: string | null } {
-  const want = e.sr > 0 ? e.sr : srcSr;
-  const at = (sr: number): number => resampledLength(srcSamples, srcSr, sr);
-  if (fits(e, want, at(want))) return { enc: e, note: null };
+  const src = sourceSr(srcSr);
+  const asked = e.sr > 0 && Number.isFinite(e.sr) ? Math.round(e.sr) : src;
+  const want = Math.min(src, SR_MAX, asked);
+  const at = (sr: number): number => resampledLength(Math.max(0, srcSamples), src, sr);
+  if (fits(e, want, at(want)))
+    return want === asked ? { enc: e, note: null } : { enc: withRate(e, want, src), note: null };
 
-  const secs = Math.round(srcSamples / srcSr);
-  const lower = (SR_OPTIONS as readonly number[])
-    .filter(s => s > 0 && s < want)
-    .sort((a, b) => b - a);
-  for (const sr of lower) {
-    if (fits(e, sr, at(sr)))
-      return {
-        enc: { ...e, sr, fmax: e.fmax >= sr / 2 ? 0 : e.fmax },
-        note: t("hintFit", {
-          secs: String(secs),
-          want: srLabel(want),
-          ceiling: String(ceilingOf(e, want)),
-          sr: srLabel(sr),
-        }),
-      };
-  }
+  const floor = Math.min(want, Math.max(SR_MIN, Math.ceil(src / 2)));
+  const secs = Math.max(0, Math.round(srcSamples / src));
+  const sr = highestFit(e, src, srcSamples, floor, Math.max(floor, want - 1));
+  if (sr !== null)
+    return {
+      enc: withRate(e, sr, src),
+      note: t("hintFit", {
+        secs: String(secs),
+        want: srLabel(want),
+        ceiling: String(ceilingOf(e, want)),
+        sr: srLabel(sr),
+      }),
+    };
 
-  const last: Encode = { ...e, sr: 8000, fmax: 0 };
-  const keep = Math.max(1, ceilingOf(last, 8000));
+  const last = withRate(e, floor, src);
+  const cap = Math.max(1, ceilingOf(last, floor));
+  const keep = Math.min(cap, e.end > e.start ? e.end - e.start : cap);
   return {
     enc: { ...last, end: e.start + keep },
     note: t("hintTrim", { keep: String(keep) }),

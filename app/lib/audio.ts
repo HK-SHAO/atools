@@ -1,5 +1,6 @@
 import type { Samples } from "./arrays";
 import { t } from "./i18n";
+import { SR_MAX, SR_MIN } from "./params";
 
 export interface Decoded {
   pcm: Samples;
@@ -43,9 +44,6 @@ const META_PARSERS: Record<string, () => Promise<MetaParser>> = {
   OGG: () => import("@audio/decode-vorbis/meta"),
   "OGG/Opus": () => import("@audio/decode-opus/meta"),
 };
-
-const SR_MIN = 8000;
-const SR_MAX = 96000;
 
 const DECODE_RATE = 48000;
 

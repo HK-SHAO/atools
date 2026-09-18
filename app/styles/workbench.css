@@ -50,3 +50,64 @@
   align-items: center;
   gap: 0.25em;
 }
+
+.slide {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+.slide input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-ctl);
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slide input[type="range"]:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.slide input[type="range"]::-webkit-slider-runnable-track {
+  height: 0.1875em;
+  border-radius: var(--r-pill);
+  background: rgba(61, 52, 39, 0.1);
+}
+
+.slide input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 1em;
+  height: 1em;
+  margin-top: -0.40625em;
+  border: 1px solid var(--glass-line);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: var(--shadow-ctl);
+}
+
+.slide input[type="range"]::-moz-range-track {
+  height: 0.1875em;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: rgba(61, 52, 39, 0.1);
+}
+
+.slide input[type="range"]::-moz-range-thumb {
+  width: 1em;
+  height: 1em;
+  border: 1px solid var(--glass-line);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: var(--shadow-ctl);
+}
+
+.slide .tick {
+  flex: none;
+  min-width: 2.75em;
+  text-align: end;
+}

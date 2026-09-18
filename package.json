@@ -1,6 +1,6 @@
 {
   "name": "atools",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Turn audio into a spectrogram and back: a browser-only sound ↔ image converter with a MoonBit DSP kernel",
   "license": "GPL-3.0-only",

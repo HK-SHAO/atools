@@ -4,7 +4,7 @@ import { decodeAudioFile } from "../lib/audio";
 import type { Samples } from "../lib/arrays";
 import { sniff, type Container, type ReadMode } from "../lib/container";
 import { t } from "../lib/i18n";
-import { FINENESS, SR_OPTIONS, VOICE, reopen, type Encode } from "../lib/params";
+import { FINENESS, VOICE, clampEncode, reopen, type Encode } from "../lib/params";
 import { slice, trimRange } from "../lib/resample";
 import { Aborted, cutoffOf, fitEncode, type Meta, type Spectrum } from "../lib/spectrum";
 import { scope } from "./pipeline";
@@ -33,7 +33,7 @@ function adoptMeta(meta: Meta): Encode {
   const at = FINENESS.findIndex(f => f.win >= meta.win);
   return {
     mode: meta.exact ? "exact" : "compact",
-    sr: (SR_OPTIONS as readonly number[]).includes(meta.sr) ? meta.sr : 0,
+    sr: 0,
     bits: meta.bits > 0 ? meta.bits : 8,
     fineness: (at < 0 ? FINENESS.length - 1 : at) as Encode["fineness"],
     fmax: 0,
@@ -220,7 +220,7 @@ export function useStudio() {
       if (!alive()) return;
 
       setMode("compact");
-      setPick(p => ({ enc: { ...reopen(p.enc), ...trimRange(mono, sr) }, note: null }));
+      setPick(p => ({ enc: clampEncode({ ...reopen(p.enc), ...trimRange(mono, sr) }, sr), note: null }));
       setSource({ pcm: mono, sr, name });
     },
     [],
